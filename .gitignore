@@ -1,0 +1,29 @@
+# Data — never commit, document how to download instead
+data/
+*.nc
+*.nc4
+*.grib
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# RL training outputs
+runs/
+checkpoints/
+*.zip
+tensorboard/
+
+# Notebooks checkpoints & OS junk
+.ipynb_checkpoints/
+.DS_Store
+
+# LaTeX build junk (if the paper lives in the repo)
+*.aux
+*.log
+*.bbl
+*.blg
+*.out
+*.synctex.gz
