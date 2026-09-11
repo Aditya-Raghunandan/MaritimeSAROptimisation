@@ -1,0 +1,22 @@
+# Normalise line endings. Without this, two people on different git settings get
+# whole-file diffs on every commit, and reviews become unreadable.
+* text=auto
+
+# Shell scripts MUST be LF. A .sh file checked out with CRLF fails on Linux with
+# "bad interpreter: /usr/bin/env bash^M" -- which is exactly what would happen to
+# code/probe_cluster.sh the first time it runs on the Jaguar cluster.
+*.sh   text eol=lf
+*.slurm text eol=lf
+
+# Keep these LF too: they are read by tooling on Linux.
+*.py   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.txt  text
+*.md   text
+
+# Binary -- never diff or munge these.
+*.png  binary
+*.pdf  binary
+*.nc   binary
+*.parquet binary
