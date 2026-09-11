@@ -1,20 +1,88 @@
-# Data — never commit, document how to download instead
-data/
+# ============================================================
+# DATA. The directories (data/raw/, data/processed/) are
+# tracked via .gitkeep files; their contents are not. GitHub
+# rejects any file exceeding 100 MB, and a smaller file
+# committed in error remains in the repository history after
+# deletion. Raw and derived data reside on the cluster and on
+# local disk, and must never be committed to this repository.
+# ============================================================
+data/*
+!data/*/
+!data/**/.gitkeep
 *.nc
 *.nc4
+*.csv
+*.parquet
+*.zarr/
 *.grib
+*.grib2
+*.h5
+*.hdf5
 
-# Python
+# ============================================================
+# PYTHON
+# ============================================================
 __pycache__/
 *.pyc
+*.pyo
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+*.egg
+
+# uv and venv directories are never committed; these comprise
+# approximately 1 GB of platform-specific binaries.
 .venv/
 venv/
+uv-cache/
 
-# RL training outputs
-runs/
-checkpoints/
-*.zip
-tensorboard/
+# ============================================================
+# FRONTEND (JavaScript/TypeScript)
+# ============================================================
+node_modules/
+frontend/dist/
+frontend/build/
+frontend/.next/
+frontend/.turbo/
+*.log
+npm-debug.log*
+yarn-debug.log*
+.eslintcache
+
+# ============================================================
+# FIGURES. figures/report/ is tracked, comprising small,
+# deliverable figures indexed in FIGURES.md. figures/reference/
+# is not tracked, comprising reference imagery not owned by the
+# project (for example, Zoom Earth screenshots).
+# ============================================================
+figures/reference/*
+!figures/reference/.gitkeep
+
+# ============================================================
+# CREDENTIALS. The cluster password, API keys and similar
+# material must be communicated out of band, and must never be
+# stored within this repository.
+# ============================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials*.json
+
+# ============================================================
+# OPERATING SYSTEM AND EDITOR
+# ============================================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
 
 # Notebooks checkpoints & OS junk
 .ipynb_checkpoints/

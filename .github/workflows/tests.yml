@@ -1,0 +1,68 @@
+kname: Tests
+
+# This workflow is established in advance of the test suite itself. It is
+# triggered on every push and on every pull request directed at main, and
+# comprises two independent jobs: one for the Python backend and one for the
+# JavaScript frontend. Each job may be extended once the corresponding test
+# suite exists; no test has yet been written, so both currently tolerate an
+# absence of test files rather than failing outright.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run pytest
+        # Executed in parallel via pytest-xdist ("-n auto" selects a worker
+        # count according to the number of available CPUs; pytest-xdist must
+        # be added to the dev dependency group in pyproject.toml).
+        # --no-tests-are-collected is exit code 5; this is tolerated until
+        # the test suite is populated, at which point this line should be
+        # removed so that a genuinely empty suite is once again treated as
+        # a failure.
+        run: |
+          pytest -n auto || [ $? -eq 5 ]
+
+  frontend-tests:
+    name: Frontend (npm test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        # No test script is presently defined in frontend/package.json.
+        # This step should be updated once one is added (for example, via
+        # Vitest), and the placeholder condition below removed.
+        run: npm test --if-present

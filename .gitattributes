@@ -1,0 +1,18 @@
+# Line endings are normalised automatically for most files, so
+# that differing editor defaults on separate machines do not
+# generate spurious whole-file diffs.
+* text=auto
+
+# Shell scripts must use LF line endings. Otherwise, a script
+# checked out with Windows line endings and executed on the
+# cluster fails with "bad interpreter: /usr/bin/env bash^M".
+*.sh text eol=lf
+
+# Source files: LF is specified explicitly for the same reason.
+*.py text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.md text eol=lf
