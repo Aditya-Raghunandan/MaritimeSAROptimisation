@@ -27,3 +27,47 @@ tensorboard/
 *.blg
 *.out
 *.synctex.gz
+
+# ---------------------------------------------------------------------------
+# Added 2026-09-11 (Aditya). The rules above miss the formats we actually have
+# on disk. Sizes are real, measured in C:\maritime-data:
+#
+#   gdp_hourly_..._20190101-20240101.csv    108.8 MB  <- GitHub HARD-REJECTS >100 MB
+#   gdp_hourly_..._20210101-20260101.csv     50.4 MB  <- would have bloated history forever
+#
+# A committed large file stays in history even after deletion, so this has to be
+# right BEFORE the first `git add`, not after.
+# ---------------------------------------------------------------------------
+*.csv
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.zarr/
+*.npy
+*.npz
+
+# Environment / tooling
+.venv*/
+env/.venv/
+.uv/
+.python-version
+.env
+*.pem
+*.key
+.vscode/
+.idea/
+
+# THIS REPOSITORY IS PUBLIC.
+# Never commit: the cluster password, SSH private keys, or any API credential
+# (R3g). ARCO-ERA5 needs no credential at all -- it is anonymous -- so there is
+# nothing to leak from the wind pipeline by design.
+
+# Third-party screenshots (Zoom Earth etc.) are visual references we do not own
+# and should not redistribute from a public repo. They stay in the vault.
+figures/reference/
+
+# Figures: report figures ARE tracked on purpose -- they are small deliverables
+# and FIGURES.md records what each one argues. Scratch plots are not.
+figures/scratch/
+figures/tmp/

@@ -1,0 +1,57 @@
+# Direct dependencies for the drift half of the pipeline.
+# THIS IS THE CANONICAL FILE. Install from this one.
+#
+#   Python >= 3.11 required.  Ubuntu 20.04 ships 3.8, which is end-of-life and
+#   cannot install these versions at all -- see D017 in the vault. Bring your own
+#   interpreter on the cluster (micromamba/uv), and NOT onto /home, which is
+#   1.7 GB and shared.
+#
+# Verified working 2026-09-10 on Windows 11 / CPython 3.13.1, against a real
+# ARCO-ERA5 pull and a real NOAA GDP pull. These are the versions that actually
+# produced era5_17-36N_82-63W_20210101-20210108.nc (13.7 MB, 192 hourly steps)
+# and 926,533 drifter observations.
+#
+# Install:
+#   uv venv .venv --python 3.13         (or: python -m venv .venv)
+#   uv pip install -r env/requirements.txt
+#
+# Only direct dependencies are pinned here, so this resolves on Linux as well as
+# Windows. For the exact local tree see requirements-lock-win.txt, and read the
+# warning at the top of it before using it anywhere but Windows.
+
+xarray==2026.7.0
+zarr==3.3.0             # 3.x; see the consolidated= note below
+gcsfs==2026.8.0         # anonymous access to ARCO-ERA5 on Google Cloud
+fsspec==2026.7.0
+netcdf4==1.7.4
+cftime==1.6.5
+dask==2026.8.0          # scheduler="threads" is what makes the ARCO pull tractable
+numpy==2.5.3
+pandas==3.0.5
+pyarrow==25.0.1         # derived-tier Parquet
+scipy==1.18.1
+matplotlib==3.11.1
+erddapy==3.3.0          # NOAA GDP drifters (plain HTTPS also works)
+
+# ---------------------------------------------------------------------------
+# Two things that cost real time if you do not know them. Both are measured,
+# not inherited from a documentation page.
+#
+# 1. ARCO-ERA5 is Zarr FORMAT 2 despite ".zarr-v3" in its path. With zarr 3.x
+#    installed you MUST pass consolidated=True:
+#
+#        xr.open_zarr(url, storage_options={"token": "anon"}, consolidated=True)
+#
+#    Without it, open_zarr never returns -- no error, no output, it just hangs.
+#
+# 2. Its variables use full CF names, not the CDS/GRIB short codes:
+#       10m_u_component_of_wind, 10m_v_component_of_wind, mean_sea_level_pressure
+#    Asking for "10u" raises KeyError. Beware 10m_u_component_of_NEUTRAL_wind,
+#    which is a different quantity sitting right next to it alphabetically.
+# ---------------------------------------------------------------------------
+
+# Not yet installed or verified -- added by whoever needs them, with a version:
+#   cartopy              coastlines for the currents quiver check (R3f)
+#   astral               daylight window (D012)
+#   gymnasium            RL environment (R5a)
+#   stable-baselines3    PPO (R5c) -- note it pulls in torch, ~1-3 GB
