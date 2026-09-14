@@ -7,6 +7,7 @@
 # local disk, and must never be committed to this repository.
 # ============================================================
 data/*
+data
 !data/*/
 !data/**/.gitkeep
 *.nc
