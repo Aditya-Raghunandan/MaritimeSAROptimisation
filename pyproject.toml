@@ -2,14 +2,24 @@
 name = "sar"
 version = "0.1.0"
 description = "Maritime search and rescue drift prediction: backend"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    # "numpy",
-    # "xarray",
-    # "netCDF4",
-    # "pandas",
-    # "pyarrow",
-    # "zarr",
+    # Verified 2026-09-10 against a real ARCO-ERA5 pull (13.7 MB, 192 hourly
+    # steps) and a real NOAA GDP pull (926,533 observations). These are the
+    # versions that produced that data, not a guess at what should work.
+    "xarray==2026.7.0",
+    "zarr==3.3.0",
+    "gcsfs==2026.8.0",      # anonymous access to ARCO-ERA5 on Google Cloud
+    "fsspec==2026.7.0",
+    "netcdf4==1.7.4",
+    "cftime==1.6.5",
+    "dask==2026.8.0",       # scheduler="threads" is what makes the ARCO pull tractable
+    "numpy==2.5.3",
+    "pandas==3.0.5",
+    "pyarrow==25.0.1",      # derived-tier Parquet
+    "scipy==1.18.1",
+    "matplotlib==3.11.1",
+    "erddapy==3.3.0",       # NOAA GDP drifters
 ]
 
 [project.optional-dependencies]
