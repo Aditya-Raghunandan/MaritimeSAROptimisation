@@ -1,0 +1,246 @@
+# Surface current fetch (`sar.fetch.current`)
+
+Closes GitHub issue #4. Retrieves surface current data from HYCOM
+`GLBy0.08/expt_93.0`, either as a single nearest-neighbour point or as a
+box+period pull for offline analysis.
+
+## User guide
+
+### `water_u` and `water_v`
+
+- `water_u`: **eastward** surface current velocity, m/s. Positive means
+  flowing east, negative means flowing west.
+- `water_v`: **northward** surface current velocity, m/s. Positive means
+  flowing north, negative means flowing south.
+- Both are the surface value (depth 0 m), not depth-averaged; see
+  [Why not `_sur`](#why-not-_sur) below for why that distinction matters.
+- There is no hard limit enforced by this code; values are whatever HYCOM
+  reports. As a sanity check: most of the D014 box sits well under
+  ±0.5 m/s, while the Gulf Stream core can reach **1.5-2.5 m/s**. A value
+  far outside that range at a non-Stream location is worth double-checking
+  rather than trusting outright.
+- `NaN` in either field means a masked cell, almost always land. See
+  `scripts/find_current_gaps.py` below to pull all of those out of a
+  fetched file at once.
+
+### What times can be chosen
+
+HYCOM only publishes a value **every 3 hours, UTC**: `00:00, 03:00, 06:00,
+09:00, 12:00, 15:00, 18:00, 21:00`. There is no 11:00 record, no 07:30
+record, and so on.
+
+`fetch_current`/the CLI does **not** reject an off-grid `--time`; it
+silently snaps to the *nearest* of those eight steps instead. For example,
+`--time 11:00` is 2 hours from `09:00` and 1 hour from `12:00`, so it
+returns the `12:00` record. **Always read the `time` field of the result**,
+since it is the timestamp actually used, and can be up to 1.5 hours away
+from what was requested.
+
+The same applies to the *date*: the dataset's real coverage runs from
+**2018-12-04 12:00 UTC to 2024-09-05 09:00 UTC** (measured against the live
+server by Aditya, not the advertised range). A `--date`/`--time` outside
+that window does not raise an error; nearest-neighbour has no concept of
+"out of coverage" and will still return the closest timestamp the store
+actually has, however far away that turns out to be. There is currently no
+guard against this here (see [Known gaps](#known-gaps--open-questions)).
+
+### The "nearest point" behaviour (space)
+
+`--lat`/`--lon` are resolved the same way as time: **nearest grid point**,
+not exact interpolation. "GLBy**0.08**" in the dataset name is the grid
+spacing: **0.08° in both latitude and longitude** (confirmed against the
+real coordinate arrays: consecutive longitude values are `278.000000,
+278.080017, 278.160034, ...`). So the actual point used can be up to
+~0.04° away from what was requested in each axis.
+
+**How far apart is that in metres?** A degree of latitude is close to a
+constant ~111.3 km everywhere; a degree of longitude shrinks toward the
+poles by a factor of `cos(latitude)`, so the east-west spacing is not the
+same at the top of the D014 box as at the bottom:
+
+| | spacing in degrees | spacing in metres |
+|---|---|---|
+| North-south (any latitude) | 0.08° | **~8,900 m** (~8.9 km) |
+| East-west at 17°N (south edge of box) | 0.08° | **~8,520 m** (~8.5 km) |
+| East-west at ~26.5°N (mid-box) | 0.08° | **~7,970 m** (~8.0 km) |
+| East-west at 36°N (north edge of box) | 0.08° | **~7,210 m** (~7.2 km) |
+
+So a nearest-neighbour lookup can be up to roughly **4-4.5 km off** in
+either direction from the point actually requested, which is worth keeping
+in mind next to any current feature (like the Gulf Stream) that is itself
+only tens of km wide.
+
+Longitude is handled for you: pass ordinary `-180..180` values (e.g.
+`-70.0` for 70°W) and `to_store_longitude` converts it to the store's
+`0..360` convention internally; there is no need to do that conversion by
+hand.
+
+One current limitation worth knowing: `fetch_current`'s result only
+reports the matched `time`, not the matched `lat`/`lon`, so there is no
+built-in way to see exactly which grid cell was used in space, only in
+time. If you need that, open the dataset yourself with
+`open_current_dataset()` and inspect the selection before `.load()`ing it.
+
+### How this data is actually produced
+
+HYCOM `GLBy0.08/expt_93.0` is **not** a set of raw sensor readings at each
+grid point; real current meters and drifting buoys are far too sparse to
+cover a global 0.08° grid every 3 hours. It is the output of a numerical
+ocean **model** (the HYbrid Coordinate Ocean Model) run by the US Navy,
+which is periodically corrected ("data-assimilated") against whatever real
+observations exist at that time: satellite sea-surface-height altimetry,
+satellite and buoy sea-surface temperature, Argo float profiles, moored
+buoys, and ship-based measurements. The assimilation system (NCODA) nudges
+the model's internal ocean state toward those observations, and the
+model's own physics (conservation of momentum, mass, and the effect of
+wind and density on flow) fills in the rest of the grid in between, so
+that every cell, including ones nowhere near an actual sensor, gets a
+physically consistent value at every timestep.
+
+Practically, this means `water_u`/`water_v` at any one grid point is a
+**model estimate constrained by nearby real data**, not a direct
+measurement. It will smooth over current features narrower than the model
+can resolve, and its accuracy depends on how much real observational data
+was available to correct it at that place and time, which is exactly what
+the validation work in D018 (GDP drifter comparison) is for.
+
+## Why not `_sur`
+
+The `_sur` catalogue looks like the obvious source but does not contain
+`water_u`/`water_v` at all: it holds **barotropic** velocity (depth-averaged
+over the entire water column, ~5000 m), which is a small fraction of the
+Gulf Stream's actual surface flow (D019 in the project vault). Using it would
+quietly under-drive every particle in the drift model while still producing
+plausible-looking tracks.
+
+This module instead opens the full 3-D dataset and selects **depth level 0**,
+which is verified against the live server (not assumed from documentation) to
+be exactly 0 m:
+
+| | |
+|---|---|
+| OPeNDAP endpoint | `https://tds.hycom.org/thredds/dodsC/GLBy0.08/expt_93.0` |
+| Variables | `water_u`, `water_v` (m/s, eastward/northward) |
+| Depth | level 0 = 0 m (40 levels total, asserted at open time) |
+| Cadence | **3-hourly**, not hourly |
+| Latitude | ascending (`-80` to `90`), the opposite of ERA5 |
+| Longitude | store convention is **0-360**, not -180-180 |
+
+## `src/sar/fetch/current.py`
+
+- `open_current_dataset()`: opens the dataset lazily (nothing downloaded
+  yet) and asserts `depth.values[0] == 0.0` before any caller can rely on
+  that assumption. Drops the `tau` coordinate, whose units (`"hours since
+  analysis"`) are not a parseable reference date and otherwise crash
+  xarray's CF time decoder before `water_u`/`water_v` are ever touched.
+- `to_store_longitude(lon)`: converts a -180..180 longitude to the store's
+  0..360 convention (`lon % 360`).
+- `fetch_current(date, time, lat, lon)`: nearest-neighbour lookup in time,
+  latitude and longitude. Returns `{"water_u": float, "water_v": float,
+  "time": np.datetime64}`. The returned `time` is whichever 3-hourly step
+  was actually selected, which will not equal the requested time unless it
+  happens to land exactly on one.
+- `fetch_current_box(start, end, lat_bounds, lon_bounds)`: loads every
+  record (all lat/lon points at depth 0) for every 3-hourly timestep in
+  `[start, end)`. Used by `scripts/fetch_current_range.py`; asserts the
+  latitude, longitude and time slices are non-empty rather than silently
+  returning an empty dataset.
+- `LAT_S, LAT_N, LON_W, LON_E`: the D014 study box (17-36 N, 82-63 W).
+  Change these once, here, and nowhere else, matching the convention in the
+  vault's `code/fetch_wind_arco.py`.
+
+### CLI
+
+```
+python -m sar.fetch.current --date 2019-01-01 --time 12:00 --lat 25.5 --lon -70.0
+```
+
+Prints the resulting dict to stdout.
+
+## `scripts/fetch_current_range.py`
+
+Pulls every surface-current record in the D014 box across a date range and
+writes it to `data/current/`.
+
+```
+python scripts/fetch_current_range.py --start 2019-01-01 --end 2019-01-03 \
+    [--out data/current] [--format txt|csv|parquet]
+```
+
+- `--start` is inclusive, `--end` is exclusive, the same convention as
+  `fetch_wind_arco.py`.
+- Output columns: `time, lat, lon, water_u, water_v`, one row per grid
+  point per timestep.
+- Output path: `data/current/current_<start>_<end>.<ext>`. Defaults to
+  `.txt` (whitespace-separated) if `--format` is not given.
+
+**Size warning.** A single 2-day pull over the full box already produced
+~160 MB of text (24 timesteps by 476 by 238 grid points). A multi-month or
+multi-year range at this resolution will be very large; prefer
+`--format parquet` and/or a short window, per Aditya's handoff note that a
+full five-year, all-depths pull would be ~28 GB (this fetch is depth-0 only,
+but the spatial grid is unchanged).
+
+## Tests
+
+`tests/fetch/test_current.py`: monkeypatches `open_current_dataset` (or
+`xr.open_dataset` underneath it) with a small synthetic dataset shaped like
+the real store, so tests never touch the network. Covers longitude
+conversion, the depth-0 assertion, nearest-neighbour selection (both exact
+and off-grid), and the box query's empty-slice guards.
+
+Run with:
+
+```
+python -m pytest tests/fetch/test_current.py -q
+```
+
+## `scripts/find_current_gaps.py`
+
+Pulls every NaN record (either `water_u` or `water_v` missing; HYCOM land
+cells and any other masked value both decode to NaN) out of an already-
+fetched `current_<period>` file, and writes a report for gap analysis and
+mitigation decisions (e.g. feeding the vault's D011 "missing timestep
+handling" question).
+
+```
+python scripts/find_current_gaps.py data/current/current_2019-01-01_2019-01-03.txt \
+    [--out data/current]
+```
+
+- Reads `.txt`, `.csv` or `.parquet`, whichever `fetch_current_range.py`
+  produced.
+- Writes `<out>/gaps_<input stem>.txt` (default `<out>` = same directory as
+  the input) containing: total/NaN record counts and percentage, the number
+  of distinct `(lat, lon)` locations and timesteps affected, a per-timestep
+  NaN count, and then every NaN row in full.
+- On the 2019-01-01 to 2019-01-03 sample box pull, **11.8% of records were
+  NaN** (321,720 of 2,718,912), almost all land cells inside the D014 box,
+  since the box spans a lot of the Bahamas/Florida/East Coast coastline.
+
+Tested in `tests/pipeline/test_find_current_gaps.py` against small
+synthetic inputs, including a round-trip through the exact `.txt` format
+`fetch_current_range.py` writes.
+
+**Note on the `.txt` format.** The original `.txt` writer put the timestamp
+as `"2019-01-01 00:00:00"`, a raw space inside a whitespace-delimited
+format. Reading it back with `sep=r"\s+"` silently split the date and time
+into two fields, swallowing the date into an implicit pandas index and
+leaving only the time-of-day in the `time` column. Fixed by writing
+timestamps as `"2019-01-01T00:00:00"` (no embedded space) before the
+`.txt` write; `.csv` and `.parquet` were never affected, since they don't
+rely on whitespace as the field separator.
+
+## Known gaps / open questions
+
+- No retry or timeout handling around the OPeNDAP request: a slow or
+  dropped connection currently just hangs or raises whatever `xarray`/
+  `netCDF4` raises natively.
+- `fetch_current`'s nearest-neighbour selection can silently return a value
+  far from the requested point/time if the request falls well outside the
+  store's real coverage (2018-12-04 to 2024-09-05, per Aditya's handoff);
+  there is no coverage guard here yet, unlike `fetch_wind_arco.py`'s
+  `STUDY_START`/`STUDY_END` check.
+- Land cells and any other masked HYCOM values decode to `NaN`. See
+  `scripts/find_current_gaps.py` for pulling those out of an already-fetched
+  file for review.
