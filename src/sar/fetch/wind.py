@@ -123,8 +123,23 @@ def open_wind_store() -> xr.Dataset:
     Without this flag, zarr 3.x tries to discover the layout across 277 arrays
     and open_zarr never returns -- observed hanging past 30 minutes with no
     error and no output. That was bug #2 of 2026-09-10.
+
+        chunks=None IS ALSO LOAD-BEARING, and it is the more expensive mistake.
+    With chunks={"time": 1} dask builds its task graph at OPEN time, over the
+    store's PADDED axis of 1,323,648 steps -- so the graph is 1.3 million tasks
+    per variable, ~4 million for the three, and only afterwards does .sel()
+    narrow it to the few thousand actually wanted. Measured 2026-09-16:
+
+        chunks={"time": 1} : open 52.0 s, 1,323,649 tasks for one variable
+        chunks=None        : open 11.6 s, then select and chunk -> 3 tasks
+
+    The cost is FIXED, not proportional to the window, which is why it hid: it
+    was paid identically by the one-week verification run on 2026-09-10 and
+    attributed to the download. On 2026-09-15 it burned six cores for 30 minutes
+    on the head node at ZERO bytes/s of network before anyone looked at a
+    counter. Select first, THEN chunk. See fetch_wind_box.
     """
-    return xr.open_zarr(ARCO, chunks={"time": 1},
+    return xr.open_zarr(ARCO, chunks=None,
                         storage_options={"token": "anon"}, consolidated=True)
 
 
@@ -159,6 +174,22 @@ def fetch_wind_box(start: str, end: str,
     assert sub.sizes["time"] > 0, f"no timesteps in [{start}, {end})"
 
     sub = sub.rename(VARS)
+
+    # NOW introduce dask, over the selected window only -- one timestep per
+    # chunk, which is what the store itself is chunked by.
+    #
+    # Both halves of this matter and they pull in opposite directions. Chunking
+    # at OPEN time builds the graph over the padded 1,323,648-step axis: 1.3
+    # million tasks per variable, 52 s before anything is fetched. Chunking
+    # COARSER than one timestep (a day, say) shrinks the graph further but also
+    # collapses the concurrency -- each task then reads its 24 global timesteps
+    # in series, and the pull is latency-bound, so parallelism is the only thing
+    # that makes it tractable at all.
+    #
+    # Selecting first and then chunking at time=1 gets both: a graph the size of
+    # the window (8,760 tasks for a year, not 1.3 million) at full 32-way
+    # concurrency.
+    sub = sub.chunk({"time": 1})
     with dask.config.set(scheduler="threads", num_workers=THREADS):
         sub = sub.load()
 
@@ -198,13 +229,7 @@ def main() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
     print("opening ARCO-ERA5 (lazy, nothing downloaded yet) ...")
-    # consolidated=True IS LOAD-BEARING.  Despite the ".zarr-v3" in the path the
-    # store is Zarr FORMAT 2 with a .zmetadata sidecar (there is no zarr.json).
-    # Without this flag, zarr 3.x tries to discover the layout across 277 arrays
-    # and open_zarr never returns -- observed hanging past 30 minutes with no
-    # error and no output.  That was bug #2.
-    ds = xr.open_zarr(ARCO, chunks={"time": 1},
-                      storage_options={"token": "anon"}, consolidated=True)
+    ds = open_wind_store()
 
     # The advertised range is not the real one.  Record what the store actually
     # holds — this is the number that goes in the notebook, not the docs page.
@@ -218,38 +243,13 @@ def main() -> None:
           ds.attrs.get("valid_time_stop"))
     print("  VALID era5t :", ds.attrs.get("valid_time_stop_era5t"), "(preliminary)")
 
-    # ---- the two traps, handled explicitly -------------------------------
-    # 1. ERA5 latitude runs 90 -> -90. slice(17, 36) returns EMPTY, silently.
-    # 2. ERA5 longitude runs 0 -> 360. -82 W is 278.
-    lon_w = LON_W % 360
-    lon_e = LON_E % 360
-    sub = ds[list(VARS)].sel(
-        time=slice(args.start, args.end),
-        latitude=slice(LAT_N, LAT_S),      # descending, on purpose
-        longitude=slice(lon_w, lon_e),
-    )
-    assert sub.sizes["latitude"] > 0, "empty latitude — check the descending slice"
-    assert sub.sizes["longitude"] > 0, "empty longitude — check the 0-360 convention"
+    # One code path, not two. This used to duplicate the open, the select, the
+    # traps and the load inline -- which is how the bad chunking survived being
+    # fixed in fetch_wind_box, and how the -180..180 conversion lived on in one
+    # place after being removed from the other.
+    print(f"downloading on {THREADS} threads ...")
+    sub = fetch_wind_box(args.start, args.end, (LAT_S, LAT_N), (LON_W, LON_E))
     print("  grid:", dict(sub.sizes))
-
-    sub = sub.rename(VARS)
-    n_chunks = sub.sizes["time"] * len(VARS)
-    print(f"downloading {n_chunks} chunks on {THREADS} threads ...")
-    with dask.config.set(scheduler="threads", num_workers=THREADS):
-        sub = sub.load()
-
-    # Guard the padded-axis trap: an out-of-range window is silently all-NaN.
-    if bool(np.isnan(sub["u10"].values).all()):
-        raise SystemExit("all-NaN wind -- window is outside the store's VALID range")
-
-    # D020: store what the server served. Longitude stays 0-360, the axes are
-    # renamed latitude/longitude -> lat/lon to match src/sar/fetch/current.py,
-    # and both are sorted ascending. This file used to convert back to
-    # -180..180 here, which meant the same Gulf Stream cell was -70.0 in the
-    # wind file and 290.0 in the current file. Display conversion now happens
-    # in the figure functions only.
-    sub = normalise_grid(sub)
-    assert_conventions(sub)
 
     raw_path = raw_dir / f"era5_{box}_{tag}.nc"
     sub.to_netcdf(raw_path)
