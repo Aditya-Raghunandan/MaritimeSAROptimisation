@@ -50,12 +50,21 @@ REPO="${SLURM_SUBMIT_DIR:-$HOME/SAR/MaritimeSAROptimisation}"
 cd "$REPO"
 source "$REPO/.venv/bin/activate"
 
+# The editable install resolves on the head node and NOT on the compute nodes,
+# even though /home is the same NFS export on both -- `import sar` raises
+# ModuleNotFoundError under srun while working fine under ssh. Rather than
+# debug pip's editable-install machinery across NFS, put src on the path
+# explicitly. One line, and it removes the dependency entirely.
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+
 echo "host      : $(hostname)"
 echo "task      : ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_COUNT:-?}"
 echo "year      : ${Y}-01-01 .. ${NEXT}-01-01  (end exclusive)"
 echo "out       : ${OUT}"
 echo "started   : $(date -Is)"
-df -h / | tail -1
+# NOT df / -- on a compute node that is its own 7.3 G root, 95% full. The
+# output goes to /home, which is 192.168.1.1:/export/home, 340 G free.
+df -h "$OUT" | tail -1
 echo
 
 python -m sar.fetch.wind --start "${Y}-01-01" --end "${NEXT}-01-01" --out "${OUT}"
