@@ -1,5 +1,5 @@
 """
-fetch_wind_arco.py — pull a region+period subset of ERA5 from ARCO-ERA5
+wind.py — pull a region+period subset of ERA5 from ARCO-ERA5
 (Google Cloud, Zarr, anonymous) and write four things:
 
   1. data/raw/era5_<box>_<window>.nc            10u, 10v, msl for the box+window
@@ -9,12 +9,12 @@ fetch_wind_arco.py — pull a region+period subset of ERA5 from ARCO-ERA5
 
 No CDS account, no queue. Same numbers as the CDS product.
 
-Run it from a shell that has internet access (your own Windows terminal or WSL).
-Install once:
-    pip install -r env/requirements.txt        # pinned; see also env/environment.yml
+Run it from a shell that has internet access. Install once, from the repo root:
+    python -m venv .venv && pip install -e ".[dev]"   # pins live in pyproject.toml
 
 Then, ONE WEEK first:
-    python code/fetch_wind_arco.py --start 2019-01-01 --end 2019-01-08 --out C:/maritime-data
+    python -m sar.fetch.wind --start 2019-01-01 --end 2019-01-08 --out C:/maritime-data
+    # on the cluster:  --out /home/26p67/data   (NOT /data1 -- it is not writable)
 
   --out IS NOT OPTIONAL in practice: it defaults to "data" RELATIVE TO THE
   WORKING DIRECTORY, so running this from the vault root writes raw NetCDF into
