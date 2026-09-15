@@ -48,7 +48,14 @@ OUT=/home/26p67/data
 # near it. SLURM_SUBMIT_DIR is the directory sbatch was invoked from.
 REPO="${SLURM_SUBMIT_DIR:-$HOME/SAR/MaritimeSAROptimisation}"
 cd "$REPO"
-source "$REPO/.venv/bin/activate"
+
+# Call the interpreter by absolute path. `source .venv/bin/activate` does NOT
+# reliably take effect under srun -- task 0 of job 58618 ran the system
+# /usr/lib/python3.8 and died on `import dask`, while the same activate works
+# fine over ssh on the head node. An absolute path has no PATH semantics to
+# get wrong, and 3.8 is end-of-life and cannot install these pins anyway.
+PY="$REPO/.venv/bin/python"
+[ -x "$PY" ] || { echo "no interpreter at $PY -- create the venv first"; exit 1; }
 
 # The editable install resolves on the head node and NOT on the compute nodes,
 # even though /home is the same NFS export on both -- `import sar` raises
@@ -67,7 +74,8 @@ echo "started   : $(date -Is)"
 df -h "$OUT" | tail -1
 echo
 
-python -m sar.fetch.wind --start "${Y}-01-01" --end "${NEXT}-01-01" --out "${OUT}"
+"$PY" -V
+"$PY" -m sar.fetch.wind --start "${Y}-01-01" --end "${NEXT}-01-01" --out "${OUT}"
 
 echo
 echo "finished  : $(date -Is)"
