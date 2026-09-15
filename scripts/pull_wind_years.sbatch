@@ -43,8 +43,12 @@ NEXT=$((Y + 1))
 # on it. See the 2026-09-14 correction in D017.
 OUT=/home/26p67/data
 
-cd "$(dirname "$0")/.."
-source .venv/bin/activate
+# NOT $(dirname "$0") -- Slurm copies the script to /var/spool/slurmd/job<N>/
+# and runs it from there, so $0 points at the spool copy and the repo is nowhere
+# near it. SLURM_SUBMIT_DIR is the directory sbatch was invoked from.
+REPO="${SLURM_SUBMIT_DIR:-$HOME/SAR/MaritimeSAROptimisation}"
+cd "$REPO"
+source "$REPO/.venv/bin/activate"
 
 echo "host      : $(hostname)"
 echo "task      : ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_COUNT:-?}"
