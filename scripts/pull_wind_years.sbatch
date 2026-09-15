@@ -54,8 +54,18 @@ cd "$REPO"
 # /usr/lib/python3.8 and died on `import dask`, while the same activate works
 # fine over ssh on the head node. An absolute path has no PATH semantics to
 # get wrong, and 3.8 is end-of-life and cannot install these pins anyway.
-PY="$REPO/.venv/bin/python"
-[ -x "$PY" ] || { echo "no interpreter at $PY -- create the venv first"; exit 1; }
+# NOT $REPO/.venv/bin/python. A venv does not contain an interpreter -- its
+# bin/python is a SYMLINK to the system one, which is 3.12 on the head node and
+# 3.8 on every compute node, so the same venv silently runs two different and
+# incompatible Pythons depending on where the task lands. Three array attempts
+# died on that before adding `python -V` made it visible.
+#
+# The micromamba environment carries its own 31 MB interpreter, and its packages
+# come from conda-forge, which builds against glibc 2.17 -- the compute nodes are
+# Ubuntu 20.04 with glibc 2.31, and modern pip wheels (cryptography's Rust
+# extension in particular) require 2.33+. See the second correction in D017.
+PY="${SAR_PYTHON:-/home/26p67/envs/sar/bin/python}"
+[ -x "$PY" ] || { echo "no interpreter at $PY -- see D017 on micromamba"; exit 1; }
 
 # The editable install resolves on the head node and NOT on the compute nodes,
 # even though /home is the same NFS export on both -- `import sar` raises
