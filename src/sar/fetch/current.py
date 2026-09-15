@@ -102,6 +102,12 @@ def fetch_current_box(start: str, end: str, lat_bounds: tuple, lon_bounds: tuple
         lat=slice(lat_s, lat_n),
         lon=slice(lon_w, lon_e),
     )
+    # Same trap as src/sar/fetch/wind.py: xarray reads a bare date string as the
+    # whole day, so slice(start, end) includes all of `end`. Made exclusive here
+    # so the two fetchers cover identical windows -- otherwise a paired pull
+    # silently gets one more day of current than of wind.
+    sub = sub.sel(time=sub.time < np.datetime64(end))
+
     assert sub.sizes["lat"] > 0, "empty latitude: check the bounds"
     assert sub.sizes["lon"] > 0, "empty longitude: check the 0-360 convention"
     assert sub.sizes["time"] > 0, f"no timesteps in [{start}, {end})"

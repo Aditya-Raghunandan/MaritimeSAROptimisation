@@ -56,6 +56,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from sar.utils.geo import assert_conventions, normalise_grid, to_display_longitude
+
 ARCO = "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
 
 # MEASURED 2026-09-10, not assumed.  This store uses FULL CF-STYLE NAMES.
@@ -102,6 +104,67 @@ STUDY_END   = "2024-01-01"
 # 1-4 % RANGE in R1c is right; the 3 % midpoint this file used was not.
 ALPHA_MID = 0.02      # midpoint leeway coefficient, 1-4 % range (D002, D018)
 CURRENT_TYPICAL = 1.8  # m/s, Gulf Stream surface average (D001)
+
+
+def open_wind_store() -> xr.Dataset:
+    """Open ARCO-ERA5 lazily. Nothing is downloaded until .load().
+
+    Mirrors `sar.fetch.current.open_current_dataset` deliberately: the two
+    fetchers are the same shape so a caller can pair them without special-casing
+    either one (D020).
+
+    consolidated=True IS LOAD-BEARING. Despite the ".zarr-v3" in the path the
+    store is Zarr FORMAT 2 with a .zmetadata sidecar (there is no zarr.json).
+    Without this flag, zarr 3.x tries to discover the layout across 277 arrays
+    and open_zarr never returns -- observed hanging past 30 minutes with no
+    error and no output. That was bug #2 of 2026-09-10.
+    """
+    return xr.open_zarr(ARCO, chunks={"time": 1},
+                        storage_options={"token": "anon"}, consolidated=True)
+
+
+def fetch_wind_box(start: str, end: str,
+                   lat_bounds: tuple = (LAT_S, LAT_N),
+                   lon_bounds: tuple = (LON_W, LON_E)) -> xr.Dataset:
+    """Every hourly wind record in a lat/lon box between two dates.
+
+    `start` inclusive, `end` exclusive, same convention as
+    `sar.fetch.current.fetch_current_box`. Returns a loaded, D020-normalised
+    dataset: axes named lat/lon, both ascending, longitude 0-360.
+    """
+    lat_s, lat_n = lat_bounds
+    ds = open_wind_store()
+
+    # The two traps, handled explicitly:
+    #   1. ERA5 latitude runs 90 -> -90, so slice(17, 36) returns EMPTY, silently.
+    #   2. ERA5 longitude runs 0 -> 360. -82 W is 278.
+    sub = ds[list(VARS)].sel(
+        time=slice(start, end),
+        latitude=slice(lat_n, lat_s),          # descending, on purpose
+        longitude=slice(lon_bounds[0] % 360, lon_bounds[1] % 360),
+    )
+    # xarray reads a bare date string as the WHOLE day, so slice(start, end)
+    # includes all of `end` -- 24 extra hours. Pulling year by year, that
+    # duplicates 1 January at every boundary and leaves the concatenated
+    # archive with repeated timestamps. Make `end` genuinely exclusive.
+    sub = sub.sel(time=sub.time < np.datetime64(end))
+
+    assert sub.sizes["latitude"] > 0, "empty latitude -- check the descending slice"
+    assert sub.sizes["longitude"] > 0, "empty longitude -- check the 0-360 convention"
+    assert sub.sizes["time"] > 0, f"no timesteps in [{start}, {end})"
+
+    sub = sub.rename(VARS)
+    with dask.config.set(scheduler="threads", num_workers=THREADS):
+        sub = sub.load()
+
+    # The padded-axis trap: ARCO's time axis runs 1900-2050 but valid data stops
+    # at 2026-05-31, and a slice past it returns ALL-NaN rather than raising.
+    if bool(np.isnan(sub["u10"].values).all()):
+        raise SystemExit("all-NaN wind -- window is outside the store's VALID range")
+
+    sub = normalise_grid(sub)
+    assert_conventions(sub)
+    return sub
 
 
 def main() -> None:
@@ -174,23 +237,28 @@ def main() -> None:
     if bool(np.isnan(sub["u10"].values).all()):
         raise SystemExit("all-NaN wind -- window is outside the store's VALID range")
 
-    # put longitude back to -180..180 so it matches GLORYS and the plots
-    sub = sub.assign_coords(longitude=(((sub.longitude + 180) % 360) - 180))
-    sub = sub.sortby("longitude")
+    # D020: store what the server served. Longitude stays 0-360, the axes are
+    # renamed latitude/longitude -> lat/lon to match src/sar/fetch/current.py,
+    # and both are sorted ascending. This file used to convert back to
+    # -180..180 here, which meant the same Gulf Stream cell was -70.0 in the
+    # wind file and 290.0 in the current file. Display conversion now happens
+    # in the figure functions only.
+    sub = normalise_grid(sub)
+    assert_conventions(sub)
 
     raw_path = raw_dir / f"era5_{box}_{tag}.nc"
     sub.to_netcdf(raw_path)
     print("wrote", raw_path)
 
     # ---- derived scalars: this is what the analytics actually read -------
-    u = sub["u10"].mean(dim=("latitude", "longitude"))
-    v = sub["v10"].mean(dim=("latitude", "longitude"))
+    u = sub["u10"].mean(dim=("lat", "lon"))
+    v = sub["v10"].mean(dim=("lat", "lon"))
     speed = np.hypot(u, v)
     # meteorological convention: direction the wind comes FROM, degrees
     direction = (270.0 - np.degrees(np.arctan2(v, u))) % 360.0
-    msl_mean = sub["msl"].mean(dim=("latitude", "longitude")) / 100.0   # Pa -> hPa
-    msl_range = (sub["msl"].max(dim=("latitude", "longitude"))
-                 - sub["msl"].min(dim=("latitude", "longitude"))) / 100.0
+    msl_mean = sub["msl"].mean(dim=("lat", "lon")) / 100.0   # Pa -> hPa
+    msl_range = (sub["msl"].max(dim=("lat", "lon"))
+                 - sub["msl"].min(dim=("lat", "lon"))) / 100.0
 
     df = pd.DataFrame(
         {
@@ -288,11 +356,15 @@ def pressure_wind_check(sub, fig_dir, tag, plt) -> None:
     t = sub.time.values[len(sub.time) // 2]      # a mid-window snapshot
     snap = sub.sel(time=t)
 
-    lon = snap.longitude.values
-    lat = snap.latitude.values
-    p_hpa = snap["msl"].values / 100.0
-    u = snap["u10"].values
-    v = snap["v10"].values
+    # 0-360 on disk (D020), -180..180 on the axis so it reads as "70 W".
+    # This is the single presentation-boundary conversion that decision buys.
+    lon = to_display_longitude(snap.lon.values)
+    lat = snap.lat.values
+    order = np.argsort(lon)
+    lon = lon[order]
+    p_hpa = snap["msl"].values[:, order] / 100.0
+    u = snap["u10"].values[:, order]
+    v = snap["v10"].values[:, order]
 
     step = max(1, len(lon) // 28)                # thin the arrows so they read
 
