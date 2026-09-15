@@ -22,6 +22,10 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Refuses outright on jaguar1/jaguar2 unless ALLOW_HEAD_NODE=1, and caps threads
+# and nice level when overridden. This job is the reason that guard exists.
+source "$REPO/scripts/guard_shared_host.sh"
 PY="$REPO/.venv/bin/python"
 OUT=/home/26p67/data          # NOT /data1 -- unwritable, nothing mounted on it
 export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -30,6 +34,7 @@ cd "$REPO"
 echo "host       : $(hostname)"
 echo "interpreter: $("$PY" -V 2>&1)  at $PY"
 echo "out        : $OUT"
+echo "threads    : ${SAR_FETCH_THREADS:-32}"
 df -h "$OUT" | tail -1
 echo
 

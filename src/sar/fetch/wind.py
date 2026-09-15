@@ -49,6 +49,7 @@ It costs one extra string in VARS and roughly 1 GB over the full five years.
 """
 
 import argparse
+import os
 from pathlib import Path
 
 import dask
@@ -73,7 +74,11 @@ VARS = {
 # Subsetting our 77x77 box therefore does NOT reduce what crosses the wire, and
 # the cost is pure per-chunk latency.  Measured: 0.72 s/chunk serial -> 26 h for
 # five years; 0.246 s/chunk at 32 threads -> 9 h.  Concurrency is the whole fix.
-THREADS = 32
+# Concurrency for the ARCO pull. Overridable because 32 threads is right for a
+# dedicated machine and antisocial on a shared login node -- on 2026-09-15 this
+# ran at 483 % CPU on jaguar1 and made the box unusable for its actual users.
+# scripts/run_on_cluster.sh caps it. See D017.
+THREADS = int(os.environ.get("SAR_FETCH_THREADS", "32"))
 
 # D014 study box — full Bermuda Triangle, northern edge pushed to 36 N so the
 # Gulf Stream's separation and meander field at Cape Hatteras (~35.2 N) is inside
