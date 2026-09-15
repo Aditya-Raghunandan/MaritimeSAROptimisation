@@ -50,7 +50,9 @@ def check(name, ok, detail=""):
 def main():
     p = argparse.ArgumentParser(description="Verify wind and current pair correctly")
     p.add_argument("--date", required=True, help="UTC date, YYYY-MM-DD. One day.")
-    p.add_argument("--figures", default="figures", help="where to write the quiver plot")
+    p.add_argument("--figures", default="figures/report",
+                   help="where to write the quiver plot. figures/report is the tracked "
+                        "deliverable directory; figures/reference is gitignored")
     args = p.parse_args()
 
     day = args.date
