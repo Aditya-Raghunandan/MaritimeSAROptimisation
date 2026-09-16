@@ -38,8 +38,9 @@ jobs:
         # the test suite is populated, at which point this line should be
         # removed so that a genuinely empty suite is once again treated as
         # a failure.
-        run: |
-          pytest -n auto || [ $? -eq 5 ]
+        # The `|| exit-5` tolerance is gone as of 2026-09-16: there are now 76
+        # tests, so an empty suite once again means something is wrong.
+        run: pytest -n auto
 
   frontend-tests:
     name: Frontend (npm test)
@@ -55,14 +56,23 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          # cache: "npm" needs a lock file to hash. Re-enable this, with
-          # cache-dependency-path: frontend/package-lock.json, once one exists.
+          # Enabled 2026-09-16: frontend/package-lock.json now exists, created by
+          # the first runtime dependencies (leaflet, leaflet-velocity, uplot).
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        run: npm install
+        # npm ci, not npm install: it installs exactly the lock file and fails
+        # if package.json and the lock have drifted, which is what CI is for.
+        run: npm ci
 
       - name: Run tests
-        # No test script is presently defined in frontend/package.json.
-        # This step should be updated once one is added (for example, via
-        # Vitest), and the placeholder condition below removed.
-        run: npm test --if-present
+        # Vitest, added 2026-09-16 with the layer system. 36 tests, no DOM --
+        # the geodesy was split into src/geo.js precisely so it imports nothing
+        # and can be tested without one.
+        run: npm test
+
+      - name: Build
+        # A passing test suite over a site that does not build is not a green
+        # build. This is the step that would have caught a broken import.
+        run: npm run build

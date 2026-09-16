@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Maritime SAR — drift and search</title>
+    <style>
+      :root {
+        --panel: #ffffff;
+        --ink: #1a1a1a;
+        --muted: #5b6470;
+        --line: #d9dee5;
+        --accent: #1f77b4;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: var(--ink);
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        height: 100vh;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        gap: 16px;
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+      header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+      #stamp { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); }
+      #provenance { margin-left: auto; color: var(--muted); font-size: 11px; }
+      #map { width: 100%; height: 100%; background: #dfe6ee; }
+      .map-wrap { position: relative; min-height: 0; }
+      footer {
+        border-top: 1px solid var(--line);
+        background: var(--panel);
+        padding: 8px 14px 10px;
+        display: grid;
+        gap: 6px;
+      }
+      .controls { display: flex; align-items: center; gap: 10px; }
+      #time { flex: 1; }
+      button {
+        font: inherit;
+        padding: 3px 10px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: #fff;
+        cursor: pointer;
+      }
+      button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+      #status { color: var(--muted); min-height: 1.4em; }
+      #chart { display: none; }
+      #chart.visible { display: block; }
+      .measuring { cursor: crosshair; }
+      .ring-label {
+        color: #8a6d00;
+        font-size: 10px;
+        font-weight: 600;
+        text-shadow: 0 0 3px #fff, 0 0 3px #fff;
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Maritime SAR</h1>
+      <span id="stamp">—</span>
+      <span id="provenance"></span>
+    </header>
+
+    <div class="map-wrap"><div id="map"></div></div>
+
+    <footer>
+      <div class="controls">
+        <input id="time" type="range" min="0" max="0" value="0" step="1" />
+        <button id="ruler" title="Click points on the map to measure distance and bearing">Ruler</button>
+        <button id="rings" title="Range rings at 10, 25, 50 and 100 km">Rings</button>
+      </div>
+      <div id="status"></div>
+      <div id="chart"></div>
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
