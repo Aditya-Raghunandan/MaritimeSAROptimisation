@@ -161,8 +161,71 @@ def to_display_grid(ds: xr.Dataset) -> xr.Dataset:
     return ds.assign_coords(lon=to_display_longitude(ds["lon"].values)).sortby("lon")
 
 
+def _iso(t) -> str:
+    """A full ISO-8601 UTC stamp, whatever precision the array carries.
+
+    `str(np.datetime64)` drops trailing components, so an hour-precision array
+    yields "2021-01-01T23" and a nanosecond one "2021-01-01T23:00:00.000000000".
+    The client parses these with `new Date(...)`, which is happy with both and
+    would make the manifest's format depend on how the source happened to be
+    written. Cast to seconds first so it never does.
+    """
+    return str(np.datetime64(t, "s")) + "Z"
+
+
+def time_axis_spec(times: np.ndarray, *, allow_gaps: bool = False) -> dict:
+    """Describe a time axis, refusing an irregular one unless asked.
+
+    The client reconstructs every frame's timestamp as `start + k * step`,
+    exactly as it reconstructs coordinates from `lat0 + j * dlat`. That is only
+    valid on a regular axis, and a gapped axis does not fail -- it mislabels.
+
+    Measured on the real local archive 2026-09-17: eight days of January plus
+    two days of March concatenate to 264 frames with one **1225-hour** gap.
+    Reconstructed from start and step, the last frame comes out at 2021-01-11
+    instead of 2021-03-03 -- **51 days wrong**, on a map that renders perfectly.
+
+    `grid_spec` in sar.viz.export already refuses an irregular lat/lon axis for
+    this reason. This is the same guard on the third axis, which did not have
+    one. With `allow_gaps`, the axis is published anyway and marked
+    `regular: false`, and the client must then read the store's own `time`
+    array instead of reconstructing.
+    """
+    if times.size < 2:
+        return {"frames": int(times.size), "step_seconds": 0, "regular": True,
+                "gaps": None, "start": _iso(times[0]), "end": _iso(times[-1])}
+
+    steps = np.diff(times)
+    step = steps[0]
+    gaps = [
+        {"after": _iso(times[k]), "gap_hours": float(steps[k] / np.timedelta64(1, "h"))}
+        for k in np.flatnonzero(steps != step)
+    ]
+
+    if gaps and not allow_gaps:
+        worst = max(gaps, key=lambda g: g["gap_hours"])
+        raise ValueError(
+            f"time axis is not regular: {len(gaps)} gap(s), the largest "
+            f"{worst['gap_hours']:.0f} h after {worst['after']}. The client "
+            f"reconstructs timestamps as start + k * step, so publishing this "
+            f"would mislabel every frame after the gap rather than fail. Pull "
+            f"the missing window, or pass allow_gaps=True to publish the axis "
+            f"explicitly."
+        )
+
+    return {
+        "frames": int(times.size),
+        "step_seconds": int(step / np.timedelta64(1, "s")),
+        "regular": not gaps,
+        "gaps": gaps or None,
+        "start": _iso(times[0]),
+        "end": _iso(times[-1]),
+    }
+
+
 def write_zarr_tier(ds: xr.Dataset, path: Path, stride: int,
-                    *, time_chunk: int = TIME_CHUNK, level: int = ZSTD_LEVEL) -> dict:
+                    *, time_chunk: int = TIME_CHUNK, level: int = ZSTD_LEVEL,
+                    allow_gaps: bool = False) -> dict:
     """Write one downsampled tier as a Zarr v3 store. Returns its description.
 
     Subsampling is a plain stride, not an average. Averaging would be defensible
@@ -191,20 +254,19 @@ def write_zarr_tier(ds: xr.Dataset, path: Path, stride: int,
         for v in tier.data_vars
     }
 
+    # Checked BEFORE writing: a gapped axis should cost nothing to discover,
+    # not a gigabyte of upload followed by a mislabelled map.
+    axis = time_axis_spec(tier["time"].values, allow_gaps=allow_gaps)
+
     path.parent.mkdir(parents=True, exist_ok=True)
     tier.to_zarr(path, mode="w", zarr_format=3, encoding=encoding, consolidated=False)
 
     on_disk = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
     uncompressed = sum(tier[v].size * 4 for v in tier.data_vars)
-    times = tier["time"].values
-    step = int((times[1] - times[0]) / np.timedelta64(1, "s")) if times.size > 1 else 0
 
     return {
         "path": path.name,
-        "frames": int(times.size),
-        "step_seconds": step,
-        "start": str(times[0])[:19] + "Z",
-        "end": str(times[-1])[:19] + "Z",
+        **axis,
         "chunks": {"time": chunks[0], "lat": chunks[1], "lon": chunks[2]},
         "chunk_bytes_uncompressed": int(np.prod(chunks) * 4),
         "bytes": int(on_disk),
@@ -235,7 +297,7 @@ def verify_tier(path: Path, source: xr.Dataset, var: str) -> dict:
     got_v, want_v = float(cell.values), float(want.values)
     published.close()
     return {
-        "at": {"time": str(cell["time"].values)[:19],
+        "at": {"time": _iso(cell["time"].values),
                "lat": float(cell["lat"]), "lon": float(cell["lon"])},
         "published": got_v,
         "source": want_v,
@@ -245,7 +307,8 @@ def verify_tier(path: Path, source: xr.Dataset, var: str) -> dict:
 
 
 def export_archive(data: Path, out: Path, product: str = "wind",
-                   tiers: dict | None = None, *, level: int = ZSTD_LEVEL) -> dict:
+                   tiers: dict | None = None, *, level: int = ZSTD_LEVEL,
+                   allow_gaps: bool = False) -> dict:
     """Publish every tier of one product, plus the manifest that indexes them."""
     if product not in PRODUCTS:
         raise ValueError(f"unknown product {product!r}; expected one of {list(PRODUCTS)}")
@@ -259,7 +322,8 @@ def export_archive(data: Path, out: Path, product: str = "wind",
     written = {}
     for name, stride in tiers.items():
         path = out / f"{product}_{name}.zarr"
-        written[name] = write_zarr_tier(display, path, stride, level=level)
+        written[name] = write_zarr_tier(display, path, stride, level=level,
+                                        allow_gaps=allow_gaps)
         written[name]["verified"] = verify_tier(path, display, spec["vars"][0])
 
     manifest = {
@@ -299,6 +363,9 @@ def main() -> None:
     p.add_argument("--tier", action="append",
                    help="publish only this tier; repeatable. Default: all of them.")
     p.add_argument("--level", type=int, default=ZSTD_LEVEL, help="zstd level")
+    p.add_argument("--allow-gaps", action="store_true",
+                   help="publish an irregular time axis; the client must then read the "
+                        "store's time array rather than reconstructing it")
     args = p.parse_args()
 
     spec = PRODUCTS[args.product]
@@ -311,7 +378,8 @@ def main() -> None:
     else:
         tiers = None
 
-    m = export_archive(Path(args.data), Path(args.out), args.product, tiers, level=args.level)
+    m = export_archive(Path(args.data), Path(args.out), args.product, tiers,
+                       level=args.level, allow_gaps=args.allow_gaps)
 
     print(f"published {args.product} from {len(m['provenance']['source_files'])} file(s), "
           f"{m['provenance']['source_frames']} source frames")
@@ -320,8 +388,9 @@ def main() -> None:
     for name, t in m["tiers"].items():
         total += t["bytes"]
         ok = "verified" if t["verified"]["match"] else "MISMATCH"
+        axis = "regular" if t["regular"] else f"IRREGULAR ({len(t['gaps'])} gap(s))"
         print(f"  {name:10s} {t['frames']:7d} frames  {t['bytes'] / 1e6:8.1f} MB  "
-              f"{t['compression_ratio']:.2f}x  {t['files']:5d} files  {ok}")
+              f"{t['compression_ratio']:.2f}x  {t['files']:5d} files  {ok}  {axis}")
     print(f"total     {total / 1e6:.1f} MB")
     print(f"manifest  {args.out}/{args.product}_archive.json")
 

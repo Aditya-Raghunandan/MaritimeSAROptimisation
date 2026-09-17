@@ -23,6 +23,8 @@
  * and the search tracks carry no grid at all.
  */
 
+import { BufferSource } from './sources.js';
+
 /** A regular lat/lon grid described by origin and step, as the manifest gives it. */
 export class Grid {
   constructor(spec) {
@@ -56,21 +58,43 @@ export class Grid {
  * apart.
  */
 export class FieldLayer {
-  constructor(spec, buffer) {
+  /**
+   * @param {object} spec  the manifest entry
+   * @param {Float32Array|object} data  a flat buffer, or anything implementing
+   *   the source interface in sources.js (`vector`, `ensure`, `isResident`).
+   *
+   * A raw Float32Array is wrapped in a BufferSource, so the flat-bundle path
+   * is unchanged for callers. The layer itself no longer knows or cares which
+   * it got: five years of wind is 1.32 GB and cannot be one array, but the
+   * renderers must not have to care about that.
+   */
+  constructor(spec, data) {
     this.id = spec.id;
     this.type = 'field';
     this.label = spec.label;
     this.units = spec.units;
     this.grid = new Grid(spec.grid);
     this.valueRange = spec.value_range;
-    this.data = buffer;
     this.frameSize = this.grid.nlat * this.grid.nlon * 2;
+
+    this.source = data instanceof Float32Array
+      ? new BufferSource(data, this.grid)
+      : data;
   }
 
-  /** [u, v] at a cell in a given frame. */
+  /** Whole-window buffer, for the flat-bundle path only. Null over Zarr. */
+  get data() {
+    return this.source instanceof BufferSource ? this.source.data : null;
+  }
+
+  /** Make a frame readable. Await this when the clock moves, then draw. */
+  async ensure(frame) { return this.source.ensure(frame); }
+
+  isResident(frame) { return this.source.isResident(frame); }
+
+  /** [u, v] at a cell in a given frame. Synchronous; frame must be resident. */
   vector(frame, j, i) {
-    const at = frame * this.frameSize + (j * this.grid.nlon + i) * 2;
-    return [this.data[at], this.data[at + 1]];
+    return this.source.vector(frame, j, i);
   }
 
   speed(frame, j, i) {
@@ -88,9 +112,15 @@ export class FieldLayer {
    * this resolution is 2.03 GB and is not going into a browser; that view comes
    * from the box-mean series instead.
    */
-  seriesAt(j, i, frames) {
+  seriesAt(j, i, frames, from = 0) {
     const out = new Float32Array(frames);
-    for (let f = 0; f < frames; f += 1) out[f] = this.speed(f, j, i);
+    for (let f = 0; f < frames; f += 1) {
+      const frame = from + f;
+      // Over Zarr only the resident chunks can answer without a fetch. NaN
+      // marks "not loaded" so the chart draws a gap rather than a flat line
+      // through zero, which would read as calm weather.
+      out[f] = this.isResident(frame) ? this.speed(frame, j, i) : NaN;
+    }
     return out;
   }
 

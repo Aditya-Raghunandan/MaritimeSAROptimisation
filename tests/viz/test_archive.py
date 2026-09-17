@@ -246,3 +246,77 @@ class TestExportArchive:
     def test_unknown_product_raises(self, archive_dir, tmp_path):
         with pytest.raises(ValueError, match="unknown product"):
             archive.export_archive(archive_dir, tmp_path / "p", "swell")
+
+
+class TestTimeAxisSpec:
+    """A gapped axis must not be publishable by accident.
+
+    `grid_spec` in sar.viz.export already refuses an irregular lat/lon axis.
+    This is the same guard on the third axis, which did not have one until the
+    real local archive -- eight days of January plus two of March -- produced a
+    manifest claiming 264 hourly frames ending on a date 51 days out.
+    """
+
+    def _axis(self, *segments):
+        parts = [
+            np.arange(np.datetime64(s), np.datetime64(s) + np.timedelta64(h, "h"),
+                      np.timedelta64(1, "h"))
+            for s, h in segments
+        ]
+        return np.concatenate(parts)
+
+    def test_regular_axis_is_described_by_start_and_step(self):
+        spec = archive.time_axis_spec(self._axis(("2021-01-01T00", 48)))
+        assert spec["regular"] is True
+        assert spec["frames"] == 48
+        assert spec["step_seconds"] == 3600
+        assert spec["gaps"] is None
+
+    def test_gapped_axis_raises_by_default(self):
+        times = self._axis(("2021-01-01T00", 24), ("2021-03-01T00", 24))
+        with pytest.raises(ValueError, match="time axis is not regular"):
+            archive.time_axis_spec(times)
+
+    def test_the_error_names_the_largest_gap_and_where_it_is(self):
+        times = self._axis(("2021-01-01T00", 24), ("2021-03-01T00", 24))
+        with pytest.raises(ValueError) as e:
+            archive.time_axis_spec(times)
+        assert "2021-01-01T23:00:00Z" in str(e.value)     # the frame before the hole
+        assert "1393 h" in str(e.value)
+
+    def test_allow_gaps_publishes_but_marks_it(self):
+        times = self._axis(("2021-01-01T00", 24), ("2021-03-01T00", 24))
+        spec = archive.time_axis_spec(times, allow_gaps=True)
+        assert spec["regular"] is False
+        assert len(spec["gaps"]) == 1
+        assert spec["gaps"][0]["gap_hours"] == pytest.approx(1393.0)
+
+    def test_single_frame_axis_is_trivially_regular(self):
+        spec = archive.time_axis_spec(self._axis(("2021-01-01T00", 1)))
+        assert spec["regular"] is True
+        assert spec["step_seconds"] == 0
+
+
+class TestGappedArchiveIsNotPublished:
+    def test_export_refuses_a_gapped_archive(self, tmp_path):
+        _wind_file(tmp_path / "raw" / "era5_a.nc", "2021-01-01T00", 24)
+        _wind_file(tmp_path / "raw" / "era5_b.nc", "2021-03-01T00", 24)
+        with pytest.raises(ValueError, match="time axis is not regular"):
+            archive.export_archive(tmp_path, tmp_path / "p", "wind",
+                                   tiers={"hourly": 1}, level=1)
+
+    def test_nothing_is_written_when_the_axis_is_refused(self, tmp_path):
+        """Discovering a bad axis must cost nothing, not a gigabyte of upload."""
+        _wind_file(tmp_path / "raw" / "era5_a.nc", "2021-01-01T00", 24)
+        _wind_file(tmp_path / "raw" / "era5_b.nc", "2021-03-01T00", 24)
+        out = tmp_path / "p"
+        with pytest.raises(ValueError):
+            archive.export_archive(tmp_path, out, "wind", tiers={"hourly": 1}, level=1)
+        assert not (out / "wind_hourly.zarr").exists()
+
+    def test_allow_gaps_lets_it_through(self, tmp_path):
+        _wind_file(tmp_path / "raw" / "era5_a.nc", "2021-01-01T00", 24)
+        _wind_file(tmp_path / "raw" / "era5_b.nc", "2021-03-01T00", 24)
+        m = archive.export_archive(tmp_path, tmp_path / "p", "wind",
+                                   tiers={"hourly": 1}, level=1, allow_gaps=True)
+        assert m["tiers"]["hourly"]["regular"] is False
