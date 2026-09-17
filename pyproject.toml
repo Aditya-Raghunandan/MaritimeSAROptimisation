@@ -23,6 +23,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Publishing the visualisation archive to Hugging Face (D021 step 4). Kept out
+# of the core dependencies deliberately: the engine, the fetchers and the
+# hindcast validation never touch it, and the cluster should not have to carry
+# an HTTP client it only needs on the one occasion the site is republished.
+#   pip install -e ".[publish]"
+publish = [
+    "huggingface_hub==0.36.0",
+]
+
 dev = [
     "pytest",
     "pytest-cov",
