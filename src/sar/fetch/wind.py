@@ -57,7 +57,13 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from sar.utils.geo import assert_conventions, normalise_grid, to_display_longitude
+from sar.utils.shutdown import hard_exit
+from sar.utils.geo import (
+    assert_conventions,
+    normalise_grid,
+    to_display_longitude,
+    to_store_longitude,
+)
 
 ARCO = "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
 
@@ -143,6 +149,47 @@ def open_wind_store() -> xr.Dataset:
                         storage_options={"token": "anon"}, consolidated=True)
 
 
+def fetch_wind(date: str, time: str, lat: float, lon: float) -> dict:
+    """Nearest-neighbour 10 m wind at one point in time and space.
+
+    The point-lookup twin of `sar.fetch.current.fetch_current`, and deliberately
+    the same signature and the same return shape: the drift engine's
+    ForcingProvider (D009) samples both fields at the same (x, y, t) and should
+    not have to special-case which one it is talking to.
+
+    Parameters
+    ----------
+    date : "YYYY-MM-DD"
+    time : "HH:MM" (UTC)
+    lat  : degrees north
+    lon  : degrees east, -180..180 (converted internally to the store's 0-360)
+
+    Returns
+    -------
+    dict with keys u10, v10 (m/s) and time -- the timestamp actually selected,
+    which for ERA5 is hourly and so is usually the one asked for, but is
+    returned rather than assumed because `current` cannot make that promise.
+    """
+    requested = np.datetime64(f"{date}T{time}")
+
+    ds = open_wind_store()
+    point = ds[list(VARS)].rename(VARS).sel(
+        time=requested,
+        latitude=lat,
+        # ERA5 longitude runs 0-360. Convert BEFORE selecting: nearest-neighbour
+        # on -70 against an 0-360 axis silently returns the 0 deg meridian
+        # rather than raising, which is a wrong answer, not an error.
+        longitude=to_store_longitude(lon),
+        method="nearest",
+    ).load()
+
+    return {
+        "u10": float(point["u10"].values),
+        "v10": float(point["v10"].values),
+        "time": point["time"].values,
+    }
+
+
 def fetch_wind_box(start: str, end: str,
                    lat_bounds: tuple = (LAT_S, LAT_N),
                    lon_bounds: tuple = (LON_W, LON_E)) -> xr.Dataset:
@@ -204,11 +251,37 @@ def fetch_wind_box(start: str, end: str,
 
 
 def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--start", required=True, help="UTC date, YYYY-MM-DD, inclusive")
-    p.add_argument("--end", required=True, help="UTC date, YYYY-MM-DD, exclusive")
+    p = argparse.ArgumentParser(
+        description="ERA5 10 m wind: a point lookup, or the box pull that builds the archive",
+        epilog=(
+            "point:  --date 2019-01-01 --time 12:00 --lat 25.5 --lon -70.0\n"
+            "box:    --start 2019-01-01 --end 2019-01-08 --out C:/maritime-data"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--date", help="point mode: UTC date, YYYY-MM-DD")
+    p.add_argument("--time", help="point mode: UTC time, HH:MM")
+    p.add_argument("--lat", type=float, help="point mode: degrees north")
+    p.add_argument("--lon", type=float, help="point mode: degrees east, -180..180")
+    p.add_argument("--start", help="box mode: UTC date, YYYY-MM-DD, inclusive")
+    p.add_argument("--end", help="box mode: UTC date, YYYY-MM-DD, exclusive")
     p.add_argument("--out", default="data")
     args = p.parse_args()
+
+    # Point mode short-circuits before any of the box machinery. The box flags
+    # stay exactly as they were -- scripts/pull_wind_years.sbatch and
+    # pull_wind_years_headnode.sh both invoke --start/--end/--out and the
+    # five-year archive was pulled with them.
+    if args.date is not None:
+        missing = [f for f, v in (("--time", args.time), ("--lat", args.lat),
+                                  ("--lon", args.lon)) if v is None]
+        if missing:
+            p.error(f"point mode also needs {', '.join(missing)}")
+        print(fetch_wind(args.date, args.time, args.lat, args.lon))
+        hard_exit()
+
+    if args.start is None or args.end is None:
+        p.error("give either --date/--time/--lat/--lon (point) or --start/--end (box)")
 
     # Guard the study window.  Asking for data outside it is not an error the
     # store will report -- ERA5 covers 1940-2026, so an out-of-window request
@@ -290,6 +363,11 @@ def main() -> None:
 
     wind_rose(df, args, fig_dir, tag, plt)
     pressure_wind_check(sub, fig_dir, tag, plt)
+
+    # Everything above is written and closed. Without this the process sits
+    # forever in gcsfs's atexit handler -- see sar/utils/shutdown.py, which
+    # carries the measurements for both machines.
+    hard_exit()
 
 
 def report(df: pd.DataFrame) -> None:

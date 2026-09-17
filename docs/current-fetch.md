@@ -142,20 +142,81 @@ be exactly 0 m:
   happens to land exactly on one.
 - `fetch_current_box(start, end, lat_bounds, lon_bounds)`: loads every
   record (all lat/lon points at depth 0) for every 3-hourly timestep in
-  `[start, end)`. Used by `scripts/fetch_current_range.py`; asserts the
-  latitude, longitude and time slices are non-empty rather than silently
-  returning an empty dataset.
+  `[start, end)`. Used by `scripts/fetch_current_range.py` and by
+  `write_current_netcdf` below; asserts the latitude, longitude and time
+  slices are non-empty rather than silently returning an empty dataset.
+- `estimate_bytes(start, end)`: what a gridded pull over `[start, end)` will
+  cost on disk, from the measured 885 KB per timestep. See the size table
+  below; this is what the `--force` guard is computed from.
+- `write_current_netcdf(start, end, out, *, force=False)`: the **raw tier**
+  of D020. Pulls the D014 box over `[start, end)` and writes it as gridded
+  NetCDF to `<out>/raw/`, returning the path. Normalises to the D020
+  convention and asserts it before writing, checks the land mask survived,
+  stamps `units = "m/s"`, and refuses a range whose estimate exceeds 3 GB
+  unless `force=True`.
 - `LAT_S, LAT_N, LON_W, LON_E`: the D014 study box (17-36 N, 82-63 W).
   Change these once, here, and nowhere else, matching the convention in the
   vault's `code/fetch_wind_arco.py`.
 
 ### CLI
 
+Two modes. Point mode prints the resulting dict to stdout:
+
 ```
 python -m sar.fetch.current --date 2019-01-01 --time 12:00 --lat 25.5 --lon -70.0
 ```
 
-Prints the resulting dict to stdout.
+Box mode writes the raw archive tier and prints the path and its size:
+
+```
+python -m sar.fetch.current --start 2021-01-05 --end 2021-01-08 --out /home/26p67/data
+# -> /home/26p67/data/raw/hycom_17-36N_82-63W_20210105-20210108.nc
+```
+
+Mixing the two sets of flags is an error rather than a precedence rule.
+
+**`--out` has no default.** Every fetch script in this repo that defaulted it
+to a relative `data` has written raw NetCDF into the synced OneDrive vault at
+least once. On the cluster it is `/home/26p67/data` — **not** `/data1/26p67`
+or `/data/26p67`, which are empty root-owned mount points with nothing mounted
+on them (D017, measured 2026-09-14).
+
+### Output: the raw tier
+
+| | |
+|---|---|
+| Path | `<out>/raw/hycom_17-36N_82-63W_<start>-<end>.nc` |
+| Dimensions | `(time, lat, lon)` — depth is *selected* at level 0, not left as a length-1 axis |
+| Variables | `water_u`, `water_v`, both `units = "m/s"` |
+| Longitude | 0-360, ascending (D020) |
+| Latitude | ascending (D020) |
+| `time` | 3-hourly, **start inclusive, end exclusive** — a 3-day request is 24 steps |
+
+### Resolution, in metres as well as degrees
+
+The grid is **0.08° longitude × 0.04° latitude**, which is **not** 1/12° and
+**not** square — a figure that was wrong in three vault notes and in issue #7.
+At the middle of the study box (26.5 N):
+
+| Axis | Degrees | Metres |
+|---|---|---|
+| longitude | 0.08 | **8.07 km** (0.08 × 111.32 × cos 26.5°) |
+| latitude | 0.04 | **4.45 km** |
+
+### Size, and why there is a guard
+
+One timestep over the box is **885 KB** — 476 lat × 238 lon cells × 2 variables ×
+float32. That is **nineteen times** a wind timestep, which is the whole reason
+this path refuses large ranges by default.
+
+| Range | Timesteps | NetCDF | The same thing as long text |
+|---|---|---|---|
+| 3 days | 24 | ~21 MB | ~240 MB |
+| 1 year | 2,920 | ~2.6 GB | hundreds of GB |
+| 5 years | 14,608 | **12.9 GB** | not feasible |
+
+The threshold is **3 GB**, which passes one year and refuses five. Pull the
+archive a year at a time, as the wind archive was, or pass `--force`.
 
 ## `scripts/fetch_current_range.py`
 
@@ -175,7 +236,7 @@ python scripts/fetch_current_range.py --start 2019-01-01 --end 2019-01-03 \
   `.txt` (whitespace-separated) if `--format` is not given.
 
 **Size warning.** A single 2-day pull over the full box already produced
-~160 MB of text (24 timesteps by 476 by 238 grid points). A multi-month or
+~160 MB of text (24 timesteps by 476 lat by 238 lon grid points). A multi-month or
 multi-year range at this resolution will be very large; prefer
 `--format parquet` and/or a short window, per Aditya's handoff note that a
 full five-year, all-depths pull would be ~28 GB (this fetch is depth-0 only,
