@@ -14,6 +14,7 @@ import { buildLayer } from './layers.js';
 import { ZarrSource, pickTier } from './sources.js';
 import { quiverLayer } from './quiver.js';
 import { windLegend } from './legend.js';
+import { ResultantSource, resultantScale } from './resultant.js';
 import { RangeRings, Ruler, addScaleBar, formatDistance } from './measure.js';
 import { PointPanel } from './chart.js';
 import { TYPICAL_CURRENT_MS } from './geo.js';
@@ -233,8 +234,46 @@ async function start() {
   // The remaining three types have no data yet. They are listed as disabled so
   // the map says what is coming rather than pretending it is complete.
   overlays['Place names'] = LABELS;
-  for (const pending of ['Surface current', 'Drift particles', 'Probability map', 'Search tracks']) {
-    overlays[`${pending} (awaiting data)`] = L.layerGroup();
+
+  /*
+    The resultant drift field: what a person in the water would actually
+    follow, rather than what the wind is doing. Issue #10, rendered.
+
+    It is built NOW, with current = null, so it runs as the leeway term alone
+    and labels itself that way. When the current archive is published the only
+    change is passing a second source -- the arithmetic, the layer, the
+    renderer and the legend are already the ones that will be used. A dead
+    checkbox reserving the name would have proved nothing.
+  */
+  let resultant = null;
+  if (field) {
+    const source = new ResultantSource(
+      { source: field.source, grid: field.grid, axis },
+      null,                       // currents: awaiting the HYCOM publish
+    );
+    const meta = source.describe();
+    const scale = resultantScale(field.valueRange[1], !source.isPartial);
+    resultant = quiverLayer(
+      { grid: field.grid, vector: (f, j, i) => source.vector(f, j, i), source },
+      { maxSpeed: scale },
+    );
+    resultant._resultantMeta = meta;
+    overlays[meta.label] = resultant;
+
+    // Keep it on the same clock as everything else even while hidden, so
+    // switching it on shows the current moment rather than frame zero.
+    clock.onChange(() => { if (map.hasLayer(resultant)) resultant.setFrame(clock.frameOf(axis)); });
+
+    map.on('overlayadd', (e) => {
+      if (e.layer !== resultant) return;
+      resultant.setFrame(clock.frameOf(axis));
+      setStatus(`${meta.label} — ${meta.caveat}`);
+    });
+    map.on('overlayremove', (e) => { if (e.layer === resultant) setStatus(''); });
+  }
+
+  for (const pending of ['Drift particles', 'Probability map', 'Search tracks']) {
+    overlays[`${pending} (awaiting the engine)`] = L.layerGroup();
   }
   L.control.layers(BASEMAPS, overlays, { collapsed: true }).addTo(map);
 
