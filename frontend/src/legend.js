@@ -1,0 +1,97 @@
+/**
+ * legend.js -- the key for the wind arrows.
+ *
+ * Without it the field is decorative: the arrows encode speed twice, in colour
+ * and in length, and neither could be read off the map. A viewer had to click a
+ * cell to learn that orange meant anything at all.
+ *
+ * The swatches are drawn with the SAME functions the map uses -- `speedColour`
+ * for the colour and the same length formula for the arrow -- so the key cannot
+ * drift away from the thing it is describing. A legend maintained separately
+ * from its renderer is a legend that eventually lies.
+ *
+ * Beaufort names rather than only numbers, for the reason beaufort.js exists:
+ * "Force 6, strong breeze" is a sea somebody can picture, and picturing the sea
+ * is how a reader judges whether the search is plausible.
+ */
+
+import L from 'leaflet';
+
+import { beaufort } from './beaufort.js';
+import { speedColour } from './style.js';
+
+/** Speeds to key, m/s. Chosen to land in distinct Beaufort forces. */
+const SAMPLES = [2, 5, 8, 12, 17, 22];
+
+export const WindLegend = L.Control.extend({
+  options: { position: 'bottomright' },
+
+  initialize(opts = {}) {
+    L.Util.setOptions(this, opts);
+    this._maxSpeed = opts.maxSpeed ?? 20;
+    this._maxArrowPx = opts.maxArrowPx ?? 22;
+  },
+
+  onAdd() {
+    const box = L.DomUtil.create('div', 'wind-legend');
+    // Otherwise dragging across the key pans the map underneath it.
+    L.DomEvent.disableClickPropagation(box);
+    L.DomEvent.disableScrollPropagation(box);
+
+    const head = L.DomUtil.create('div', 'legend-head', box);
+    head.innerHTML = '<span>10 m wind</span><button class="legend-toggle" '
+      + 'aria-label="Collapse">−</button>';
+
+    const body = L.DomUtil.create('div', 'legend-body', box);
+    for (const s of SAMPLES) {
+      const row = L.DomUtil.create('div', 'legend-row', body);
+      const b = beaufort(s);
+      row.innerHTML =
+        `<canvas width="46" height="14"></canvas>`
+        + `<span class="legend-speed">${s}</span>`
+        + `<span class="legend-name">F${b.force} ${b.name.toLowerCase()}</span>`;
+      this._arrow(row.querySelector('canvas'), s);
+    }
+    const foot = L.DomUtil.create('div', 'legend-foot', body);
+    foot.textContent = 'arrow length and colour both show speed';
+
+    const toggle = head.querySelector('.legend-toggle');
+    toggle.addEventListener('click', () => {
+      const hidden = box.classList.toggle('collapsed');
+      toggle.textContent = hidden ? '+' : '−';
+      toggle.setAttribute('aria-label', hidden ? 'Expand' : 'Collapse');
+    });
+
+    this._box = box;
+    return box;
+  },
+
+  /** Same colour and the same length rule as quiver.js, on a 46 px strip. */
+  _arrow(canvas, speed) {
+    const ctx = canvas.getContext('2d');
+    const len = Math.min(this._maxArrowPx, (speed / this._maxSpeed) * this._maxArrowPx * 1.6);
+    const y = 7;
+    const x0 = 2;
+    const x1 = x0 + Math.max(4, len);
+
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const [stroke, width] of [['rgba(20,20,20,0.55)', 3.2],
+                                   [speedColour(speed, this._maxSpeed), 1.6]]) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(x0, y);
+      ctx.lineTo(x1, y);
+      ctx.moveTo(x1, y);
+      ctx.lineTo(x1 - 4, y - 2.6);
+      ctx.moveTo(x1, y);
+      ctx.lineTo(x1 - 4, y + 2.6);
+      ctx.stroke();
+    }
+  },
+});
+
+export function windLegend(opts) {
+  return new WindLegend(opts);
+}

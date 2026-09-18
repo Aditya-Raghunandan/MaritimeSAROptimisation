@@ -1,0 +1,107 @@
+/**
+ * Tests for the leeway arithmetic shown in the point panel.
+ *
+ * These matter more than they look: the panel states a physical claim about
+ * where something would drift, and a sign error in the bearing sends it the
+ * opposite way while still reading as a perfectly sensible number.
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  ALPHA, bearingFrom, bearingTowards, compass, leewayDistance,
+  leewayFractionOfCurrent, leewaySpeed, speed, summarise,
+} from './drift.js';
+
+describe('ALPHA', () => {
+  it('is 2 %, matching the Python side', () => {
+    // src/sar/fetch/wind.py ALPHA_MID = 0.02, cited to Allen (2000). If these
+    // two ever disagree, the map and the engine are modelling different things.
+    expect(ALPHA).toBe(0.02);
+  });
+});
+
+describe('bearings', () => {
+  // Meteorological convention: the direction the wind comes FROM.
+  it('a wind blowing towards the east comes from the west', () => {
+    expect(bearingFrom(5, 0)).toBeCloseTo(270);
+    expect(compass(bearingFrom(5, 0))).toBe('W');
+  });
+
+  it('a wind blowing towards the north comes from the south', () => {
+    expect(bearingFrom(0, 5)).toBeCloseTo(180);
+    expect(compass(bearingFrom(0, 5))).toBe('S');
+  });
+
+  it('a drifter goes the way the wind is going, not the way it is named', () => {
+    // The whole point of having both: "a westerly" moves things EAST.
+    expect(bearingTowards(5, 0)).toBeCloseTo(90);
+    expect(compass(bearingTowards(5, 0))).toBe('E');
+  });
+
+  it('towards is always 180 degrees from', () => {
+    for (const [u, v] of [[3, 4], [-3, 4], [-3, -4], [3, -4], [1, 0], [0, -1]]) {
+      const diff = Math.abs(bearingTowards(u, v) - bearingFrom(u, v));
+      expect(Math.min(diff, 360 - diff)).toBeCloseTo(180);
+    }
+  });
+
+  it('stays in [0, 360) and never returns exactly 360', () => {
+    for (const [u, v] of [[0, 1], [0, -1], [1, 0], [-1, 0], [1e-12, 1]]) {
+      const b = bearingFrom(u, v);
+      expect(b).toBeGreaterThanOrEqual(0);
+      expect(b).toBeLessThan(360);
+    }
+  });
+
+  it('compass wraps to N rather than falling off the end', () => {
+    expect(compass(0)).toBe('N');
+    expect(compass(359)).toBe('N');
+    expect(compass(360)).toBe('N');
+    expect(compass(-1)).toBe('N');
+  });
+});
+
+describe('leeway', () => {
+  it('is 2 % of the wind speed', () => {
+    expect(leewaySpeed(10)).toBeCloseTo(0.2);
+    expect(speed(3, 4)).toBe(5);
+  });
+
+  it('carries a metre per second 3.6 km in an hour', () => {
+    expect(leewayDistance(50, 1)).toBeCloseTo(3600);   // alpha*50 = 1 m/s
+  });
+
+  it('reproduces the number that justifies the three-term model', () => {
+    // D002/R1: against a 1.8 m/s Gulf Stream, a 10 m/s wind contributes about
+    // 11 % -- not negligible -- while a 3 m/s wind contributes about 3 %.
+    expect(leewayFractionOfCurrent(10, 1.8) * 100).toBeCloseTo(11.1, 1);
+    expect(leewayFractionOfCurrent(3, 1.8) * 100).toBeCloseTo(3.3, 1);
+  });
+
+  it('refuses to divide by a zero current instead of returning Infinity', () => {
+    expect(leewayFractionOfCurrent(10, 0)).toBeNull();
+    expect(leewayFractionOfCurrent(10, -1)).toBeNull();
+  });
+});
+
+describe('summarise', () => {
+  it('ignores the NaNs that mark unloaded frames', () => {
+    const s = summarise([1, NaN, 3, NaN, 5]);
+    expect(s.n).toBe(3);
+    expect(s.mean).toBe(3);
+    expect(s.min).toBe(1);
+    expect(s.max).toBe(5);
+  });
+
+  it('reports nothing rather than NaN when nothing is loaded', () => {
+    // A panel showing "NaN m/s" is worse than one showing a dash.
+    const s = summarise([NaN, NaN]);
+    expect(s).toEqual({ n: 0, mean: null, min: null, max: null });
+    expect(summarise([]).mean).toBeNull();
+  });
+
+  it('handles a Float32Array, which is what actually arrives', () => {
+    expect(summarise(new Float32Array([2, 4, 6])).mean).toBe(4);
+  });
+});

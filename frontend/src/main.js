@@ -9,16 +9,28 @@
 
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import 'leaflet-velocity';
-import 'leaflet-velocity/dist/leaflet-velocity.css';
-
 import { Clock } from './clock.js';
 import { buildLayer } from './layers.js';
 import { ZarrSource, pickTier } from './sources.js';
+import { quiverLayer } from './quiver.js';
+import { windLegend } from './legend.js';
 import { Ruler, addScaleBar, formatDistance, rangeRings } from './measure.js';
-import { PointChart } from './chart.js';
+import { PointPanel } from './chart.js';
+import { TYPICAL_CURRENT_MS } from './geo.js';
 
 const DATA = import.meta.env.VITE_DATA_BASE ?? 'data';
+
+// CARTO's raster basemaps now want a key, and without one they serve a
+// watermarked tile. It is read from the environment rather than written here:
+// the repository is public, and a key in it is a key published. It still ends
+// up in the built bundle -- unavoidable for a client-side basemap, and the
+// reason CARTO's protection is a DOMAIN RESTRICTION set on their dashboard
+// rather than secrecy. Without a key the CARTO layers are simply left out,
+// so the map works for anyone who clones this.
+const CARTO_KEY = import.meta.env.VITE_CARTO_KEY ?? '';
+const carto = (style) => `https://basemaps.cartocdn.com/rastertiles/${style}/{z}/{x}/{y}.png`
+  + (CARTO_KEY ? `?key=${CARTO_KEY}` : '');
+const CARTO_ATTR = '&copy; OpenStreetMap contributors, &copy; CARTO';
 
 /**
  * Esri Ocean is the default because the bathymetry does real work here: the
@@ -33,15 +45,31 @@ const BASEMAPS = {
     'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
     { maxZoom: 13, attribution: 'Esri, GEBCO, NOAA, National Geographic, and other contributors' },
   ),
-  'Light (data first)': L.tileLayer(
-    'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-    { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors, &copy; CARTO' },
-  ),
+  'Light (data first)': L.tileLayer(carto('light_all'),
+    { maxZoom: 19, attribution: CARTO_ATTR }),
+  // Voyager carries its own place names, which is what makes it useful here:
+  // the domain is open water and the landmarks are how anyone orients.
+  'Street (named places)': L.tileLayer(carto('voyager'),
+    { maxZoom: 19, attribution: CARTO_ATTR }),
   Satellite: L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     { maxZoom: 17, attribution: 'Esri, Maxar, Earthstar Geographics' },
   ),
 };
+
+/**
+ * Place names, drawn OVER the basemap rather than baked into it.
+ *
+ * Esri Ocean is beautiful bathymetry and almost unlabelled, so the map gave no
+ * answer to "where is that?" -- which matters here, because the domain is open
+ * water and the few landmarks (Hatteras, the Bahamas, the Florida Straits) are
+ * how anyone orients in it. A separate reference layer keeps the labels when
+ * the basemap is switched, instead of needing a labelled twin of each one.
+ */
+const LABELS = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+  { maxZoom: 13, opacity: 0.9 },
+);
 
 /**
  * Load the published multi-resolution archive, if there is one.
@@ -161,47 +189,54 @@ async function start() {
   const { manifest, layers } = bundle;
 
   const [latMin, lonMin, latMax, lonMax] = manifest.bbox;
+  const dataBounds = L.latLngBounds([latMin, lonMin], [latMax, lonMax]);
   const map = L.map('map', {
-    center: [(latMin + latMax) / 2, (lonMin + lonMax) / 2],
+    center: dataBounds.getCenter(),
     zoom: 5,
     layers: [BASEMAPS['Ocean (bathymetry)']],
+    // The study box is 19 deg square. Panning to the Pacific shows nothing and
+    // is where every projection problem lives, so the map is held near the
+    // data: a generous margin to keep the coastline and the Gulf Stream's exit
+    // in frame, and no further.
+    // Held close to the study box. A 19 deg domain does not need the globe,
+    // and every projection problem we have hit lived out past the edge of it.
+    maxBounds: dataBounds.pad(0.25),
+    maxBoundsViscosity: 1.0,
+    minZoom: 5,
+    maxZoom: 11,
+    // No wrapped copies of the world, so a layer can never be asked to draw
+    // itself at a longitude 360 deg away from its data.
+    worldCopyJump: false,
   });
-  map.fitBounds([[latMin, lonMin], [latMax, lonMax]]);
+  map.fitBounds(dataBounds);
+  LABELS.addTo(map);
   addScaleBar(map);
 
   const clock = Clock.fromManifest(manifest);
   const overlays = {};
   const field = layers.find((l) => l.type === 'field');
+  if (field) windLegend({ maxSpeed: field.valueRange[1] }).addTo(map);
 
-  // leaflet-velocity draws the animated particle streaks. If it ever becomes a
-  // problem -- it is not actively maintained -- a canvas quiver over the same
-  // buffer is about eighty lines and we would own it. The data does not change
-  // either way, which is why that stayed a late decision rather than an early one.
-  let velocity = null;
+  // Our own renderer, not leaflet-velocity. That library indexes its grid with
+  // floorMod(lon, 360) against raw map bounds, so at low zoom it painted copies
+  // of our box across the Pacific, and it rebuilds on a 750 ms debounce, so a
+  // pan smeared the previous frame across the new position. Both were visible
+  // on 2026-09-18 and neither is reachable from outside the library.
+  // src/quiver.js explains why this one cannot do either.
+  let quiver = null;
   if (field) {
-    velocity = L.velocityLayer({
-      displayValues: true,
-      displayOptions: {
-        velocityType: field.label,
-        displayPosition: 'bottomleft',
-        displayEmptyString: 'no data here',
-        speedUnit: 'm/s',
-      },
-      data: field.velocityFrame(0),
-      minVelocity: field.valueRange[0],
-      maxVelocity: field.valueRange[1],
-      velocityScale: 0.01,
-    });
-    velocity.addTo(map);
-    overlays[field.label] = velocity;
+    quiver = quiverLayer(field, { maxSpeed: field.valueRange[1] });
+    quiver.addTo(map);
+    overlays[field.label] = quiver;
   }
 
   // The remaining three types have no data yet. They are listed as disabled so
   // the map says what is coming rather than pretending it is complete.
+  overlays['Place names'] = LABELS;
   for (const pending of ['Surface current', 'Drift particles', 'Probability map', 'Search tracks']) {
     overlays[`${pending} (awaiting data)`] = L.layerGroup();
   }
-  L.control.layers(BASEMAPS, overlays, { collapsed: false }).addTo(map);
+  L.control.layers(BASEMAPS, overlays, { collapsed: true }).addTo(map);
 
   const axis = {
     start: new Date(manifest.clock.start),
@@ -213,8 +248,67 @@ async function start() {
   slider.max = String(clock.steps - 1);
   slider.addEventListener('input', () => clock.setIndex(Number(slider.value)));
 
-  const chart = new PointChart(document.getElementById('chart'));
+  /*
+    Play through the window.
+    Each tick AWAITS the redraw rather than firing on a fixed interval, so
+    playback slows down when a chunk has to be fetched instead of racing ahead
+    of the data and showing stale frames. setTimeout, not setInterval, for the
+    same reason: the next tick is scheduled only once this one has drawn.
+  */
+  const playBtn = document.getElementById('play');
+  let playing = false;
+  let playTimer = null;
+
+  function setPlaying(on) {
+    playing = on;
+    playBtn.innerHTML = on ? '&#10073;&#10073;' : '&#9654;';
+    playBtn.classList.toggle('on', on);
+    playBtn.setAttribute('aria-label', on ? 'Pause' : 'Play');
+    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+    if (on) tick();
+  }
+
+  async function tick() {
+    if (!playing) return;
+    const next = clock.index + 1 >= clock.steps ? 0 : clock.index + 1;
+    clock.setIndex(next);
+    slider.value = String(next);
+    await redraw();
+    if (playing) playTimer = setTimeout(tick, 110);
+  }
+
+  playBtn.addEventListener('click', () => setPlaying(!playing));
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && e.target === document.body) {
+      e.preventDefault();
+      setPlaying(!playing);
+    }
+  });
+
   let pinned = null;
+
+  // The clicked CELL, not the clicked pixel. The data is a 0.25 deg average,
+  // so showing a pinpoint would imply a precision the field does not have.
+  const highlight = L.layerGroup().addTo(map);
+  function markCell(cell) {
+    highlight.clearLayers();
+    if (!cell || !field) return;
+    const g = field.grid;
+    const half = [g.dlat / 2, g.dlon / 2];
+    const c = [g.lat(cell.j), g.lon(cell.i)];
+    L.rectangle(
+      [[c[0] - half[0], c[1] - half[1]], [c[0] + half[0], c[1] + half[1]]],
+      { color: '#3987e5', weight: 2, fillColor: '#3987e5', fillOpacity: 0.16 },
+    ).addTo(highlight);
+    L.circleMarker(c, { radius: 3, color: '#fff', weight: 1.5, fillColor: '#3987e5', fillOpacity: 1 })
+      .addTo(highlight);
+  }
+
+  const panel = new PointPanel({
+    root: document.getElementById('point'),
+    chart: document.getElementById('chart'),
+    onClose: () => { pinned = null; highlight.clearLayers(); setStatus(''); },
+  });
 
   // Scrubbing can outrun the network, so only the newest request may draw.
   // Without this, chunks landing out of order repaint an older frame over a
@@ -238,10 +332,10 @@ async function start() {
       setStatus('');
     }
 
-    if (field && velocity) velocity.setData(field.velocityFrame(frame));
+    if (field && quiver) quiver.setFrame(frame);
     if (pinned) showSeries(pinned);
   }
-  clock.onChange(() => { redraw(); });
+  clock.onChange(() => { slider.value = String(clock.index); redraw(); });
 
   function showSeries(latlng) {
     if (!field) return;
@@ -251,24 +345,28 @@ async function start() {
       return;
     }
     pinned = latlng;
+    markCell(cell);
+    const frame = clock.frameOf(axis);
+    if (!field.isResident(frame)) return;
+
+    const [u, v] = field.vector(frame, cell.j, cell.i);
     // Still free: whatever is resident already holds this cell at every one of
     // its timesteps, so the series is the same memory read along a different
-    // axis. Over the flat bundle that is the whole window; over Zarr it is the
-    // loaded chunks, and the rest comes back NaN so the chart draws a gap
-    // rather than a flat line through zero, which would read as calm weather.
-    const frame = clock.frameOf(axis);
+    // axis. Unloaded frames come back NaN and are drawn as a gap, not joined.
     const series = field.seriesAt(cell.j, cell.i, axis.frames);
-    chart.show(series, axis, frame);
 
-    const known = Array.from(series).filter((x) => Number.isFinite(x));
-    const now = series[frame];
-    setStatus(
-      `${field.label} at ${field.grid.lat(cell.j).toFixed(2)} N, ` +
-      `${Math.abs(field.grid.lon(cell.i)).toFixed(2)} W - ` +
-      `now ${Number.isFinite(now) ? `${now.toFixed(1)} m/s` : 'not loaded'}, ` +
-      `max ${Math.max(...known).toFixed(1)} m/s over the ` +
-      `${known.length} frame(s) in memory`,
-    );
+    panel.show({
+      lat: field.grid.lat(cell.j),
+      lon: field.grid.lon(cell.i),
+      u,
+      v,
+      series,
+      axis,
+      cursor: frame,
+      when: clock.label(),
+      currentSpeed: TYPICAL_CURRENT_MS,
+    });
+    setStatus('');
   }
 
   const ruler = new Ruler(map);
@@ -277,7 +375,9 @@ async function start() {
   document.getElementById('ruler').addEventListener('click', (e) => {
     const on = ruler.toggle();
     e.target.classList.toggle('on', on);
-    setStatus(on ? 'Ruler on - click points on the map. Click the button again to clear.' : '');
+    setStatus(on
+      ? 'Ruler on — click two or more points. Each leg is labelled on the map.'
+      : '');
   });
 
   document.getElementById('rings').addEventListener('click', (e) => {
@@ -295,12 +395,19 @@ async function start() {
   map.on('click', (e) => {
     if (ruler.active) {
       const { legs, total, driftHours } = ruler.summary();
+      // The distance goes ON THE MAP, beside the leg it measures. Reporting it
+      // only into the status line meant the one number the tool exists to
+      // produce was the easiest thing on the page to overlook.
+      ruler.label(legs, total);
       if (legs.length) {
         const last = legs[legs.length - 1];
         setStatus(
-          `leg ${formatDistance(last.distance)} bearing ${last.bearing.toFixed(0)} deg | ` +
-          `total ${formatDistance(total)} | ${driftHours.toFixed(1)} h of drift at 1.8 m/s`,
+          `last leg ${formatDistance(last.distance)} on ${last.bearing.toFixed(0)}° `
+          + `· total ${formatDistance(total)} `
+          + `· ${driftHours.toFixed(1)} h adrift at 1.8 m/s`,
         );
+      } else {
+        setStatus('Ruler — click a second point to measure a leg.');
       }
       return;
     }

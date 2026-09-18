@@ -124,42 +124,6 @@ export class FieldLayer {
     return out;
   }
 
-  /** Reshape one frame into leaflet-velocity's expected header/data pair. */
-  velocityFrame(frame) {
-    const { nlat, nlon, lat0, lon0, dlat, dlon } = this.grid;
-    const n = nlat * nlon;
-    const u = new Array(n);
-    const v = new Array(n);
-
-    // leaflet-velocity reads rows from NORTH down, while our grid is stored
-    // ascending in latitude (D020). Flipping here rather than at export keeps
-    // the stored convention intact and confines the plugin's assumption to the
-    // one function that talks to it.
-    for (let j = 0; j < nlat; j += 1) {
-      const src = nlat - 1 - j;
-      for (let i = 0; i < nlon; i += 1) {
-        const [uu, vv] = this.vector(frame, src, i);
-        u[j * nlon + i] = uu;
-        v[j * nlon + i] = vv;
-      }
-    }
-
-    const header = {
-      parameterUnit: 'm.s-1',
-      nx: nlon,
-      ny: nlat,
-      lo1: lon0,
-      la1: lat0 + dlat * (nlat - 1),
-      lo2: lon0 + dlon * (nlon - 1),
-      la2: lat0,
-      dx: dlon,
-      dy: dlat,
-    };
-    return [
-      { header: { ...header, parameterCategory: 2, parameterNumber: 2 }, data: u },
-      { header: { ...header, parameterCategory: 2, parameterNumber: 3 }, data: v },
-    ];
-  }
 }
 
 /**

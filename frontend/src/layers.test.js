@@ -68,29 +68,6 @@ describe('FieldLayer', () => {
     expect(series[1]).toBeCloseTo(Math.hypot(105, -105));
   });
 
-  describe('velocityFrame', () => {
-    it('flips latitude, because the plugin reads rows from north down', () => {
-      // Our storage is ascending in latitude (D020). Getting this wrong mirrors
-      // the field north-south, which still looks like a plausible weather map.
-      const layer = new FieldLayer(...fieldSpec());
-      const [u] = layer.velocityFrame(0);
-
-      // Plugin row 0 is our northernmost row, j = nlat - 1 = 2, cells 8..11
-      expect(u.data.slice(0, 4)).toEqual([8, 9, 10, 11]);
-      // Plugin's last row is our southernmost, cells 0..3
-      expect(u.data.slice(8, 12)).toEqual([0, 1, 2, 3]);
-    });
-
-    it('describes the corners so the plugin georeferences it', () => {
-      const layer = new FieldLayer(...fieldSpec());
-      const [u] = layer.velocityFrame(0);
-      expect(u.header.la1).toBeCloseTo(17.5); // north edge, first row
-      expect(u.header.la2).toBeCloseTo(17); // south edge
-      expect(u.header.lo1).toBeCloseTo(-82);
-      expect(u.header.nx).toBe(4);
-      expect(u.header.ny).toBe(3);
-    });
-  });
 });
 
 describe('TrackLayer', () => {

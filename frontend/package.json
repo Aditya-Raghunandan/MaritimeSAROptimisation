@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "leaflet": "^1.9.4",
-    "leaflet-velocity": "^1.9.2",
     "uplot": "^1.6.32",
     "zarrita": "^0.7.5"
   },

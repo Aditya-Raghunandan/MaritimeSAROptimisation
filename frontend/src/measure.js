@@ -16,7 +16,9 @@
 
 import L from 'leaflet';
 
-import { RANGE_RINGS_KM, TYPICAL_CURRENT_MS, bearing, driftHours } from './geo.js';
+import {
+  RANGE_RINGS_KM, TYPICAL_CURRENT_MS, bearing, driftHours, formatDistance,
+} from './geo.js';
 
 /**
  * Click-to-measure ruler.
@@ -50,6 +52,7 @@ export class Ruler {
   clear() {
     this.points = [];
     this.layer.clearLayers();
+    this._labels = null;   // cleared with the layer it lived in
   }
 
   addPoint(latlng) {
@@ -59,6 +62,46 @@ export class Ruler {
       L.polyline(this.points, { color: '#ff3b30', weight: 2, dashArray: '5,4' }).addTo(this.layer);
     }
     return this.summary();
+  }
+
+  /**
+   * Write each leg's distance onto the map, plus a running total at the end.
+   *
+   * A divIcon rather than a Leaflet tooltip: tooltips are tied to a marker's
+   * anchor and fight for space, while this sits at the leg's midpoint where
+   * the measurement actually belongs.
+   */
+  label(legs, total) {
+    if (this._labels) this._labels.clearLayers();
+    else this._labels = L.layerGroup().addTo(this.layer);
+
+    for (let k = 0; k < legs.length; k += 1) {
+      const a = this.points[k];
+      const b = this.points[k + 1];
+      const mid = L.latLng((a.lat + b.lat) / 2, (a.lng + b.lng) / 2);
+      L.marker(mid, {
+        interactive: false,
+        icon: L.divIcon({
+          className: '',
+          html: `<span class="leg-label">${formatDistance(legs[k].distance)}`
+            + ` · ${legs[k].bearing.toFixed(0)}°</span>`,
+          iconSize: null,
+        }),
+      }).addTo(this._labels);
+    }
+
+    // The total belongs at the far end, where the eye finishes the line.
+    if (legs.length > 1) {
+      L.marker(this.points[this.points.length - 1], {
+        interactive: false,
+        icon: L.divIcon({
+          className: '',
+          html: `<span class="leg-label total">total ${formatDistance(total)}`
+            + ` · ${driftHours(total).toFixed(1)} h at ${TYPICAL_CURRENT_MS} m/s</span>`,
+          iconSize: null,
+        }),
+      }).addTo(this._labels);
+    }
   }
 
   summary() {
