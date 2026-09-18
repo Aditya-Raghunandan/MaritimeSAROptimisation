@@ -188,6 +188,22 @@ describe('ZarrSource', () => {
     ).rejects.toThrow(/not built together/);
   });
 
+  it('a NaN frame is refused by name, not by zarrita', async () => {
+    // Unguarded this becomes slice(NaN, NaN) and emerges from deep inside the
+    // library as "Input contains an empty iterator", naming neither the frame
+    // nor the store.
+    const s = await new ZarrSource('http://x/w.zarr', tier()).open();
+    await expect(s.ensure(NaN)).rejects.toThrow(RangeError);
+    await expect(s.ensure(NaN)).rejects.toThrow(/frame NaN is not a valid index/);
+  });
+
+  it('refuses a frame past the end and a negative one', async () => {
+    const s = await new ZarrSource('http://x/w.zarr', tier()).open();
+    await expect(s.ensure(96)).rejects.toThrow(/0\.\.95/);
+    await expect(s.ensure(-1)).rejects.toThrow(RangeError);
+    await expect(s.ensure(1.5)).rejects.toThrow(RangeError);
+  });
+
   it('using it before open() is a clear error, not undefined', async () => {
     const s = new ZarrSource('http://x/w.zarr', tier());
     await expect(s.ensure(0)).rejects.toThrow(/open\(\) was never awaited/);

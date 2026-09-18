@@ -109,6 +109,18 @@ export class ZarrSource {
   /** Fetch and decode the chunk holding `frame`, unless it is already here. */
   async ensure(frame) {
     if (!this._arrays) throw new Error('ZarrSource.open() was never awaited');
+    // A NaN or out-of-range frame must fail HERE, saying what it was. Passed
+    // through, it becomes slice(NaN, NaN) and surfaces from deep inside
+    // zarrita as "Input contains an empty iterator", which names neither the
+    // frame nor this layer. That cost an hour on 2026-09-18 chasing a
+    // published archive that was in fact fine -- the caller had computed the
+    // frame from a mis-parsed date.
+    if (!Number.isInteger(frame) || frame < 0 || frame >= this.frames) {
+      throw new RangeError(
+        `frame ${frame} is not a valid index into ${this.base} `
+        + `(0..${this.frames - 1})`,
+      );
+    }
     const c = this.chunkOf(frame);
     if (this._cache.has(c)) {
       // Touch it so the LRU keeps what is being scrubbed through.
