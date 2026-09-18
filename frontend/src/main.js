@@ -17,6 +17,7 @@ import { windLegend } from './legend.js';
 import { ResultantSource, resultantScale } from './resultant.js';
 import { rasterLayer } from './raster.js';
 import { particleLayer } from './particles.js';
+import { domainLabel, domainMask } from './domain.js';
 import { RangeRings, Ruler, addScaleBar, formatDistance } from './measure.js';
 import { PointPanel } from './chart.js';
 import { TYPICAL_CURRENT_MS } from './geo.js';
@@ -229,6 +230,12 @@ async function start() {
   });
   map.fitBounds(dataBounds);
   LABELS.addTo(map);
+
+  // Dim the world outside the forcing domain. The painted field is a hard-edged
+  // rectangle because that is exactly where the data stops; without this it
+  // reads as a loading failure rather than as the study box.
+  const mask = domainMask(dataBounds).addTo(map);
+  domainLabel(dataBounds, 'Study domain · 17–36 N, 82–63 W').addTo(map);
   addScaleBar(map);
 
   const clock = Clock.fromManifest(manifest);
@@ -278,6 +285,7 @@ async function start() {
 
     raster.addTo(map);
     particles.addTo(map);
+    quiver.addTo(map);
 
     overlays[`${field.label} — speed`] = raster;
     overlays[`${field.label} — flow`] = particles;
@@ -287,6 +295,7 @@ async function start() {
   // The remaining three types have no data yet. They are listed as disabled so
   // the map says what is coming rather than pretending it is complete.
   overlays['Place names'] = LABELS;
+  overlays['Dim outside the domain'] = mask;
 
   /*
     The resultant drift field: what a person in the water would actually

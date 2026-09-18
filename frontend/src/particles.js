@@ -17,12 +17,21 @@
  *   4. Respawn each particle after a random lifetime, so the field does not
  *      slowly drain into its convergence zones and leave the rest bare.
  *
- * THE STEP IS IN DEGREES PER SECOND, NOT PIXELS PER FRAME, and that matters
- * here more than on most maps. Converting m/s to degrees divides the eastward
- * component by cos(latitude): across 17-36 N that is a 13 % difference between
- * the bottom of the box and the top. Stepping in pixels would make the same
- * wind appear to blow faster at the top of the screen than the bottom -- an
- * artefact of Mercator that a viewer would read as physics.
+ * THE STEP IS SIZED IN PIXELS AND APPLIED IN DEGREES, and it needs both halves.
+ *
+ * Sized in pixels, because pixels are what the eye integrates. A step fixed in
+ * seconds looks different at every zoom, and the first version of this got that
+ * so wrong the layer was pointless: 15 s of drift per frame is 0.048 px at zoom
+ * 5 for a 14 m/s wind, so nothing moved and the particles read as static white
+ * noise. Motion is the whole payload -- streak length comes out proportional to
+ * speed for free -- so the step is derived each frame from the map's current
+ * metres-per-pixel.
+ *
+ * Applied in degrees, because converting m/s to degrees divides the eastward
+ * component by cos(latitude), and across 17-36 N that is a 13 % difference
+ * between the bottom of the box and the top. Skipping that correction would
+ * make the same wind appear to blow faster at the top of the screen -- a
+ * Mercator artefact a viewer would read as physics.
  *
  * RESPAWN IS SEEDED AND UNIFORM over the box, not over the visible screen, so
  * panning does not change where particles come from. A particle that leaves the
@@ -39,18 +48,22 @@ export const ParticleLayer = L.Layer.extend({
    * @param {object} field  anything with .grid and .vector(frame, j, i)
    * @param {object} opts
    *   count      how many particles
-   *   speed      seconds of simulated drift per animation frame
+   *   maxSpeed   top of the speed scale, m/s -- sets the step with targetPx
+   *   targetPx   pixels per frame the fastest wind should travel
    *   fade       0-1, how much of the previous frame survives
    *   maxAgeMs   respawn after about this long
    */
   initialize(field, opts = {}) {
     this._field = field;
     this._frame = 0;
-    this._count = opts.count ?? 2600;
-    this._speed = opts.speed ?? 900;
-    this._fade = opts.fade ?? 0.94;
-    this._maxAge = opts.maxAgeMs ?? 2600;
-    this._colour = opts.colour ?? 'rgba(255, 255, 255, 0.72)';
+    this._count = opts.count ?? 1100;
+    this._maxSpeed = opts.maxSpeed ?? 20;
+    // Pixels per frame that the FASTEST wind should travel. The step is
+    // derived from this and the map's current scale, never fixed in seconds.
+    this._targetPx = opts.targetPx ?? 2.4;
+    this._fade = opts.fade ?? 0.955;
+    this._maxAge = opts.maxAgeMs ?? 4200;
+    this._colour = opts.colour ?? 'rgba(255, 255, 255, 0.85)';
     this._particles = [];
     this._raf = null;
   },
@@ -147,11 +160,30 @@ export const ParticleLayer = L.Layer.extend({
     ctx.globalCompositeOperation = 'source-over';
 
     ctx.strokeStyle = this._colour;
-    ctx.lineWidth = 1.1;
+    ctx.lineWidth = 1.3;
     ctx.lineCap = 'round';
     ctx.beginPath();
 
-    const seconds = this._speed * dt;
+    /*
+      THE STEP IS DERIVED FROM THE MAP'S SCALE, NOT FIXED IN SECONDS, and this
+      is what the first version got wrong badly enough to make the layer
+      pointless. It advanced a fixed 15 s of drift per frame, which at zoom 5
+      is 0.048 px for a 14 m/s wind -- the particles did not move at all, and a
+      particle that does not move carries no information whatever. It read as
+      static white noise over the field.
+
+      Motion is the entire payload here: streak length ends up proportional to
+      speed for free, so a fast jet draws long lines and a calm patch draws
+      short ones. That only works if the step is measured in PIXELS, because
+      pixels are what the eye integrates. Deriving it per frame also means the
+      flow looks the same at every zoom instead of freezing as you zoom out.
+    */
+    const centre = this._map.getCenter();
+    const mPerPx = 156543.03392
+      * Math.cos((centre.lat * Math.PI) / 180)
+      / 2 ** this._map.getZoom();
+    const secondsPerSecond = (this._targetPx * mPerPx) / Math.max(this._maxSpeed, 0.1);
+    const seconds = secondsPerSecond * dt * 60;   // dt is in seconds; 60 fps nominal
 
     for (let k = 0; k < this._particles.length; k += 1) {
       const p = this._particles[k];

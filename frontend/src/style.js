@@ -24,7 +24,12 @@
 export const SPEED_RAMP = ['#fde3d3', '#f9b98f', '#f28a54', '#eb6834', '#c04a1c', '#8c3410'];
 
 /** Target on-screen spacing between arrows, px. Below this they overlap into mush. */
-const TARGET_SPACING_PX = 26;
+// Sparser than it was. The arrows used to BE the field and had to cover it;
+// now the painted raster carries the pattern and the particles carry the
+// motion, so the arrows are an annotation over the top -- a readable value at
+// a real cell centre every so often. At 26 px they crowded the streaks into
+// mush.
+const TARGET_SPACING_PX = 38;
 
 /**
  * Colour for a speed, as a step of the ramp.
