@@ -12,10 +12,23 @@
  *   1. Scatter N particles over the box.
  *   2. Each animation frame, look up (u, v) where each particle is and step it
  *      forward by dt. Draw a short segment from where it was to where it is.
- *   3. Do NOT clear the canvas. Paint it with a translucent black instead, so
- *      previous segments fade over a few frames. That fade is the tail.
+ *   3. Keep the last few positions of each particle and draw them as a
+ *      polyline that fades along its length. That is the tail.
  *   4. Respawn each particle after a random lifetime, so the field does not
  *      slowly drain into its convergence zones and leave the rest bare.
+ *
+ * STEP 3 USED TO BE THE USUAL TRICK -- never clear the canvas, paint it with a
+ * translucent black each frame and let old segments fade out. It leaves
+ * PERMANENT GHOSTS, and the reason is arithmetic rather than taste. The fade
+ * multiplies an 8-bit alpha channel: at 0.965 per frame the alpha falls 255 ->
+ * 42 -> 14 and then sticks, because round(14 * 0.965) is 14. It can never
+ * reach zero. Every streak the field has ever drawn stays on the canvas at
+ * alpha 14 forever, which is exactly the faint debris left behind the real
+ * tails.
+ *
+ * Holding the trail explicitly costs about 820 x 8 short segments a frame,
+ * which canvas does not notice, and it makes the tail length an honest
+ * parameter instead of something emergent from a decay constant.
  *
  * THE STEP IS SIZED IN PIXELS AND APPLIED IN DEGREES, and it needs both halves.
  *
@@ -50,7 +63,7 @@ export const ParticleLayer = L.Layer.extend({
    *   count      how many particles
    *   maxSpeed   top of the speed scale, m/s -- sets the step with targetPx
    *   targetPx   pixels per frame the fastest wind should travel
-   *   fade       0-1, how much of the previous frame survives
+   *   trail      how many past positions each streak keeps
    *   maxAgeMs   respawn after about this long
    */
   initialize(field, opts = {}) {
@@ -61,9 +74,12 @@ export const ParticleLayer = L.Layer.extend({
     // Pixels per frame that the FASTEST wind should travel. The step is
     // derived from this and the map's current scale, never fixed in seconds.
     this._targetPx = opts.targetPx ?? 1.5;
-    this._fade = opts.fade ?? 0.965;
+    // Positions kept per particle. The tail is drawn from these, so its
+    // length is this number times the per-frame step -- explicit, and it can
+    // actually reach zero, which a multiplied alpha cannot.
+    this._trail = opts.trail ?? 9;
     this._maxAge = opts.maxAgeMs ?? 4200;
-    this._colour = opts.colour ?? 'rgba(255, 255, 255, 0.55)';
+    this._alpha = opts.alpha ?? 0.75;
     this._particles = [];
     this._raf = null;
   },
@@ -120,9 +136,14 @@ export const ParticleLayer = L.Layer.extend({
   },
 
   _spawn(g, stagger = false) {
+    const lat = g.lat(0) + Math.random() * (g.lat(g.nlat - 1) - g.lat(0));
+    const lon = g.lon(0) + Math.random() * (g.lon(g.nlon - 1) - g.lon(0));
     return {
-      lat: g.lat(0) + Math.random() * (g.lat(g.nlat - 1) - g.lat(0)),
-      lon: g.lon(0) + Math.random() * (g.lon(g.nlon - 1) - g.lon(0)),
+      lat,
+      lon,
+      // The tail starts empty, so a respawned particle does not draw a line
+      // from wherever it died to wherever it reappeared.
+      past: [],
       // Staggered ages on the first seed, or every particle respawns together
       // and the whole field blinks in unison.
       age: stagger ? Math.random() * this._maxAge : 0,
@@ -140,7 +161,11 @@ export const ParticleLayer = L.Layer.extend({
       this._canvas.style.height = `${size.y}px`;
     }
     L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0, 0]));
-    // Old trails are in the wrong place after a move; keeping them would smear.
+    // Stored tail positions are SCREEN coordinates, so a move or a zoom makes
+    // every one of them wrong. Dropping them costs a few frames of tail and
+    // avoids drawing streaks between where a particle was on the old view and
+    // where it is on the new one.
+    for (const p of this._particles) p.past.length = 0;
     this._canvas.getContext('2d').clearRect(0, 0, size.x, size.y);
   },
 
@@ -152,17 +177,11 @@ export const ParticleLayer = L.Layer.extend({
     const size = this._map.getSize();
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    // The fade IS the tail: paint over the last frame instead of clearing it.
-    ctx.globalCompositeOperation = 'destination-in';
-    ctx.fillStyle = `rgba(0, 0, 0, ${this._fade})`;
-    ctx.fillRect(0, 0, size.x, size.y);
-    ctx.globalCompositeOperation = 'source-over';
-
-    ctx.strokeStyle = this._colour;
-    ctx.lineWidth = 1.05;
+    // Cleared every frame. The tail comes from each particle's stored history,
+    // not from an alpha decay that cannot reach zero -- see the module note.
+    ctx.clearRect(0, 0, size.x, size.y);
     ctx.lineCap = 'round';
-    ctx.beginPath();
+    ctx.lineJoin = 'round';
 
     /*
       THE STEP IS DERIVED FROM THE MAP'S SCALE, NOT FIXED IN SECONDS, and this
@@ -223,12 +242,26 @@ export const ParticleLayer = L.Layer.extend({
       const to = this._map.latLngToContainerPoint([p.lat, p.lon]);
       // A segment longer than this is a particle that jumped, usually because
       // the map moved mid-step. Drawing it puts a stray streak across the view.
-      if (Math.abs(to.x - from.x) + Math.abs(to.y - from.y) > 60) continue;
+      if (Math.abs(to.x - from.x) + Math.abs(to.y - from.y) > 60) {
+        p.past.length = 0;
+        continue;
+      }
 
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
+      p.past.push([to.x, to.y]);
+      if (p.past.length > this._trail) p.past.shift();
+
+      // Fade ALONG the tail: oldest segment faintest, newest brightest. Each
+      // segment is its own stroke because each has its own alpha.
+      for (let n = 1; n < p.past.length; n += 1) {
+        const t = n / (p.past.length - 1);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${(this._alpha * t * t).toFixed(3)})`;
+        ctx.lineWidth = 0.6 + 0.8 * t;
+        ctx.beginPath();
+        ctx.moveTo(p.past[n - 1][0], p.past[n - 1][1]);
+        ctx.lineTo(p.past[n][0], p.past[n][1]);
+        ctx.stroke();
+      }
     }
-    ctx.stroke();
   },
 });
 

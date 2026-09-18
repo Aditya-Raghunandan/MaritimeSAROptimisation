@@ -217,12 +217,14 @@ async function start() {
       Fractional zoom. Leaflet steps in whole levels by default, and a whole
       level is a factor of two -- between the 300 km and 100 km views there was
       simply no stop, so the right framing of the domain was not reachable.
-      Quarter steps give four intermediate views per level, and the wheel is
-      slowed to match so one notch is one quarter rather than a full jump.
+      Quarter steps were not enough either -- the useful range for this box
+      sits between the 300 km and 200 km views, and a quarter level still
+      skipped over it. Eighths give eight stops per level, and the wheel is
+      slowed to match so one notch is one eighth rather than a jump.
     */
-    zoomSnap: 0.25,
-    zoomDelta: 0.25,
-    wheelPxPerZoomLevel: 160,
+    zoomSnap: 0.125,
+    zoomDelta: 0.125,
+    wheelPxPerZoomLevel: 240,
     layers: [BASEMAPS['Dark (field first)']],
     // The study box is 19 deg square. Panning to the Pacific shows nothing and
     // is where every projection problem lives, so the map is held near the
