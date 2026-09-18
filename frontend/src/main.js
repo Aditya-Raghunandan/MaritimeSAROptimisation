@@ -44,6 +44,22 @@ const CARTO_ATTR = '&copy; OpenStreetMap contributors, &copy; CARTO';
  * terms and stays.
  */
 const BASEMAPS = {
+  /*
+    Dark first, and it is not only taste. The painted speed field is the thing
+    being read now, and viridis runs from near-black to bright yellow: over a
+    pale ocean its dark end disappears into the basemap and the ramp loses its
+    bottom third. On a dark basemap the whole range separates, which is why
+    every wind map that leads with a painted field is dark.
+
+    It also stops the chrome fighting the map -- the panels are #1a1a19 and a
+    bright blue ocean between them was the loudest thing on screen.
+
+    Esri Ocean stays, because its bathymetry does real work when the arrows are
+    the subject: the Gulf Stream follows the shelf edge and separates at Cape
+    Hatteras because the shelf turns away there.
+  */
+  'Dark (field first)': L.tileLayer(carto('dark_all'),
+    { maxZoom: 19, attribution: CARTO_ATTR }),
   'Ocean (bathymetry)': L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
     { maxZoom: 13, attribution: 'Esri, GEBCO, NOAA, National Geographic, and other contributors' },
@@ -196,7 +212,7 @@ async function start() {
   const map = L.map('map', {
     center: dataBounds.getCenter(),
     zoom: 5,
-    layers: [BASEMAPS['Ocean (bathymetry)']],
+    layers: [BASEMAPS['Dark (field first)']],
     // The study box is 19 deg square. Panning to the Pacific shows nothing and
     // is where every projection problem lives, so the map is held near the
     // data: a generous margin to keep the coastline and the Gulf Stream's exit
@@ -216,6 +232,19 @@ async function start() {
   addScaleBar(map);
 
   const clock = Clock.fromManifest(manifest);
+
+  // Declared HERE, before anything reads it. It sat below the layer control
+  // and the resultant layer referenced it, which is a temporal dead zone: the
+  // ReferenceError threw out of start() and every wiring below that point --
+  // the layer control, the slider, the play button, the ruler, the rings, the
+  // click handler, the provenance line -- silently never happened. The map and
+  // its canvases still rendered, because they are added above the throw, so it
+  // looked like a working map with dead controls rather than like a crash.
+  const axis = {
+    start: new Date(manifest.clock.start),
+    stepSeconds: manifest.clock.step_seconds,
+    frames: manifest.clock.frames,
+  };
   const overlays = {};
   const field = layers.find((l) => l.type === 'field');
   if (field) windLegend({ maxSpeed: field.valueRange[1] }).addTo(map);
@@ -300,12 +329,6 @@ async function start() {
     overlays[`${pending} (awaiting the engine)`] = L.layerGroup();
   }
   L.control.layers(BASEMAPS, overlays, { collapsed: true }).addTo(map);
-
-  const axis = {
-    start: new Date(manifest.clock.start),
-    stepSeconds: manifest.clock.step_seconds,
-    frames: manifest.clock.frames,
-  };
 
   const slider = document.getElementById('time');
   slider.max = String(clock.steps - 1);
@@ -508,4 +531,18 @@ async function start() {
   setStatus('Click anywhere for a time series at that cell.');
 }
 
-start();
+/*
+  A throw inside start() used to leave a map that rendered and a UI that did
+  nothing, with the reason only in the console. Anything that stops setup part
+  way now says so on the page, because a half-wired interface looks like a
+  design decision rather than a crash.
+*/
+start().catch((err) => {
+  console.error(err);
+  const el = document.getElementById('status');
+  if (el) {
+    el.textContent = `Setup failed: ${err.message}. The map may be partly wired — `
+      + 'see the browser console.';
+    el.style.color = '#f08a89';
+  }
+});

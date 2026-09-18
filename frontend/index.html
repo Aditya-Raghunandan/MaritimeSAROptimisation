@@ -283,10 +283,12 @@
 
       .measuring { cursor: crosshair; }
       .ring-label {
-        color: #8a6d00;
+        color: #ffcc00;
         font-size: 10px;
         font-weight: 600;
-        text-shadow: 0 0 3px #fff, 0 0 3px #fff;
+        /* Dark halo, not white: the default basemap is dark now, and a white
+           glow around yellow text on near-black is a smear. */
+        text-shadow: 0 0 3px #000, 0 0 4px #000;
         white-space: nowrap;
       }
 
