@@ -19,9 +19,10 @@ makes the buckets return errors with deletion after 30 days. A site that has to
 stay up through assessment should not carry a billing failure mode.
 
 Hugging Face needs no card. The honest caveat is that its free public storage
-is documented as "best-effort" with no guaranteed figure; the measured wind
-archive is 1.67 GB across three tiers, inside the "first few gigabytes" they
-describe as unremarkable. It also wants a dataset card, which this writes, and
+is documented as "best-effort" with no guaranteed figure; the wind archive
+MEASURED 1.60 GB across three tiers and 2,238 files (Slurm 58640, 2026-09-17),
+inside the "first few gigabytes" they describe as unremarkable, and well inside
+their <100k files per repo and <10k per folder. It also wants a dataset card, which this writes, and
 which the report wants anyway.
 
 THERE IS DELIBERATELY NO --token FLAG
@@ -75,7 +76,7 @@ patterns for strong-current environments**. The code that produces it is at
 
 Each product is published at several time resolutions, because nobody can
 perceive hourly detail while scrubbing across a year and nobody should download
-it: the hourly wind tier is 1.32 GB against 0.07 GB for the daily one.
+it: the hourly wind tier is 1.27 GB against 0.07 GB for the daily one.
 
 ```
 <product>_archive.json     the manifest: grid, bbox, tiers, provenance
@@ -92,7 +93,7 @@ calm. A stride shows a real hour, just fewer of them.
 
 - **Longitude is -180..180** here. The project stores 0-360 internally and
   converts once, at the presentation boundary, which is this export.
-- **Latitude ascends.**
+- **Latitude is ascending**, which ERA5 is not at source and HYCOM is.
 - Arrays are `(time, lat, lon)`, `float32`, `m/s`.
 - Coordinates are regular, so the manifest carries `lat0/dlat/nlat` and the
   time axis as `start` + `step_seconds` + `frames`. A tier whose time axis has
