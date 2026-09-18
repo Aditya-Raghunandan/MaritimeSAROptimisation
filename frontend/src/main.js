@@ -468,38 +468,60 @@ async function start() {
     setStatus('');
   }
 
-  const ruler = new Ruler(map);
-
-  document.getElementById('ruler').addEventListener('click', (e) => {
-    const on = ruler.toggle();
-    e.target.classList.toggle('on', on);
-    setStatus(on
-      ? 'Ruler on — click two or more points. Each leg is labelled on the map.'
-      : '');
-  });
-
-  const ringControls = document.getElementById('ring-controls');
-  const ringRadius = document.getElementById('ring-radius');
-
-  const rings = new RangeRings(map, {
-    onChange: ({ centre, radiiKm }) => {
-      if (!centre) return;
-      ringRadius.textContent = `${radiiKm[radiiKm.length - 1]} km`;
+  const ruler = new Ruler(map, {
+    onChange: ({ legs, total, driftHours }) => {
+      if (!legs.length) {
+        setStatus('Ruler — click a second point to measure a leg.');
+        return;
+      }
+      const last = legs[legs.length - 1];
       setStatus(
-        `Range rings at ${Math.abs(centre.lat).toFixed(2)} ${centre.lat >= 0 ? 'N' : 'S'}, `
-        + `${Math.abs(centre.lng).toFixed(2)} ${centre.lng >= 0 ? 'E' : 'W'} `
-        + `— ${radiiKm.join(', ')} km. Click to move the datum, drag the dot, `
-        + `or use −/+ . The Gulf Stream covers ~155 km/day.`,
+        `last leg ${formatDistance(last.distance)} on ${last.bearing.toFixed(0)}° `
+        + `· total ${formatDistance(total)} `
+        + `· ${driftHours.toFixed(1)} h adrift at 1.8 m/s`,
       );
     },
   });
 
-  document.getElementById('rings').addEventListener('click', (e) => {
+  /*
+    The ruler and the rings are MUTUALLY EXCLUSIVE, and they have to be.
+
+    Each registers its own map click handler, so with both on a single click
+    added a ruler point AND moved the rings AND was then swallowed before the
+    ruler's readout ran -- the rings chased the ruler and the ruler appeared to
+    do nothing. Three owners for one click. Turning either on now turns the
+    other off, which is also the honest interaction: both are "click the map to
+    place something", and there is no sensible meaning for a click when both
+    are listening.
+  */
+  const rulerBtn = document.getElementById('ruler');
+  const ringsBtn = document.getElementById('rings');
+
+  function setTool(which) {
+    if (which !== 'ruler' && ruler.active) {
+      ruler.toggle();
+      rulerBtn.classList.remove('on');
+    }
+    if (which !== 'rings' && rings.active) {
+      rings.toggle();
+      ringsBtn.classList.remove('on');
+      ringControls.hidden = true;
+    }
+  }
+
+  rulerBtn.addEventListener('click', () => {
+    setTool('ruler');
+    const on = ruler.toggle();
+    rulerBtn.classList.toggle('on', on);
+    setStatus(on
+      ? 'Ruler — click two or more points. Each leg is labelled on the map.'
+      : '');
+  });
+
+  ringsBtn.addEventListener('click', () => {
+    setTool('rings');
     const on = rings.toggle();
-    e.target.classList.toggle('on', on);
-    // Resizing lives on buttons, not the wheel: scroll already means zoom on a
-    // map, and taking it over stopped the map zooming at all while rings were
-    // on -- swapping one gesture for another instead of adding one.
+    ringsBtn.classList.toggle('on', on);
     ringControls.hidden = !on;
     if (!on) setStatus('');
   });
@@ -507,27 +529,9 @@ async function start() {
   document.getElementById('ring-smaller').addEventListener('click', () => rings.rescale(0.8));
 
   map.on('click', (e) => {
-    // The ruler and the rings each own the click while they are on, so a
-    // measurement does not also fire the point panel underneath it.
-    if (rings.active) return;
-    if (ruler.active) {
-      const { legs, total, driftHours } = ruler.summary();
-      // The distance goes ON THE MAP, beside the leg it measures. Reporting it
-      // only into the status line meant the one number the tool exists to
-      // produce was the easiest thing on the page to overlook.
-      ruler.label(legs, total);
-      if (legs.length) {
-        const last = legs[legs.length - 1];
-        setStatus(
-          `last leg ${formatDistance(last.distance)} on ${last.bearing.toFixed(0)}° `
-          + `· total ${formatDistance(total)} `
-          + `· ${driftHours.toFixed(1)} h adrift at 1.8 m/s`,
-        );
-      } else {
-        setStatus('Ruler — click a second point to measure a leg.');
-      }
-      return;
-    }
+    // Whichever tool is active owns the click and handles its own readout.
+    // The point panel is what a click means when neither is.
+    if (ruler.active || rings.active) return;
     showSeries(e.latlng);
   });
 

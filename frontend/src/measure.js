@@ -28,12 +28,22 @@ import {
  * this project exists to answer, so it may as well be readable off the map.
  */
 export class Ruler {
-  constructor(map) {
+  constructor(map, opts = {}) {
     this.map = map;
     this.active = false;
     this.points = [];
     this.layer = L.layerGroup().addTo(map);
-    this._onClick = (e) => this.addPoint(e.latlng);
+    this.onChange = opts.onChange ?? (() => {});
+    // The ruler owns the whole chain: click, point, label, readout. It used to
+    // add the point here and leave the labelling and the readout to a separate
+    // handler in main.js, which meant two listeners on one click and a readout
+    // that silently stopped happening when another tool's handler returned
+    // first. A tool that owns its click cannot be half-disabled by a sibling.
+    this._onClick = (e) => {
+      const summary = this.addPoint(e.latlng);
+      this.label(summary.legs, summary.total);
+      this.onChange(summary);
+    };
   }
 
   toggle() {
