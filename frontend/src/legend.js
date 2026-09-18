@@ -18,10 +18,18 @@
 import L from 'leaflet';
 
 import { beaufort } from './beaufort.js';
-import { speedColour } from './style.js';
+import { MAX_ARROW_PX, arrowLength, speedColour } from './style.js';
 
-/** Speeds to key, m/s. Chosen to land in distinct Beaufort forces. */
-const SAMPLES = [2, 5, 8, 12, 17, 22];
+/**
+ * Speeds to key, derived from the scale rather than fixed.
+ *
+ * Fixed samples let the key advertise 22 m/s while the map's scale topped out
+ * at 15, so the last three rows drew identically and promised a distinction
+ * the map could not make. Even fractions of maxSpeed always land on the scale.
+ */
+function samplesFor(maxSpeed) {
+  return [0.12, 0.3, 0.5, 0.7, 0.85, 1].map((f) => Math.round(f * maxSpeed * 10) / 10);
+}
 
 export const WindLegend = L.Control.extend({
   options: { position: 'bottomright' },
@@ -29,7 +37,7 @@ export const WindLegend = L.Control.extend({
   initialize(opts = {}) {
     L.Util.setOptions(this, opts);
     this._maxSpeed = opts.maxSpeed ?? 20;
-    this._maxArrowPx = opts.maxArrowPx ?? 22;
+    this._maxArrowPx = opts.maxArrowPx ?? MAX_ARROW_PX;
   },
 
   onAdd() {
@@ -43,7 +51,7 @@ export const WindLegend = L.Control.extend({
       + 'aria-label="Collapse">−</button>';
 
     const body = L.DomUtil.create('div', 'legend-body', box);
-    for (const s of SAMPLES) {
+    for (const s of samplesFor(this._maxSpeed)) {
       const row = L.DomUtil.create('div', 'legend-row', body);
       const b = beaufort(s);
       row.innerHTML =
@@ -69,10 +77,10 @@ export const WindLegend = L.Control.extend({
   /** Same colour and the same length rule as quiver.js, on a 46 px strip. */
   _arrow(canvas, speed) {
     const ctx = canvas.getContext('2d');
-    const len = Math.min(this._maxArrowPx, (speed / this._maxSpeed) * this._maxArrowPx * 1.6);
+    const len = arrowLength(speed, this._maxSpeed, this._maxArrowPx);
     const y = 7;
     const x0 = 2;
-    const x1 = x0 + Math.max(4, len);
+    const x1 = x0 + len;
 
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';

@@ -44,13 +44,10 @@
 
 import L from 'leaflet';
 
-import { decimation, speedColour } from './style.js';
+import { MAX_ARROW_PX, arrowLength, decimation, speedColour } from './style.js';
 
 /** Drawn under every arrow so it stays legible over any basemap tile. */
 const OUTLINE = 'rgba(20, 20, 20, 0.55)';
-
-/** Longest arrow, px. Anything longer and neighbouring arrows cross. */
-const MAX_ARROW_PX = 22;
 
 export const QuiverLayer = L.Layer.extend({
   /**
@@ -157,7 +154,7 @@ export const QuiverLayer = L.Layer.extend({
         const speed = Math.hypot(u, v);
         if (speed < 1e-6) continue;
 
-        const len = Math.min(MAX_ARROW_PX, (speed / this._maxSpeed) * MAX_ARROW_PX * 1.6);
+        const len = arrowLength(speed, this._maxSpeed, MAX_ARROW_PX);
         // Screen y grows downward while northward v grows upward, so v is
         // negated here. Getting this wrong mirrors the whole field about the
         // horizontal and still looks entirely plausible.

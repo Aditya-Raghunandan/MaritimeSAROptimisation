@@ -51,3 +51,31 @@ export function decimation(cellSpacingPx, target = TARGET_SPACING_PX) {
   return Math.max(1, Math.round(target / cellSpacingPx));
 }
 
+
+/**
+ * Arrow length in pixels for a speed. Shared by the map and the key.
+ *
+ * SQUARE ROOT, NOT LINEAR, and not the linear-times-1.6 this started as.
+ * That version multiplied by 1.6 to make light winds visible, which clamped
+ * everything above ~62 % of the scale to the same length: with maxSpeed 15,
+ * 12, 17 and 22 m/s all drew at 22 px. Length stopped encoding anything in
+ * exactly the range that matters most, since leeway is a fraction of speed and
+ * the strong-wind end is where it stops being negligible. It was visible in
+ * the key, which is one of the things a key is for.
+ *
+ * sqrt keeps a light breeze long enough to see while leaving the top of the
+ * range distinguishable, and it saturates only AT maxSpeed rather than well
+ * below it. MIN_ARROW_PX keeps a near-calm cell as a visible mark instead of a
+ * dot that reads as missing data.
+ */
+export function arrowLength(speed, maxSpeed, maxPx) {
+  if (!Number.isFinite(speed) || !(maxSpeed > 0)) return MIN_ARROW_PX;
+  const t = Math.min(Math.max(speed / maxSpeed, 0), 1);
+  return Math.max(MIN_ARROW_PX, maxPx * Math.sqrt(t));
+}
+
+/** Shortest drawn arrow, px. Below this it reads as absent rather than calm. */
+export const MIN_ARROW_PX = 4;
+
+/** Longest drawn arrow, px. Beyond this neighbouring arrows cross. */
+export const MAX_ARROW_PX = 22;

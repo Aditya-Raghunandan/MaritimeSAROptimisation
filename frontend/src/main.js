@@ -14,7 +14,7 @@ import { buildLayer } from './layers.js';
 import { ZarrSource, pickTier } from './sources.js';
 import { quiverLayer } from './quiver.js';
 import { windLegend } from './legend.js';
-import { Ruler, addScaleBar, formatDistance, rangeRings } from './measure.js';
+import { RangeRings, Ruler, addScaleBar, formatDistance } from './measure.js';
 import { PointPanel } from './chart.js';
 import { TYPICAL_CURRENT_MS } from './geo.js';
 
@@ -370,7 +370,6 @@ async function start() {
   }
 
   const ruler = new Ruler(map);
-  let rings = null;
 
   document.getElementById('ruler').addEventListener('click', (e) => {
     const on = ruler.toggle();
@@ -380,19 +379,28 @@ async function start() {
       : '');
   });
 
+  const rings = new RangeRings(map, {
+    onChange: ({ centre, radiiKm }) => {
+      if (!centre) return;
+      setStatus(
+        `Range rings at ${Math.abs(centre.lat).toFixed(2)} ${centre.lat >= 0 ? 'N' : 'S'}, `
+        + `${Math.abs(centre.lng).toFixed(2)} ${centre.lng >= 0 ? 'E' : 'W'} `
+        + `— ${radiiKm.join(', ')} km. Drag the dot to move, scroll or +/- to resize. `
+        + `The Gulf Stream covers ~155 km/day.`,
+      );
+    },
+  });
+
   document.getElementById('rings').addEventListener('click', (e) => {
-    if (rings) {
-      map.removeLayer(rings);
-      rings = null;
-      e.target.classList.remove('on');
-      return;
-    }
-    rings = rangeRings(map, map.getCenter());
-    e.target.classList.add('on');
-    setStatus('Range rings at the map centre. The Gulf Stream covers ~155 km/day.');
+    const on = rings.toggle();
+    e.target.classList.toggle('on', on);
+    if (!on) setStatus('');
   });
 
   map.on('click', (e) => {
+    // The ruler and the rings each own the click while they are on, so a
+    // measurement does not also fire the point panel underneath it.
+    if (rings.active) return;
     if (ruler.active) {
       const { legs, total, driftHours } = ruler.summary();
       // The distance goes ON THE MAP, beside the leg it measures. Reporting it

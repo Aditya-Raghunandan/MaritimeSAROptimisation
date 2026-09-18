@@ -293,3 +293,114 @@ class TestWriteCurrentNetcdf:
         monkeypatch.setattr(current, "open_current_dataset", lambda: box_dataset)
         with pytest.raises(SystemExit, match="land mask"):
             current.write_current_netcdf("2021-01-05", "2021-01-08", tmp_path)
+
+
+class TestFetchCurrentRange:
+    """Long windows must be split into requests the server will actually serve.
+
+    A half-year in one OPeNDAP call is 1,448 timesteps and times out with a 500
+    after about half an hour, having returned nothing. The per-timestep rate
+    measured on a 4-day request gave no warning, because the rate and the
+    largest answerable request are different limits.
+    """
+
+    def test_splits_a_long_window_into_pieces(self, monkeypatch, box_dataset):
+        calls = []
+        real = current.fetch_current_box
+
+        def spy(start, end, *a, **k):
+            calls.append((start[:10], end[:10]))
+            return real(start, end, *a, **k)
+
+        monkeypatch.setattr(current, "open_current_dataset", lambda: box_dataset)
+        monkeypatch.setattr(current, "fetch_current_box", spy)
+        current.fetch_current_range("2021-01-05", "2021-01-08",
+                                    (17.0, 36.0), (-82.0, -63.0),
+                                    chunk_days=1, verbose=False)
+        assert calls == [("2021-01-05", "2021-01-06"),
+                         ("2021-01-06", "2021-01-07"),
+                         ("2021-01-07", "2021-01-08")]
+
+    def test_the_pieces_reassemble_into_the_whole_window(self, monkeypatch, box_dataset):
+        monkeypatch.setattr(current, "open_current_dataset", lambda: box_dataset)
+        whole = current.fetch_current_box("2021-01-05", "2021-01-08",
+                                          (17.0, 36.0), (-82.0, -63.0))
+        split = current.fetch_current_range("2021-01-05", "2021-01-08",
+                                            (17.0, 36.0), (-82.0, -63.0),
+                                            chunk_days=1, verbose=False)
+        assert split.sizes["time"] == whole.sizes["time"] == 24
+        assert np.array_equal(split["time"].values, whole["time"].values)
+        assert np.allclose(split["water_u"].values, whole["water_u"].values, equal_nan=True)
+
+    def test_a_window_shorter_than_one_chunk_is_a_single_request(
+        self, monkeypatch, box_dataset
+    ):
+        calls = []
+        real = current.fetch_current_box
+
+        def spy(start, end, *a, **k):
+            calls.append(start)
+            return real(start, end, *a, **k)
+
+        monkeypatch.setattr(current, "open_current_dataset", lambda: box_dataset)
+        monkeypatch.setattr(current, "fetch_current_box", spy)
+        current.fetch_current_range("2021-01-05", "2021-01-08",
+                                    (17.0, 36.0), (-82.0, -63.0),
+                                    chunk_days=30, verbose=False)
+        assert len(calls) == 1
+
+    def test_a_ragged_last_piece_is_not_truncated(self, monkeypatch, box_dataset):
+        # 3 days in 2-day pieces: the second piece is one day, not two.
+        monkeypatch.setattr(current, "open_current_dataset", lambda: box_dataset)
+        out = current.fetch_current_range("2021-01-05", "2021-01-08",
+                                          (17.0, 36.0), (-82.0, -63.0),
+                                          chunk_days=2, verbose=False)
+        assert out.sizes["time"] == 24
+        assert out["time"].values.max() < np.datetime64("2021-01-08")
+
+    def test_overlapping_pieces_are_caught_rather_than_silently_duplicated(
+        self, monkeypatch, box_dataset
+    ):
+        """If a boundary ever goes wrong, the archive must not gain a duplicate hour."""
+        monkeypatch.setattr(current, "open_current_dataset", lambda: box_dataset)
+        # Force every piece to cover the same window, which is what a broken
+        # boundary would look like.
+        monkeypatch.setattr(current, "fetch_current_box",
+                            lambda *a, **k: _fixed_window(box_dataset))
+        with pytest.raises(AssertionError, match="duplicate timestamps"):
+            current.fetch_current_range("2021-01-05", "2021-01-08",
+                                        (17.0, 36.0), (-82.0, -63.0),
+                                        chunk_days=1, verbose=False)
+
+
+def _fixed_window(ds):
+    """The same three timesteps every time, standing in for a boundary bug."""
+    return ds[["water_u", "water_v"]].isel(time=slice(0, 3)).sel(depth=0.0)
+
+
+class TestResume:
+    """A bulk pull from this endpoint WILL be resubmitted, so it must not redo work."""
+
+    def test_an_existing_file_is_skipped(self, monkeypatch, box_dataset, tmp_path, capsys):
+        monkeypatch.setattr(current, "open_current_dataset", lambda: box_dataset)
+        first = current.write_current_netcdf("2021-01-05", "2021-01-08", tmp_path)
+        stamp = first.stat().st_mtime_ns
+
+        # A second call must not re-fetch: fail loudly if it tries.
+        monkeypatch.setattr(current, "fetch_current_range",
+                            lambda *a, **k: pytest.fail("re-fetched an existing window"))
+        again = current.write_current_netcdf("2021-01-05", "2021-01-08", tmp_path)
+        assert again == first
+        assert again.stat().st_mtime_ns == stamp
+        assert "skip" in capsys.readouterr().out
+
+    def test_force_re_fetches(self, monkeypatch, box_dataset, tmp_path):
+        monkeypatch.setattr(current, "open_current_dataset", lambda: box_dataset)
+        path = current.write_current_netcdf("2021-01-05", "2021-01-08", tmp_path)
+        calls = []
+        real = current.fetch_current_range
+        monkeypatch.setattr(current, "fetch_current_range",
+                            lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+        current.write_current_netcdf("2021-01-05", "2021-01-08", tmp_path, force=True)
+        assert len(calls) == 1
+        assert path.exists()

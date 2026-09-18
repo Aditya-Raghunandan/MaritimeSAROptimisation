@@ -125,33 +125,139 @@ export class Ruler {
  * 155 km a day, so a 24 h particle cloud reaching outside that ring means the
  * physics is wrong, not the map.
  */
-export function rangeRings(map, latlng, radiiKm = RANGE_RINGS_KM) {
-  const group = L.layerGroup();
-  L.circleMarker(latlng, { radius: 5, color: '#ffcc00', fillOpacity: 1 }).addTo(group);
-  for (const km of radiiKm) {
-    L.circle(latlng, {
-      radius: km * 1000,
-      color: '#ffcc00',
-      weight: 1,
-      fill: false,
-      dashArray: '4,4',
-    }).addTo(group);
-    L.marker(
-      [latlng.lat + km / 111, latlng.lng],
-      {
-        icon: L.divIcon({
-          className: 'ring-label',
-          html: `${km} km`,
-          iconSize: [40, 14],
-        }),
-      },
-    ).addTo(group);
+/**
+ * Range rings around a datum you can actually move.
+ *
+ * The first version dropped a fixed set of rings at the map centre and that was
+ * all: no way to put them where the incident was, no way to change the radii,
+ * no way to get rid of them except toggling the button. A datum you cannot
+ * place is not a datum -- the whole point is "how far could they have gone from
+ * HERE".
+ *
+ * So: click the map to place it, drag the centre to move it, and scroll or use
+ * the +/- keys over the map to scale the whole set. `L.circle` takes metres and
+ * draws them correctly on the projection, so these stay true distances at any
+ * latitude rather than a fixed pixel radius -- which matters across a 19 deg
+ * box where Mercator stretches by 18 % top to bottom.
+ */
+export class RangeRings {
+  constructor(map, opts = {}) {
+    this.map = map;
+    this.radiiKm = [...(opts.radiiKm ?? RANGE_RINGS_KM)];
+    this.baseKm = [...this.radiiKm];
+    this.scale = 1;
+    this.active = false;
+    this.centre = null;
+    this.layer = L.layerGroup();
+    this.onChange = opts.onChange ?? (() => {});
+
+    this._onClick = (e) => this.placeAt(e.latlng);
+    this._onWheel = (e) => {
+      if (!this.active || !this.centre) return;
+      L.DomEvent.stop(e);                 // scroll resizes the rings, not the map
+      this.rescale(e.deltaY < 0 ? 1.25 : 0.8);
+    };
+    this._onKey = (e) => {
+      if (!this.active || !this.centre) return;
+      if (e.key === '+' || e.key === '=') this.rescale(1.25);
+      else if (e.key === '-' || e.key === '_') this.rescale(0.8);
+    };
   }
-  group.addTo(map);
-  return group;
+
+  toggle() {
+    this.active = !this.active;
+    if (this.active) {
+      this.layer.addTo(this.map);
+      this.map.on('click', this._onClick);
+      this.map.getContainer().addEventListener('wheel', this._onWheel, { passive: false });
+      document.addEventListener('keydown', this._onKey);
+      // Somewhere to start, so the tool is visibly on before the first click.
+      this.placeAt(this.map.getCenter());
+    } else {
+      this.map.off('click', this._onClick);
+      this.map.getContainer().removeEventListener('wheel', this._onWheel);
+      document.removeEventListener('keydown', this._onKey);
+      this.clear();
+      this.map.removeLayer(this.layer);
+    }
+    return this.active;
+  }
+
+  clear() {
+    this.layer.clearLayers();
+    this.centre = null;
+  }
+
+  placeAt(latlng) {
+    this.centre = latlng;
+    this._draw();
+    this.onChange(this.summary());
+  }
+
+  /** Grow or shrink every ring together, keeping their ratios. */
+  rescale(by) {
+    this.scale = Math.min(20, Math.max(0.05, this.scale * by));
+    this.radiiKm = this.baseKm.map((km) => {
+      const v = km * this.scale;
+      // Round to something a planner would say out loud rather than 23.44 km.
+      return v >= 100 ? Math.round(v / 10) * 10 : v >= 10 ? Math.round(v) : Math.round(v * 10) / 10;
+    });
+    this._draw();
+    this.onChange(this.summary());
+  }
+
+  summary() {
+    return { centre: this.centre, radiiKm: [...this.radiiKm], scale: this.scale };
+  }
+
+  _draw() {
+    this.layer.clearLayers();
+    if (!this.centre) return;
+    const c = this.centre;
+
+    for (const km of this.radiiKm) {
+      L.circle(c, {
+        radius: km * 1000, color: '#ffcc00', weight: 1, fill: false, dashArray: '4,4',
+        interactive: false,
+      }).addTo(this.layer);
+      // Label north of the ring. 111 km per degree of latitude is exact enough
+      // for placing a label and wrong enough to never use for a measurement.
+      L.marker([c.lat + km / 111, c.lng], {
+        interactive: false,
+        icon: L.divIcon({ className: 'ring-label', html: `${km} km`, iconSize: [46, 14] }),
+      }).addTo(this.layer);
+    }
+
+    // The draggable datum, added last so it sits on top of the rings.
+    const handle = L.circleMarker(c, {
+      radius: 6, color: '#fff', weight: 2, fillColor: '#ffcc00', fillOpacity: 1,
+      className: 'ring-datum',
+    }).addTo(this.layer);
+    handle.on('mousedown', () => this._startDrag());
+    handle.bindTooltip('Drag to move · scroll to resize', { direction: 'top' });
+  }
+
+  /** Drag on the datum moves the whole set; the map must not pan underneath. */
+  _startDrag() {
+    this.map.dragging.disable();
+    const move = (e) => this.placeAt(e.latlng);
+    const stop = () => {
+      this.map.off('mousemove', move);
+      this.map.off('mouseup', stop);
+      this.map.dragging.enable();
+    };
+    this.map.on('mousemove', move);
+    this.map.on('mouseup', stop);
+  }
 }
 
-/** Metric scale bar, redrawn by Leaflet on every pan -- which Mercator requires. */
+export function rangeRings(map, latlng, radiiKm = RANGE_RINGS_KM) {
+  const rings = new RangeRings(map, { radiiKm });
+  rings.layer.addTo(map);
+  rings.placeAt(latlng);
+  return rings.layer;
+}
+
 export function addScaleBar(map) {
   return L.control.scale({ metric: true, imperial: false, maxWidth: 180 }).addTo(map);
 }

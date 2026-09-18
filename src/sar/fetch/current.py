@@ -59,6 +59,23 @@ MAX_BYTES = 3_000_000_000
 # scripts/check_forcing_pair.py asserts against the live server.
 NAN_FRACTION_MIN, NAN_FRACTION_MAX = 0.02, 0.40
 
+# How much of the time axis to ask for in ONE OPeNDAP request.
+#
+# MEASURED THE HARD WAY, 2026-09-18. A half-year asked for in a single call is
+# 1,448 timesteps and the server gives up on it:
+#
+#     oc_open: server error ... code = 500;
+#     message = "java.net.SocketTimeoutException: Read timed out;
+#                water_u -- 8981:10428,0:0,2425:2900,3475:3712";
+#
+# Six array tasks died that way after ~36 minutes each, having written nothing.
+# The earlier throughput measurement (4.0 s/timestep over a 4-day request) was
+# correct and useless on its own: it established the RATE and said nothing
+# about the largest request the server will serve, and those are different
+# limits. 8 days is 64 timesteps, comfortably inside what succeeded, and small
+# enough that a timeout costs minutes rather than half an hour.
+REQUEST_DAYS = 8
+
 
 def open_current_dataset() -> xr.Dataset:
     """Open the HYCOM surface-current dataset (lazy: nothing downloaded yet).
@@ -112,6 +129,51 @@ def fetch_current(date: str, time: str, lat: float, lon: float) -> dict:
         "water_v": float(point["water_v"].values),
         "time": point["time"].values,
     }
+
+
+def fetch_current_range(start: str, end: str, lat_bounds: tuple, lon_bounds: tuple,
+                        *, chunk_days: int = REQUEST_DAYS, verbose: bool = True) -> xr.Dataset:
+    """`fetch_current_box` over a long window, in requests the server will serve.
+
+    Splits [start, end) into `chunk_days` pieces, fetches each, and concatenates.
+    See REQUEST_DAYS: a single request for a half-year times the server out, and
+    the per-timestep rate does not warn you, because the rate is fine right up
+    until the request is too big to answer at all.
+
+    Progress is printed per piece so a long pull shows it is alive -- the failed
+    array printed nothing for 36 minutes and then died.
+    """
+    t0 = np.datetime64(start)
+    t1 = np.datetime64(end)
+    step = np.timedelta64(chunk_days, "D")
+
+    pieces = []
+    at = t0
+    n = int(np.ceil((t1 - t0) / step))
+    k = 0
+    while at < t1:
+        stop = min(at + step, t1)
+        k += 1
+        sub = fetch_current_box(str(at), str(stop), lat_bounds, lon_bounds)
+        pieces.append(sub)
+        if verbose:
+            got = sum(p.sizes["time"] for p in pieces)
+            print(f"  [{k}/{n}] {str(at)[:10]} -> {str(stop)[:10]}  "
+                  f"{sub.sizes['time']:3d} steps  ({got} so far)", flush=True)
+        at = stop
+
+    out = xr.concat(pieces, dim="time").sortby("time")
+
+    # Adjacent pieces share no endpoint because end is exclusive throughout, so
+    # a duplicate here means a piece boundary went wrong rather than the server
+    # serving something twice.
+    times = out["time"].values
+    if times.size != np.unique(times).size:
+        raise AssertionError(
+            f"{times.size - np.unique(times).size} duplicate timestamps after "
+            "concatenating -- the piece boundaries overlap"
+        )
+    return out
 
 
 def fetch_current_box(start: str, end: str, lat_bounds: tuple, lon_bounds: tuple) -> xr.Dataset:
@@ -177,6 +239,17 @@ def write_current_netcdf(start: str, end: str, out, *, force: bool = False):
     the fetch scripts that defaulted to a relative "data" have already written
     raw NetCDF into the synced vault once.
     """
+    tag = f"{start.replace('-', '')}-{end.replace('-', '')}"
+    raw_dir = Path(out) / "raw"
+    existing = raw_dir / f"hycom_{box_tag()}_{tag}.nc"
+    if existing.exists() and not force:
+        # Resume. This endpoint is slow and erratic enough that a bulk pull WILL
+        # be resubmitted, and a resubmit that re-downloads finished windows can
+        # cost more than the original attempt. --force re-fetches.
+        print(f"skip      {existing.name} already exists "
+              f"({existing.stat().st_size / 1e6:.1f} MB) -- pass --force to re-fetch")
+        return existing
+
     estimate = estimate_bytes(start, end)
     if estimate > MAX_BYTES and not force:
         raise SystemExit(
@@ -186,7 +259,7 @@ def write_current_netcdf(start: str, end: str, out, *, force: bool = False):
             "time -- that is what the wind archive did -- or pass --force."
         )
 
-    sub = fetch_current_box(start, end, (LAT_S, LAT_N), (LON_W, LON_E))
+    sub = fetch_current_range(start, end, (LAT_S, LAT_N), (LON_W, LON_E))
 
     # depth was selected, not sliced, so it must not have survived as an axis:
     # a length-1 depth dimension propagates into every downstream sel() and is
@@ -217,10 +290,8 @@ def write_current_netcdf(start: str, end: str, out, *, force: bool = False):
             "means the box is not where you think it is."
         )
 
-    tag = f"{start.replace('-', '')}-{end.replace('-', '')}"
-    raw_dir = Path(out) / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    path = raw_dir / f"hycom_{box_tag()}_{tag}.nc"
+    path = existing
 
     sub.to_netcdf(path)
 
