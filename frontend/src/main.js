@@ -15,6 +15,8 @@ import { ZarrSource, pickTier } from './sources.js';
 import { quiverLayer } from './quiver.js';
 import { windLegend } from './legend.js';
 import { ResultantSource, resultantScale } from './resultant.js';
+import { rasterLayer } from './raster.js';
+import { particleLayer } from './particles.js';
 import { RangeRings, Ruler, addScaleBar, formatDistance } from './measure.js';
 import { PointPanel } from './chart.js';
 import { TYPICAL_CURRENT_MS } from './geo.js';
@@ -225,10 +227,32 @@ async function start() {
   // on 2026-09-18 and neither is reachable from outside the library.
   // src/quiver.js explains why this one cannot do either.
   let quiver = null;
+  let raster = null;
+  let particles = null;
   if (field) {
+    /*
+      Three renderings of the same field, because they answer different
+      questions and a good weather map uses all three:
+
+        raster     WHERE the wind is strong -- continuous, shows the shape
+        particles  THAT it is moving, and which way it turns
+        arrows     WHAT the value is at a real cell centre
+
+      Raster and particles are on by default: together they are what makes
+      the map read as a flow field rather than a lattice. The arrow grid is
+      off by default now -- it was the only rendering, and as the only one it
+      had to carry all three jobs badly.
+    */
+    raster = rasterLayer(field, { maxSpeed: field.valueRange[1] });
+    particles = particleLayer(field, { maxSpeed: field.valueRange[1] });
     quiver = quiverLayer(field, { maxSpeed: field.valueRange[1] });
-    quiver.addTo(map);
-    overlays[field.label] = quiver;
+
+    raster.addTo(map);
+    particles.addTo(map);
+
+    overlays[`${field.label} — speed`] = raster;
+    overlays[`${field.label} — flow`] = particles;
+    overlays[`${field.label} — arrows`] = quiver;
   }
 
   // The remaining three types have no data yet. They are listed as disabled so
@@ -371,7 +395,11 @@ async function start() {
       setStatus('');
     }
 
-    if (field && quiver) quiver.setFrame(frame);
+    if (field) {
+      if (map.hasLayer(raster)) raster.setFrame(frame);
+      if (map.hasLayer(quiver)) quiver.setFrame(frame);
+      particles.setFrame(frame);
+    }
     if (pinned) showSeries(pinned);
   }
   clock.onChange(() => { slider.value = String(clock.index); redraw(); });

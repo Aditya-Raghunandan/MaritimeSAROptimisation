@@ -19,6 +19,7 @@ import L from 'leaflet';
 
 import { beaufort } from './beaufort.js';
 import { MAX_ARROW_PX, arrowLength, speedColour } from './style.js';
+import { normaliseSpeed, viridisCss } from './colormap.js';
 
 /**
  * Speeds to key, derived from the scale rather than fixed.
@@ -51,6 +52,21 @@ export const WindLegend = L.Control.extend({
       + 'aria-label="Collapse">−</button>';
 
     const body = L.DomUtil.create('div', 'legend-body', box);
+
+    // The colour bar for the painted field. It is the dominant thing on the
+    // map now, so keying the arrows alone would leave most of the picture
+    // unexplained. Built from the same normaliseSpeed + viridis the raster
+    // uses, so it cannot describe a different scale from the one on screen.
+    const barWrap = L.DomUtil.create('div', 'legend-bar-wrap', body);
+    const stops = [];
+    for (let k = 0; k <= 10; k += 1) {
+      stops.push(`${viridisCss(normaliseSpeed((k / 10) * this._maxSpeed, this._maxSpeed))} ${k * 10}%`);
+    }
+    barWrap.innerHTML =
+      `<div class="legend-bar" style="background:linear-gradient(to right,${stops.join(',')})"></div>`
+      + `<div class="legend-bar-ends"><span>0</span>`
+      + `<span>${Math.round(this._maxSpeed)} m/s</span></div>`;
+
     for (const s of samplesFor(this._maxSpeed)) {
       const row = L.DomUtil.create('div', 'legend-row', body);
       const b = beaufort(s);
@@ -61,7 +77,7 @@ export const WindLegend = L.Control.extend({
       this._arrow(row.querySelector('canvas'), s);
     }
     const foot = L.DomUtil.create('div', 'legend-foot', body);
-    foot.textContent = 'arrow length and colour both show speed';
+    foot.textContent = 'bar: painted speed · arrows: length and colour, at real cell centres';
 
     const toggle = head.querySelector('.legend-toggle');
     toggle.addEventListener('click', () => {
