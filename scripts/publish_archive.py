@@ -178,8 +178,12 @@ def resolve_token():
 
 
 def publish(src: Path, repo: str, *, private: bool = False, dry_run: bool = False) -> str:
-    from huggingface_hub import HfApi
-
+    # huggingface_hub is imported DOWN THERE, past the guards and past the
+    # dry-run return, not here. It is an optional [publish] extra, so on a
+    # machine that only installed [dev] -- CI, for one -- importing it at the
+    # top of this function makes every guard below unreachable and every one of
+    # their tests fail on a ModuleNotFoundError. Which is exactly what happened
+    # on the first CI run of this branch, 2026-09-18.
     if not src.is_dir():
         raise SystemExit(f"{src} is not a directory -- run sar.viz.archive first")
 
@@ -207,6 +211,8 @@ def publish(src: Path, repo: str, *, private: bool = False, dry_run: bool = Fals
             "  This script takes no --token flag on purpose: a token on a command "
             "line ends up in shell history and in logs."
         )
+
+    from huggingface_hub import HfApi
 
     api = HfApi(token=token)
     who = api.whoami()["name"]

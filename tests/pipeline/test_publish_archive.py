@@ -4,10 +4,9 @@ scripts/ is not an installed package, so it is imported by path, the same way
 tests/pipeline/test_find_current_gaps.py does it.
 
 `huggingface_hub` is an optional [publish] extra and is NOT installed in CI, so
-nothing here may import it. The script imports it inside the functions that
-actually talk to the Hub for exactly that reason, which leaves the two gates
-worth testing -- what gets counted, and what gets refused -- importable and
-testable on their own.
+nothing here may depend on it. The `no_huggingface_hub` fixture below makes it
+unimportable so that dependence cannot creep back in unnoticed -- it did once
+already, on this branch's first CI run.
 """
 
 import importlib.util
@@ -104,28 +103,76 @@ class TestCheckManifests:
         assert publish_archive.check_manifests(tmp_path) == []
 
 
-class TestPublishGuards:
-    """Everything `publish` refuses before it would need a credential."""
+@pytest.fixture
+def no_huggingface_hub(monkeypatch):
+    """Make `import huggingface_hub` fail, as it does on a [dev]-only machine.
 
-    def test_a_missing_source_directory_is_refused(self, tmp_path):
+    This is the whole point of the fixture rather than just trusting that the
+    imports are placed correctly. The first CI run of this branch failed on
+    exactly that: `publish()` imported HfApi on its first line, so every guard
+    below it was unreachable without the optional extra, and the tests passed
+    locally only because the developer machine happened to have it installed.
+
+    A test that only passes when an optional dependency is present is not
+    testing what it claims to.
+    """
+    import builtins
+    real_import = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name == "huggingface_hub" or name.startswith("huggingface_hub."):
+            raise ModuleNotFoundError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+    monkeypatch.delitem(sys.modules, "huggingface_hub", raising=False)
+
+
+class TestTheFixtureItself:
+    """A guard on the guard.
+
+    Every test in TestPublishGuards would also pass if `no_huggingface_hub`
+    quietly did nothing, because the developer machine has the library
+    installed. So pin that the fixture really does block the import, using the
+    one function that is SUPPOSED to need it.
+    """
+
+    def test_the_fixture_really_blocks_the_import(self, no_huggingface_hub):
+        with pytest.raises(ModuleNotFoundError, match="huggingface_hub"):
+            publish_archive.resolve_token()
+
+    def test_and_does_not_block_anything_else(self, no_huggingface_hub):
+        import json as _json
+        assert _json.loads("{}") == {}
+
+
+class TestPublishGuards:
+    """Everything `publish` refuses before it would need a credential.
+
+    Every test here runs with huggingface_hub made unimportable, because none
+    of this may depend on the optional extra.
+    """
+
+    def test_a_missing_source_directory_is_refused(self, tmp_path, no_huggingface_hub):
         with pytest.raises(SystemExit, match="not a directory"):
             publish_archive.publish(tmp_path / "nope", "user/repo")
 
-    def test_a_directory_with_no_store_is_refused(self, tmp_path):
+    def test_a_directory_with_no_store_is_refused(self, tmp_path, no_huggingface_hub):
         with pytest.raises(SystemExit, match="nothing to publish"):
             publish_archive.publish(tmp_path, "user/repo", dry_run=True)
 
-    def test_an_irregular_tier_is_refused_before_anything_else(self, tmp_path):
+    def test_an_irregular_tier_is_refused_before_anything_else(self, tmp_path, no_huggingface_hub):
         src = _manifest(tmp_path, regular=False,
                         gaps=[{"after": "2021-01-01T23:00:00Z", "gap_hours": 1225.0}])
         with pytest.raises(SystemExit, match="refusing to publish"):
             publish_archive.publish(src, "user/repo", dry_run=True)
 
-    def test_dry_run_stops_before_authenticating(self, tmp_path):
-        """No credential, no network: a dry run must work on a bare machine."""
+    def test_dry_run_stops_before_authenticating(self, tmp_path, no_huggingface_hub):
+        """No credential, no network, and not even the library: a dry run must
+        work on a machine that installed only the [dev] extra."""
         assert publish_archive.publish(_manifest(tmp_path), "user/repo", dry_run=True) == ""
 
-    def test_dry_run_writes_no_dataset_card(self, tmp_path):
+    def test_dry_run_writes_no_dataset_card(self, tmp_path, no_huggingface_hub):
         src = _manifest(tmp_path)
         publish_archive.publish(src, "user/repo", dry_run=True)
         assert not (src / "README.md").exists()
