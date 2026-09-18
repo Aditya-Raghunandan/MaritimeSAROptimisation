@@ -213,6 +213,16 @@ async function start() {
   const map = L.map('map', {
     center: dataBounds.getCenter(),
     zoom: 5,
+    /*
+      Fractional zoom. Leaflet steps in whole levels by default, and a whole
+      level is a factor of two -- between the 300 km and 100 km views there was
+      simply no stop, so the right framing of the domain was not reachable.
+      Quarter steps give four intermediate views per level, and the wheel is
+      slowed to match so one notch is one quarter rather than a full jump.
+    */
+    zoomSnap: 0.25,
+    zoomDelta: 0.25,
+    wheelPxPerZoomLevel: 160,
     layers: [BASEMAPS['Dark (field first)']],
     // The study box is 19 deg square. Panning to the Pacific shows nothing and
     // is where every projection problem lives, so the map is held near the
@@ -494,6 +504,22 @@ async function start() {
     place something", and there is no sensible meaning for a click when both
     are listening.
   */
+  const ringControls = document.getElementById('ring-controls');
+  const ringRadius = document.getElementById('ring-radius');
+
+  const rings = new RangeRings(map, {
+    onChange: ({ centre, radiiKm }) => {
+      if (!centre) return;
+      ringRadius.textContent = `${radiiKm[radiiKm.length - 1]} km`;
+      setStatus(
+        `Range rings at ${Math.abs(centre.lat).toFixed(2)} ${centre.lat >= 0 ? 'N' : 'S'}, `
+        + `${Math.abs(centre.lng).toFixed(2)} ${centre.lng >= 0 ? 'E' : 'W'} `
+        + `— ${radiiKm.join(', ')} km. Click to move the datum, drag the dot, `
+        + `or use −/+ . The Gulf Stream covers ~155 km/day.`,
+      );
+    },
+  });
+
   const rulerBtn = document.getElementById('ruler');
   const ringsBtn = document.getElementById('rings');
 

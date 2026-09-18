@@ -56,14 +56,14 @@ export const ParticleLayer = L.Layer.extend({
   initialize(field, opts = {}) {
     this._field = field;
     this._frame = 0;
-    this._count = opts.count ?? 1100;
+    this._count = opts.count ?? 820;
     this._maxSpeed = opts.maxSpeed ?? 20;
     // Pixels per frame that the FASTEST wind should travel. The step is
     // derived from this and the map's current scale, never fixed in seconds.
-    this._targetPx = opts.targetPx ?? 2.4;
-    this._fade = opts.fade ?? 0.955;
+    this._targetPx = opts.targetPx ?? 1.5;
+    this._fade = opts.fade ?? 0.965;
     this._maxAge = opts.maxAgeMs ?? 4200;
-    this._colour = opts.colour ?? 'rgba(255, 255, 255, 0.85)';
+    this._colour = opts.colour ?? 'rgba(255, 255, 255, 0.55)';
     this._particles = [];
     this._raf = null;
   },
@@ -160,7 +160,7 @@ export const ParticleLayer = L.Layer.extend({
     ctx.globalCompositeOperation = 'source-over';
 
     ctx.strokeStyle = this._colour;
-    ctx.lineWidth = 1.3;
+    ctx.lineWidth = 1.05;
     ctx.lineCap = 'round';
     ctx.beginPath();
 

@@ -47,7 +47,7 @@ import L from 'leaflet';
 import { MAX_ARROW_PX, arrowLength, decimation, speedColour } from './style.js';
 
 /** Drawn under every arrow so it stays legible over any basemap tile. */
-const OUTLINE = 'rgba(20, 20, 20, 0.55)';
+const OUTLINE = 'rgba(15, 15, 15, 0.45)';
 
 export const QuiverLayer = L.Layer.extend({
   /**
@@ -135,8 +135,19 @@ export const QuiverLayer = L.Layer.extend({
     ctx.clearRect(0, 0, size.x, size.y);
 
     const g = this._field.grid;
-    const step = decimation(this._cellSpacingPx());
-    const pad = MAX_ARROW_PX;
+    const cellPx = this._cellSpacingPx();
+    const step = decimation(cellPx);
+
+    /*
+      An arrow must never be longer than the gap to its neighbour, or the field
+      reads as a thicket rather than a set of readings. Measured across the
+      zoom range with a fixed 22 px arrow: zoom 6 came out at 0.64 of the
+      spacing, which is where it looked worst. Capping at 0.55 keeps clear air
+      between every pair at every zoom, and it shrinks the arrows when zoomed
+      out -- which is exactly when they were shouting over the painted field.
+    */
+    const maxPx = Math.min(MAX_ARROW_PX, cellPx * step * 0.55);
+    const pad = maxPx;
 
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -154,7 +165,7 @@ export const QuiverLayer = L.Layer.extend({
         const speed = Math.hypot(u, v);
         if (speed < 1e-6) continue;
 
-        const len = arrowLength(speed, this._maxSpeed, MAX_ARROW_PX);
+        const len = arrowLength(speed, this._maxSpeed, maxPx);
         // Screen y grows downward while northward v grows upward, so v is
         // negated here. Getting this wrong mirrors the whole field about the
         // horizontal and still looks entirely plausible.
@@ -171,11 +182,11 @@ export const QuiverLayer = L.Layer.extend({
   _arrow(ctx, x, y, dx, dy, colour) {
     const hx = x + dx;
     const hy = y + dy;
-    const head = Math.min(5, Math.hypot(dx, dy) * 0.5);
+    const head = Math.min(5, Math.hypot(dx, dy) * 0.45);
     const ang = Math.atan2(dy, dx);
     const spread = 0.45;
 
-    for (const [stroke, width] of [[OUTLINE, 3.2], [colour, 1.6]]) {
+    for (const [stroke, width] of [[OUTLINE, 2.8], [colour, 1.5]]) {
       ctx.strokeStyle = stroke;
       ctx.lineWidth = width;
       ctx.beginPath();

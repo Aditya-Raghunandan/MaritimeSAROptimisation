@@ -42,7 +42,11 @@ export const RasterLayer = L.Layer.extend({
     this._field = field;
     this._frame = 0;
     this._maxSpeed = opts.maxSpeed ?? 20;
-    this._opacity = opts.opacity ?? 0.72;
+    // Lower than it was. The raster is the background the streaks and arrows
+    // are read against, and at 0.72 it was competing with them rather than
+    // sitting behind them -- especially over the satellite basemap, where the
+    // sea already carries texture.
+    this._opacity = opts.opacity ?? 0.55;
   },
 
   onAdd(map) {
