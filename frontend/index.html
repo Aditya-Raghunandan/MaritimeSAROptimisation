@@ -74,6 +74,14 @@
       button:hover { border-color: var(--ink-3); color: var(--ink); }
       button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
       #play { min-width: 36px; }
+      #ring-controls { display: inline-flex; align-items: center; gap: 6px; }
+      #ring-controls button { min-width: 30px; padding: 4px 8px; }
+      #ring-radius {
+        color: #ffcc00;
+        font-variant-numeric: tabular-nums;
+        min-width: 62px;
+        text-align: center;
+      }
       #status { color: var(--ink-2); min-height: 1.4em; font-variant-numeric: tabular-nums; }
 
       /*
@@ -350,7 +358,12 @@
         <button id="play" title="Play through the window (space)" aria-label="Play">&#9654;</button>
         <input id="time" type="range" min="0" max="0" value="0" step="1" />
         <button id="ruler" title="Click points on the map to measure distance and bearing">Ruler</button>
-        <button id="rings" title="Range rings at 10, 25, 50 and 100 km">Rings</button>
+        <button id="rings" title="Range rings you can place and resize">Rings</button>
+        <span id="ring-controls" hidden>
+          <button id="ring-smaller" title="Smaller rings (-)">&minus;</button>
+          <span id="ring-radius">&mdash;</span>
+          <button id="ring-bigger" title="Bigger rings (+)">+</button>
+        </span>
       </div>
       <div id="status"></div>
     </footer>

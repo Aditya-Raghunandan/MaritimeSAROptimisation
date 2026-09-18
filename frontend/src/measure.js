@@ -152,11 +152,10 @@ export class RangeRings {
     this.onChange = opts.onChange ?? (() => {});
 
     this._onClick = (e) => this.placeAt(e.latlng);
-    this._onWheel = (e) => {
-      if (!this.active || !this.centre) return;
-      L.DomEvent.stop(e);                 // scroll resizes the rings, not the map
-      this.rescale(e.deltaY < 0 ? 1.25 : 0.8);
-    };
+    // NO WHEEL HANDLER, deliberately. Scroll already means zoom on a map, and
+    // taking it over made the rings resize while the map refused to zoom at
+    // all -- trading one gesture for another rather than adding one. Resizing
+    // is on explicit buttons and on +/-, which collide with nothing.
     this._onKey = (e) => {
       if (!this.active || !this.centre) return;
       if (e.key === '+' || e.key === '=') this.rescale(1.25);
@@ -169,13 +168,11 @@ export class RangeRings {
     if (this.active) {
       this.layer.addTo(this.map);
       this.map.on('click', this._onClick);
-      this.map.getContainer().addEventListener('wheel', this._onWheel, { passive: false });
       document.addEventListener('keydown', this._onKey);
       // Somewhere to start, so the tool is visibly on before the first click.
       this.placeAt(this.map.getCenter());
     } else {
       this.map.off('click', this._onClick);
-      this.map.getContainer().removeEventListener('wheel', this._onWheel);
       document.removeEventListener('keydown', this._onKey);
       this.clear();
       this.map.removeLayer(this.layer);

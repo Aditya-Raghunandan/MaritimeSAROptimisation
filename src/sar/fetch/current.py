@@ -45,6 +45,18 @@ CADENCE_HOURS = 3
 
 # MEASURED over the D014 box, 2026-09-17, by writing the file: 476 LAT x 238 LON
 # x 2 vars x float32 = 885 KB per timestep, nineteen times a wind timestep.
+#
+# THIS IS THE IN-MEMORY SIZE AND IT IS ROUGHLY TWICE WHAT LANDS ON DISK.
+# Measured again 2026-09-18 on a real month: 112 MB for 247 timesteps, so
+# **443 KB per timestep**, exactly half. HYCOM serves water_u/water_v packed as
+# int16 with `scale_factor = 0.001`, xarray decodes to float32 on read and
+# re-applies that encoding on write, so the archive is int16 on disk at 1 mm/s
+# resolution -- far finer than the data is accurate to, so nothing is lost.
+#
+# Consequence: the five-year archive is about **6.6 GB, not the 12.9 GB quoted
+# in D019, D021 and issue #12.** The guard below therefore over-estimates by 2x,
+# which is the safe direction and is left alone deliberately -- it bounds what
+# is HELD IN MEMORY during the pull, which really is the float32 figure.
 # The axes are that way round because latitude is the FINER axis here (0.04 deg
 # against 0.08), which is the opposite of the intuition and is written as
 # "476 x 238" in D019 and issue #12 without saying which is which.
@@ -72,9 +84,22 @@ NAN_FRACTION_MIN, NAN_FRACTION_MAX = 0.02, 0.40
 # The earlier throughput measurement (4.0 s/timestep over a 4-day request) was
 # correct and useless on its own: it established the RATE and said nothing
 # about the largest request the server will serve, and those are different
-# limits. 8 days is 64 timesteps, comfortably inside what succeeded, and small
-# enough that a timeout costs minutes rather than half an hour.
-REQUEST_DAYS = 8
+# limits.
+#
+# REVISED THE SAME EVENING: 8 days (64 steps, 29 MB per variable) ALSO times out
+#
+#     Read timed out; water_v -- 220:283,0:0,2425:2900,3475:3712
+#
+# while 4 days (32 steps, 14.5 MB) went through in 128 s. xarray retries, so a
+# too-big piece does eventually land, but each retry costs a full server
+# timeout and the task runs out of wall clock instead of failing cleanly.
+#
+# 2 days = 16 steps = 7.3 MB per variable, half the largest size observed to
+# work. A deliberate margin, not timidity: throughput here varies by almost an
+# order of magnitude between runs (4.0 s/timestep measured clean, 35 s on the
+# first 3-day pull), so a size that only just works on a good day will not
+# survive a bad one.
+REQUEST_DAYS = 2
 
 
 def open_current_dataset() -> xr.Dataset:

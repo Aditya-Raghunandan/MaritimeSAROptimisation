@@ -379,14 +379,18 @@ async function start() {
       : '');
   });
 
+  const ringControls = document.getElementById('ring-controls');
+  const ringRadius = document.getElementById('ring-radius');
+
   const rings = new RangeRings(map, {
     onChange: ({ centre, radiiKm }) => {
       if (!centre) return;
+      ringRadius.textContent = `${radiiKm[radiiKm.length - 1]} km`;
       setStatus(
         `Range rings at ${Math.abs(centre.lat).toFixed(2)} ${centre.lat >= 0 ? 'N' : 'S'}, `
         + `${Math.abs(centre.lng).toFixed(2)} ${centre.lng >= 0 ? 'E' : 'W'} `
-        + `— ${radiiKm.join(', ')} km. Drag the dot to move, scroll or +/- to resize. `
-        + `The Gulf Stream covers ~155 km/day.`,
+        + `— ${radiiKm.join(', ')} km. Click to move the datum, drag the dot, `
+        + `or use −/+ . The Gulf Stream covers ~155 km/day.`,
       );
     },
   });
@@ -394,8 +398,14 @@ async function start() {
   document.getElementById('rings').addEventListener('click', (e) => {
     const on = rings.toggle();
     e.target.classList.toggle('on', on);
+    // Resizing lives on buttons, not the wheel: scroll already means zoom on a
+    // map, and taking it over stopped the map zooming at all while rings were
+    // on -- swapping one gesture for another instead of adding one.
+    ringControls.hidden = !on;
     if (!on) setStatus('');
   });
+  document.getElementById('ring-bigger').addEventListener('click', () => rings.rescale(1.25));
+  document.getElementById('ring-smaller').addEventListener('click', () => rings.rescale(0.8));
 
   map.on('click', (e) => {
     // The ruler and the rings each own the click while they are on, so a
