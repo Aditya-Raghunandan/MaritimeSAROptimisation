@@ -9,8 +9,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { ALPHA, ResultantSource, resultantScale } from './resultant.js';
-import { Grid } from './layers.js';
+import { ALPHA, ResultantSource, resultantScale } from '../src/resultant.js';
+import { Grid } from '../src/layers.js';
 
 const WIND_GRID = new Grid({ lat0: 17, dlat: 0.25, nlat: 77, lon0: -82, dlon: 0.25, nlon: 77 });
 const CUR_GRID = new Grid({ lat0: 17, dlat: 0.04, nlat: 476, lon0: -82, dlon: 0.08, nlon: 238 });

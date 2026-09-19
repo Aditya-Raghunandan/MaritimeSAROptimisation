@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { BEAUFORT, beaufort, describe as describeWind, detectionOutlook } from './beaufort.js';
+import { BEAUFORT, beaufort, describe as describeWind, detectionOutlook } from '../src/beaufort.js';
 
 describe('the scale itself', () => {
   it('runs 0 to 12 with no gaps', () => {

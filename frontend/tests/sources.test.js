@@ -43,7 +43,7 @@ vi.mock('zarrita', () => {
   };
 });
 
-const { BufferSource, ZarrSource, pickTier } = await import('./sources.js');
+const { BufferSource, ZarrSource, pickTier } = await import('../src/sources.js');
 
 const GRID = { nlat: 2, nlon: 3 };
 

@@ -9,8 +9,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { SPEED_RAMP, decimation, speedColour } from './style.js';
-import { Grid } from './layers.js';
+import { SPEED_RAMP, decimation, speedColour } from '../src/style.js';
+import { Grid } from '../src/layers.js';
 
 describe('speedColour', () => {
   it('maps zero to the lightest step and the maximum to the darkest', () => {

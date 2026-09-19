@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { FieldLayer, Grid, TrackLayer, buildLayer } from './layers.js';
+import { FieldLayer, Grid, TrackLayer, buildLayer } from '../src/layers.js';
 
 const GRID = { lat0: 17, dlat: 0.25, nlat: 3, lon0: -82, dlon: 0.25, nlon: 4 };
 

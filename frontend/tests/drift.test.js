@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ALPHA, bearingFrom, bearingTowards, compass, leewayDistance,
   leewayFractionOfCurrent, leewaySpeed, speed, summarise,
-} from './drift.js';
+} from '../src/drift.js';
 
 describe('ALPHA', () => {
   it('is 2 %, matching the Python side', () => {
