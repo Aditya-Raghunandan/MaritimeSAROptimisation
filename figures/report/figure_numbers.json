@@ -1,0 +1,67 @@
+{
+  "wind_rose": {
+    "figure": "figures\\report\\wind_rose_study_period.png",
+    "n": 43824,
+    "mean_direction_from_deg": 105.94938679896437,
+    "directional_constancy": 0.5427585386330851,
+    "dominant_sector_deg": 100.0,
+    "dominant_sector_share": 0.07749178532311063,
+    "speed_mean_ms": 3.498428004353153,
+    "steadiness": 0.5912100310382846
+  },
+  "speed_histogram_boxmean": {
+    "figure": "figures\\report\\speed_histogram_boxmean.png",
+    "n": 43824,
+    "mean_ms": 3.498428004353153,
+    "median_ms": 3.396785259246826,
+    "p90_ms": 5.590450239181519,
+    "p99_ms": 7.8767683410644365,
+    "max_ms": 9.7125883102417,
+    "fraction_above_threshold": 0.0,
+    "leeway_at_mean_ms": 0.06996856008706306
+  },
+  "seasonal_cycle": {
+    "figure": "figures\\report\\seasonal_cycle_study_period.png",
+    "windiest_month": 12,
+    "windiest_mean_ms": 4.259820271088111,
+    "calmest_month": 9,
+    "calmest_mean_ms": 2.9529290268958235,
+    "seasonal_range_ms": 1.306891244192287,
+    "within_month_sd_ms": 1.4963811122924557,
+    "range_over_within_month_sd": 0.8733679097232989
+  },
+  "speed_histogram_percell": {
+    "figure": "figures\\report\\speed_histogram_percell.png",
+    "n": 1849848,
+    "mean_ms": 6.714520926140651,
+    "median_ms": 6.583302021026611,
+    "p90_ms": 10.870028495788574,
+    "p99_ms": 13.961679458618164,
+    "max_ms": 22.19554328918457,
+    "fraction_above_threshold": 0.1667526196746976,
+    "leeway_at_mean_ms": 0.134290418522813,
+    "files": [
+      "era5_17-36N_82-63W_20210101-20210108.nc",
+      "era5_17-36N_82-63W_20210301-20210302.nc",
+      "era5_17-36N_82-63W_20210301-20210303.nc"
+    ],
+    "hours": 312
+  },
+  "boxmean_vs_percell": {
+    "hours_compared": 312,
+    "files": [
+      "era5_17-36N_82-63W_20210101-20210108.nc",
+      "era5_17-36N_82-63W_20210301-20210302.nc",
+      "era5_17-36N_82-63W_20210301-20210303.nc"
+    ],
+    "boxmean_max_ms": 5.859334468841553,
+    "percell_max_ms": 22.19554328918457,
+    "max_ratio": 3.788065591274028,
+    "boxmean_mean_ms": 2.804442882537842,
+    "percell_mean_ms": 6.714520926140651,
+    "mean_ratio": 2.3942441359563142,
+    "boxmean_fraction_above_10ms": 0.0,
+    "percell_fraction_above_10ms": 0.1667526196746976,
+    "claim": "over identical hours, a box mean across 19 deg x 19 deg understates both the peak wind and the fraction of the field in the leeway-relevant band, because opposing flows cancel in the vector average"
+  }
+}

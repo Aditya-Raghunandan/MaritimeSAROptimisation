@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Maritime SAR — drift and search</title>
+    <style>
+      /*
+        Dark chrome, light map. The chrome was white and it dominated: the map
+        is the thing being read, and a bright frame around it competes for
+        attention and drags the eye off the data.
+
+        Surfaces and ink are the documented dark-mode tokens, and the accent is
+        the dark-mode step of categorical slot 1 -- the same set the wind ramp
+        in style.js was chosen against, so the orange arrows sit on a surface
+        that was validated with them rather than one picked to match.
+      */
+      :root {
+        --surface-0: #121211;   /* page */
+        --surface-1: #1a1a19;   /* panels */
+        --surface-2: #262624;   /* raised: tiles, buttons */
+        --ink:       #ffffff;
+        --ink-2:     #c3c2b7;
+        --ink-3:     #8a8a80;
+        --line:      #3a3a37;
+        --accent:    #3987e5;
+        --warm:      #eb6834;   /* the wind ramp's anchor hue */
+        --pending:   #6f6f66;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: var(--ink);
+        background: var(--surface-0);
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        height: 100vh;
+      }
+
+      header {
+        display: flex;
+        align-items: baseline;
+        gap: 16px;
+        padding: 9px 14px;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface-1);
+      }
+      header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+      #stamp { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); }
+      #provenance { margin-left: auto; color: var(--ink-3); font-size: 11px; }
+
+      .map-wrap { position: relative; min-height: 0; }
+      #map { width: 100%; height: 100%; background: #0d1a26; }
+
+      footer {
+        border-top: 1px solid var(--line);
+        background: var(--surface-1);
+        padding: 9px 14px 11px;
+        display: grid;
+        gap: 6px;
+      }
+      .controls { display: flex; align-items: center; gap: 10px; }
+      #time { flex: 1; accent-color: var(--accent); }
+      button {
+        font: inherit;
+        padding: 4px 11px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--surface-2);
+        color: var(--ink-2);
+        cursor: pointer;
+      }
+      button:hover { border-color: var(--ink-3); color: var(--ink); }
+      button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+      #play { min-width: 36px; }
+      #ring-controls { display: inline-flex; align-items: center; gap: 6px; }
+      #ring-controls button { min-width: 30px; padding: 4px 8px; }
+      #ring-radius {
+        color: #ffcc00;
+        font-variant-numeric: tabular-nums;
+        min-width: 62px;
+        text-align: center;
+      }
+      #status { color: var(--ink-2); min-height: 1.4em; font-variant-numeric: tabular-nums; }
+
+      /*
+        The point panel floats OVER the map rather than living in the footer.
+        In the footer it changed the footer's height, which resized the map,
+        which moved the very cell that had just been clicked out from under the
+        pointer.
+      */
+      #point {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        width: 440px;
+        max-width: calc(100% - 24px);
+        max-height: calc(100% - 24px);
+        overflow: hidden auto;
+        z-index: 1000;
+        background: var(--surface-1);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+        display: none;
+      }
+      #point.visible { display: block; }
+      .point-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 10px 9px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      .point-title { font-weight: 600; font-variant-numeric: tabular-nums; }
+      .point-sub { color: var(--ink-3); font-size: 11px; }
+      #point-close {
+        margin-left: auto;
+        border: none;
+        background: transparent;
+        color: var(--ink-3);
+        font-size: 17px;
+        line-height: 1;
+        padding: 2px 6px;
+      }
+      #point-close:hover { color: var(--ink); background: var(--surface-2); }
+
+      .tiles {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        background: var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      .tile { background: var(--surface-1); padding: 8px 10px 9px; }
+      .tile-label {
+        color: var(--ink-3);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: .5px;
+      }
+      .tile-value {
+        font-size: 17px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        margin-top: 1px;
+      }
+      .tile-value .unit { font-size: 11px; font-weight: 400; color: var(--ink-3); margin-left: 2px; }
+      .tile-value.warm { color: var(--warm); }
+      .tile-sub { color: var(--ink-3); font-size: 10px; margin-top: 2px; line-height: 1.25; }
+
+      /*
+        Collapsible sections use <details>, which brings keyboard and
+        screen-reader behaviour with it. A div plus a click handler brings
+        neither.
+      */
+      details.section { border-top: 1px solid var(--line); }
+      details.section > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 9px 12px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .5px;
+        color: var(--ink-3);
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      details.section > summary::-webkit-details-marker { display: none; }
+      details.section > summary::before { content: '\25B8'; font-size: 9px; }
+      details.section[open] > summary::before { content: '\25BE'; }
+      details.section > summary:hover { color: var(--ink-2); }
+      .section-body { padding: 0 12px 11px; }
+
+      .lead { margin: 0; color: var(--ink); font-size: 12.5px; line-height: 1.45; }
+      .caveat { margin: 7px 0 0; color: var(--ink-3); font-size: 11px; line-height: 1.45; }
+
+      .outlook {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 8px;
+        padding: 3px 9px;
+        border-radius: 999px;
+        font-size: 11px;
+      }
+      .outlook::before { content: ''; width: 7px; height: 7px; border-radius: 50%; }
+      .outlook.good { background: rgba(12,163,12,.14); color: #6ede6e; }
+      .outlook.good::before { background: #0ca30c; }
+      .outlook.degraded { background: rgba(237,161,0,.14); color: #f0c04a; }
+      .outlook.degraded::before { background: #eda100; }
+      .outlook.poor { background: rgba(227,73,72,.14); color: #f08a89; }
+      .outlook.poor::before { background: #e34948; }
+
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 2px 0;
+        font-variant-numeric: tabular-nums;
+      }
+      .row .k { color: var(--ink-2); }
+      .row .v { font-weight: 600; }
+      .row.pending .v { color: var(--pending); font-weight: 400; font-style: italic; }
+
+      .wind-legend {
+        background: rgba(26, 26, 25, .92);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        color: var(--ink-2);
+        font-size: 11px;
+        min-width: 172px;
+      }
+      .legend-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 5px 6px 5px 9px;
+        font-weight: 600;
+        color: var(--ink);
+        border-bottom: 1px solid var(--line);
+      }
+      .wind-legend.collapsed .legend-head { border-bottom: none; }
+      .legend-toggle {
+        border: none; background: transparent; color: var(--ink-3);
+        font-size: 14px; line-height: 1; padding: 1px 5px; cursor: pointer;
+      }
+      .legend-toggle:hover { color: var(--ink); }
+      .legend-body { padding: 6px 9px 7px; }
+      .legend-bar-wrap { margin-bottom: 7px; }
+      .legend-bar {
+        height: 9px;
+        border-radius: 2px;
+        border: 1px solid rgba(255, 255, 255, .14);
+      }
+      .legend-bar-ends {
+        display: flex;
+        justify-content: space-between;
+        color: var(--ink-3);
+        font-size: 10px;
+        font-variant-numeric: tabular-nums;
+        margin-top: 2px;
+      }
+      .wind-legend.collapsed .legend-body { display: none; }
+      .legend-row {
+        display: grid;
+        grid-template-columns: 46px 24px 1fr;
+        align-items: center;
+        gap: 7px;
+        padding: 1px 0;
+      }
+      .legend-speed { font-variant-numeric: tabular-nums; text-align: right; color: var(--ink); }
+      .legend-name { color: var(--ink-3); white-space: nowrap; }
+      .legend-foot {
+        margin-top: 5px; padding-top: 5px;
+        border-top: 1px solid var(--line);
+        color: var(--ink-3); font-size: 10px;
+      }
+
+      /*
+        Distance written on the leg itself. The ruler used to report only into
+        the status line, which is the easiest thing on the page to miss.
+      */
+      .leg-label {
+        background: rgba(227, 73, 72, .93);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        padding: 1px 6px;
+        border-radius: 4px;
+        white-space: nowrap;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
+      }
+      .leg-label.total {
+        background: rgba(18, 18, 17, .95);
+        border: 1px solid #e34948;
+      }
+
+      .domain-label {
+        color: var(--ink-2);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: .4px;
+        text-transform: uppercase;
+        white-space: nowrap;
+        text-shadow: 0 0 4px #000, 0 0 6px #000;
+      }
+
+      .measuring { cursor: crosshair; }
+      .ring-label {
+        color: #ffcc00;
+        font-size: 10px;
+        font-weight: 600;
+        /* Dark halo, not white: the default basemap is dark now, and a white
+           glow around yellow text on near-black is a smear. */
+        text-shadow: 0 0 3px #000, 0 0 4px #000;
+        white-space: nowrap;
+      }
+
+      /* uPlot ships light-mode styling; re-point it at the dark surface. */
+      .u-legend { color: var(--ink-2); font-size: 11px; }
+      .u-legend .u-marker { border-color: var(--warm) !important; }
+      .u-title { color: var(--ink-2); font-size: 11px; font-weight: 400; }
+      .u-select { background: rgba(57, 135, 229, .18); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Maritime SAR</h1>
+      <span id="stamp">—</span>
+      <span id="provenance"></span>
+    </header>
+
+    <div class="map-wrap">
+      <div id="map"></div>
+
+      <aside id="point" aria-live="polite">
+        <div class="point-head">
+          <div>
+            <div class="point-title" id="point-where">—</div>
+            <div class="point-sub" id="point-when">—</div>
+          </div>
+          <button id="point-close" title="Close (Esc)" aria-label="Close">&times;</button>
+        </div>
+
+        <div class="tiles">
+          <div class="tile">
+            <div class="tile-label">Wind now</div>
+            <div class="tile-value warm" id="t-speed">&mdash;<span class="unit">m/s</span></div>
+            <div class="tile-sub" id="t-force">&mdash;</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label">Blowing from</div>
+            <div class="tile-value" id="t-dir">&mdash;</div>
+            <div class="tile-sub" id="t-towards">&mdash;</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label">Window mean</div>
+            <div class="tile-value" id="t-mean">&mdash;<span class="unit">m/s</span></div>
+            <div class="tile-sub" id="t-range">&mdash;</div>
+          </div>
+        </div>
+
+        <details class="section" open>
+          <summary>What this wind would do</summary>
+          <div class="section-body">
+            <p class="lead" id="d-lead">&mdash;</p>
+            <div class="outlook" id="d-outlook">&mdash;</div>
+            <p class="caveat" id="d-caveat">&mdash;</p>
+          </div>
+        </details>
+
+        <details class="section" open>
+          <summary>Wind speed across the loaded window</summary>
+          <div class="section-body" style="padding-left: 2px; padding-right: 6px;">
+            <div id="chart"></div>
+          </div>
+        </details>
+
+        <details class="section">
+          <summary>The numbers behind it</summary>
+          <div class="section-body">
+            <div class="row"><span class="k">Sea state</span><span class="v" id="d-sea">&mdash;</span></div>
+            <div class="row"><span class="k">Leeway (&alpha; = 2 %)</span><span class="v" id="d-leeway">&mdash;</span></div>
+            <div class="row"><span class="k">Downwind in 6 h</span><span class="v" id="d-6h">&mdash;</span></div>
+            <div class="row"><span class="k">Downwind in 24 h</span><span class="v" id="d-24h">&mdash;</span></div>
+            <div class="row"><span class="k">Set towards</span><span class="v" id="d-set">&mdash;</span></div>
+            <div class="row"><span class="k">vs 1.8 m/s current</span><span class="v" id="d-vscurrent">&mdash;</span></div>
+            <div class="row pending"><span class="k">Surface current</span><span class="v">awaiting HYCOM pull</span></div>
+            <div class="row pending"><span class="k">Stochastic term &eta;</span><span class="v">awaiting the engine</span></div>
+            <div class="row pending"><span class="k">Total drift &amp; POC</span><span class="v">awaiting the engine</span></div>
+          </div>
+        </details>
+      </aside>
+    </div>
+
+    <footer>
+      <div class="controls">
+        <button id="play" title="Play through the window (space)" aria-label="Play">&#9654;</button>
+        <input id="time" type="range" min="0" max="0" value="0" step="1" />
+        <button id="ruler" title="Click points on the map to measure distance and bearing">Ruler</button>
+        <button id="rings" title="Range rings you can place and resize">Rings</button>
+        <span id="ring-controls" hidden>
+          <button id="ring-smaller" title="Smaller rings (-)">&minus;</button>
+          <span id="ring-radius">&mdash;</span>
+          <button id="ring-bigger" title="Bigger rings (+)">+</button>
+        </span>
+      </div>
+      <div id="status"></div>
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

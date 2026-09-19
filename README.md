@@ -11,13 +11,17 @@ performs the modelling; the frontend visualises the resulting probability map.
 ## Structure
 
 ```
-src/sar/            Importable Python package; imported as `sar.model`, etc.
-  fetch/            HYCOM, ERA5 and GDP drifter retrieval code
+src/sar/            Importable Python package; imported as `sar.fetch`, etc.
+  fetch/            HYCOM, ERA5 and GDP drifter retrieval
   model/            Drift equation, leeway parameterisation and Monte Carlo sampling
-  pipeline/         Normalisation of raw data to Parquet and Zarr formats
-  utils/
+  pipeline/         Normalisation of raw data to Parquet and Zarr
+  utils/            geo (coordinate conventions), data_io (the read half),
+                    interpolation, shutdown
+  viz/              fields (matplotlib renderers), export (one window as a flat
+                    bundle), archive (the whole archive as multi-resolution Zarr),
+                    drifters (trajectories as Parquet)
 frontend/           JavaScript application, with its own package.json
-scripts/            Helper utilities and experiments; not imported and not tested
+scripts/            Helper utilities, Slurm job scripts and experiments; not imported
   experiments/
 tests/              Pytest suite, organised to mirror src/sar
 data/               raw/ and processed/ subdirectories; tracked, though their contents
@@ -25,11 +29,37 @@ data/               raw/ and processed/ subdirectories; tracked, though their co
 figures/
   report/           Tracked; deliverable figures, indexed in FIGURES.md
   reference/        Not tracked; reference imagery not owned by the project
-env/                Setup notes for local and cluster environments
 docs/               In-repository documentation (distinct from the decision vault; see
                     below)
 .github/workflows/  Continuous integration configuration
 ```
+
+## Where the data is
+
+Nothing large is in this repository, by construction rather than by discipline.
+
+| | Lives at |
+|---|---|
+| Raw archive | the cluster, `/home/26p67/data/raw/` — regenerable, never committed |
+| Published copy | `huggingface.co/datasets/AdityaRugs/MaritimeSARoperations` |
+| The site | GitHub Pages, code only |
+
+The published copy is a **derived, downsampled** copy for the website; the raw
+NetCDF on the cluster remains what analysis reads. Schemas, conventions and the
+reasoning are in [`docs/viz-export.md`](docs/viz-export.md).
+
+## Documentation
+
+| | |
+|---|---|
+| [`docs/current-fetch.md`](docs/current-fetch.md) | HYCOM retrieval, the D020 raw tier, and the OPeNDAP request-size ceiling |
+| [`docs/viz-export.md`](docs/viz-export.md) | what the website reads: Zarr layout, Parquet trajectories, conventions |
+| [`docs/linear_time_interpolation.md`](docs/linear_time_interpolation.md) | time interpolation and the `ForcingProvider` interface |
+| [`docs/issue-template.md`](docs/issue-template.md) | the Context / Scope / Acceptance criteria shape issues take here |
+| [`docs/ADR001.md`](docs/ADR001.md) | architecture decision record |
+
+Decisions, concepts and the limitations register live in the separate vault,
+which is not version controlled and not public.
 
 ## Setup
 
@@ -38,7 +68,7 @@ docs/               In-repository documentation (distinct from the decision vaul
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev]"          # add ".[dev,publish]" to upload to Hugging Face
 ```
 
 This installs the `sar` package in editable mode, such that `scripts/`, `tests/` and, in
