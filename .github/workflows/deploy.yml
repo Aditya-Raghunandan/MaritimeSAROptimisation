@@ -1,0 +1,79 @@
+name: Deploy site
+
+# Publishes the frontend to GitHub Pages on every push to main.
+#
+# CODE ONLY. The data is not here and must never be: the site reads the Zarr
+# stores and Parquet from Hugging Face over HTTPS, which is what keeps
+# "no data in the repo" true by construction rather than by discipline. The
+# artifact this uploads is a few hundred kilobytes of JavaScript plus the codec
+# wasm that zarrita fetches on demand.
+
+on:
+  push:
+    branches: [main]
+  # So a broken deploy can be re-run without an empty commit.
+  workflow_dispatch:
+
+# Pages needs these; the default GITHUB_TOKEN has neither.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and let a newer push win. `cancel-in-progress: false`
+# would queue them and publish an older build after a newer one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      # The site is worthless if the field maths is wrong, and this is the
+      # last gate before it is public.
+      - run: npm test
+
+      - run: npm run build
+        env:
+          # A project site lives at /<repo>/, not at the domain root. Without
+          # this every asset 404s and the page renders blank with no error.
+          VITE_BASE: /${{ github.event.repository.name }}/
+          # Where the published archive lives. Set here rather than in the
+          # source so a fork or a local checkout still defaults to ./data.
+          VITE_DATA_BASE: https://huggingface.co/datasets/AdityaRugs/MaritimeSARoperations/resolve/main
+          # Public by design -- a browser fetches the tiles, so this key travels
+          # in the URL and is visible to anyone. It is a repository SECRET only
+          # so it is not in the source; what actually protects it is the domain
+          # restriction on the CARTO dashboard. Absent, the CARTO basemaps are
+          # omitted and the site opens on Esri Ocean -- omitted rather than left
+          # unkeyed, because CARTO serves an unkeyed tile with a watermark
+          # across it and a watermarked default looks broken.
+          VITE_CARTO_KEY: ${{ secrets.CARTO_KEY }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
