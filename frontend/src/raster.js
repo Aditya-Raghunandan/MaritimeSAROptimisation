@@ -31,7 +31,7 @@
 
 import L from 'leaflet';
 
-import { normaliseSpeed, viridis } from './colormap.js';
+import { VIRIDIS, normaliseSpeed, ramp } from './colormap.js';
 import { isFrameReady } from './sources.js';
 
 export const RasterLayer = L.Layer.extend({
@@ -48,6 +48,10 @@ export const RasterLayer = L.Layer.extend({
     // sitting behind them -- especially over the satellite basemap, where the
     // sea already carries texture.
     this._opacity = opts.opacity ?? 0.55;
+    // Per product. Wind is viridis; current is magma, whose near-black low end
+    // lets the two thirds of the box under 0.3 m/s recede so the Gulf Stream
+    // is the only bright thing on the map.
+    this._ramp = opts.ramp ?? VIRIDIS;
   },
 
   onAdd(map) {
@@ -125,7 +129,7 @@ export const RasterLayer = L.Layer.extend({
       for (let i = 0; i < g.nlon; i += 1) {
         const [u, v] = this._field.vector(this._frame, row, i);
         const at = (j * g.nlon + i) * 4;
-        const c = viridis(normaliseSpeed(Math.hypot(u, v), this._maxSpeed));
+        const c = ramp(this._ramp, normaliseSpeed(Math.hypot(u, v), this._maxSpeed));
         if (!c) { img.data[at + 3] = 0; continue; }   // NaN -> transparent, not calm
         img.data[at] = c[0];
         img.data[at + 1] = c[1];

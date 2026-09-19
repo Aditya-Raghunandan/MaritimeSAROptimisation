@@ -13,9 +13,11 @@ import { Clock } from './clock.js';
 import { buildLayer } from './layers.js';
 import { ZarrSource, pickTier, residentSpanOf } from './sources.js';
 import { quiverLayer } from './quiver.js';
-import { windLegend } from './legend.js';
+import { currentLegend, windLegend } from './legend.js';
 import { ResultantSource, resultantScale } from './resultant.js';
 import { rasterLayer } from './raster.js';
+import { MAGMA } from './colormap.js';
+import { CURRENT_RAMP } from './style.js';
 import { particleLayer } from './particles.js';
 import { domainLabel, domainMask } from './domain.js';
 import { RangeRings, Ruler, addScaleBar, formatDistance } from './measure.js';
@@ -407,7 +409,7 @@ async function start() {
     // in frame, and no further.
     // Held close to the study box. A 19 deg domain does not need the globe,
     // and every projection problem we have hit lived out past the edge of it.
-    maxBounds: dataBounds.pad(0.25),
+    maxBounds: dataBounds.pad(0.12),
     maxBoundsViscosity: 1.0,
     minZoom: 5,
     maxZoom: 11,
@@ -415,7 +417,22 @@ async function start() {
     // itself at a longitude 360 deg away from its data.
     worldCopyJump: false,
   });
-  map.fitBounds(dataBounds);
+  /*
+    Open on a slightly narrower box than the data.
+
+    fitBounds on the full domain leaves a wide screen showing the Gulf of
+    Mexico and a lot of Texas either side of a study area that is entirely at
+    sea. Trimming 7 % of the longitude on each side for the OPENING view only
+    puts the Gulf Stream and the Bahamas across the middle of the frame, which
+    is what the map is about. The data, the mask and the domain label are
+    untouched -- this is framing, not cropping, and panning still reaches the
+    full box.
+  */
+  const lonInset = (lonMax - lonMin) * 0.07;
+  map.fitBounds(L.latLngBounds(
+    [latMin, lonMin + lonInset],
+    [latMax, lonMax - lonInset],
+  ));
   LABELS.addTo(map);
 
   // Dim the world outside the forcing domain. The painted field is a hard-edged
@@ -521,9 +538,51 @@ async function start() {
     product it was handed, and this is the first time two products prove it.
   */
   if (current) {
-    currentRaster = rasterLayer(current.layer, { maxSpeed: current.layer.valueRange[1] });
-    currentParticles = particleLayer(current.layer, { maxSpeed: current.layer.valueRange[1] });
-    currentQuiver = quiverLayer(current.layer, { maxSpeed: current.layer.valueRange[1] });
+    /*
+      DELIBERATELY NOT THE SAME LOOK AS THE WIND.
+
+      The two were painted identically and could not be told apart at a glance,
+      which on a projector across a room is the only glance anyone gets. They
+      are different quantities on different grids at different cadences, and
+      they now differ in every channel a viewer reads:
+
+        ramp     magma against wind's viridis -- opposite ends of the
+                 sequential-ramp space, and magma's near-black low end lets the
+                 slow two thirds of the box recede so the JET GLOWS
+        arrows   cyan against wind's amber, and drawn 45 % heavier, because
+                 weight survives greyscale and colour-blindness where hue does
+                 not -- the same redundancy that already encodes speed as both
+                 colour and length
+        streaks  cyan, FEWER, SLOWER, longer-lived, longer-trailed. Physically
+                 honest rather than decorative: a western-boundary current is
+                 slower than the wind above it but far more persistent and
+                 laminar, so long coherent streaks are what it looks like.
+    */
+    const cMax = current.layer.valueRange[1];
+    currentRaster = rasterLayer(current.layer, { maxSpeed: cMax, ramp: MAGMA });
+    currentParticles = particleLayer(current.layer, {
+      maxSpeed: cMax,
+      rgb: [124, 232, 255],
+      count: 430,
+      trail: 18,
+      maxAgeMs: 9000,
+      alpha: 0.82,
+    });
+    currentQuiver = quiverLayer(current.layer, {
+      maxSpeed: cMax, ramp: CURRENT_RAMP, weight: 1.45,
+    });
+
+    // Its own key, shown only while a current layer is on. Two legends stacked
+    // permanently would take a quarter of the map to explain a layer that is
+    // off by default.
+    const cLegend = currentLegend({ maxSpeed: cMax });
+    const currentLayers = () => [currentRaster, currentQuiver, currentParticles];
+    const syncCurrentLegend = () => {
+      const anyOn = currentLayers().some((l) => l && map.hasLayer(l));
+      if (anyOn && !cLegend._map) cLegend.addTo(map);
+      else if (!anyOn && cLegend._map) map.removeControl(cLegend);
+    };
+    map.on('overlayadd overlayremove', syncCurrentLegend);
 
     overlays[`${current.layer.label} — speed`] = currentRaster;
     overlays[`${current.layer.label} — flow`] = currentParticles;

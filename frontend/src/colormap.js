@@ -26,11 +26,41 @@
  * mistaken for the other.
  */
 
+/*
+ * TWO RAMPS, BECAUSE THERE ARE NOW TWO FIELDS.
+ *
+ * Wind and current were painted identically and could not be told apart at a
+ * glance -- on a projector, across a room, that is the only glance anyone
+ * gets. They are different physical quantities on different grids at different
+ * cadences and they must not share a visual language.
+ *
+ * Wind keeps VIRIDIS. Current gets MAGMA, and the choice is not arbitrary:
+ *
+ *   - It is the furthest thing from viridis that is still a proper sequential
+ *     ramp. Monotonic in OKLab lightness (0.074 -> 0.983, strictly rising),
+ *     colour-blind safe, and it survives greyscale for the report, which is
+ *     the same gate viridis had to pass.
+ *   - Its dark end is near-black, so the two thirds of the box where the
+ *     current is under 0.3 m/s recede into the sea and THE GULF STREAM GLOWS.
+ *     For wind, where the interesting structure is spread over the whole
+ *     domain, that would hide data; for a western-boundary current, where the
+ *     entire point is one narrow jet, it is the picture.
+ */
+
 /** Viridis anchors, evenly spaced over [0, 1]. */
-const VIRIDIS = [
+export const VIRIDIS = [
   [68, 1, 84], [72, 40, 120], [62, 73, 137], [49, 104, 142], [38, 130, 142],
   [31, 158, 137], [53, 183, 121], [110, 206, 88], [181, 222, 43], [253, 231, 37],
 ];
+
+/** Magma anchors, evenly spaced over [0, 1]. The current's ramp. */
+export const MAGMA = [
+  [0, 0, 4], [28, 16, 68], [79, 18, 123], [129, 37, 129], [181, 54, 122],
+  [229, 80, 100], [251, 135, 97], [254, 194, 135], [252, 253, 191],
+];
+
+/** Named ramps, so a layer can be handed one by name from its manifest. */
+export const RAMPS = { viridis: VIRIDIS, magma: MAGMA };
 
 /**
  * Colour for a normalised value in [0, 1], as [r, g, b].
@@ -39,13 +69,13 @@ const VIRIDIS = [
  * than wrap: a wrapped colour scale makes the strongest wind on the map look
  * like the calmest.
  */
-export function viridis(t) {
+export function ramp(anchors, t) {
   if (!Number.isFinite(t)) return null;          // NaN is absent, not zero
-  const x = Math.min(Math.max(t, 0), 1) * (VIRIDIS.length - 1);
-  const i = Math.min(Math.floor(x), VIRIDIS.length - 2);
+  const x = Math.min(Math.max(t, 0), 1) * (anchors.length - 1);
+  const i = Math.min(Math.floor(x), anchors.length - 2);
   const f = x - i;
-  const a = VIRIDIS[i];
-  const b = VIRIDIS[i + 1];
+  const a = anchors[i];
+  const b = anchors[i + 1];
   return [
     Math.round(a[0] + f * (b[0] - a[0])),
     Math.round(a[1] + f * (b[1] - a[1])),
@@ -53,10 +83,20 @@ export function viridis(t) {
   ];
 }
 
+/** The wind's ramp. Kept by name because most callers only ever want it. */
+export function viridis(t) {
+  return ramp(VIRIDIS, t);
+}
+
+/** Any ramp as a CSS string, for legends and swatches. */
+export function rampCss(anchors, t) {
+  const c = ramp(anchors, t);
+  return c ? `rgb(${c[0]}, ${c[1]}, ${c[2]})` : 'transparent';
+}
+
 /** `viridis` as a CSS string, for legends and swatches. */
 export function viridisCss(t) {
-  const c = viridis(t);
-  return c ? `rgb(${c[0]}, ${c[1]}, ${c[2]})` : 'transparent';
+  return rampCss(VIRIDIS, t);
 }
 
 /**

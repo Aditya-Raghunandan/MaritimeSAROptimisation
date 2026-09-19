@@ -18,8 +18,8 @@
 import L from 'leaflet';
 
 import { beaufort } from './beaufort.js';
-import { MAX_ARROW_PX, arrowLength, speedColour } from './style.js';
-import { normaliseSpeed, viridisCss } from './colormap.js';
+import { CURRENT_RAMP, MAX_ARROW_PX, SPEED_RAMP, arrowLength, speedColour } from './style.js';
+import { MAGMA, VIRIDIS, normaliseSpeed, rampCss } from './colormap.js';
 
 /**
  * Speeds to key, derived from the scale rather than fixed.
@@ -39,6 +39,17 @@ export const WindLegend = L.Control.extend({
     L.Util.setOptions(this, opts);
     this._maxSpeed = opts.maxSpeed ?? 20;
     this._maxArrowPx = opts.maxArrowPx ?? MAX_ARROW_PX;
+    // Everything a legend needs to describe a field is now an option, because
+    // there are two fields and one of them is not wind. A legend that says
+    // "10 m wind" over a current ramp is worse than no legend.
+    this._title = opts.title ?? '10 m wind';
+    this._ramp = opts.ramp ?? VIRIDIS;
+    this._arrowRamp = opts.arrowRamp ?? SPEED_RAMP;
+    this._weight = opts.weight ?? 1;
+    this._describe = opts.describe ?? ((v) => {
+      const b = beaufort(v);
+      return `F${b.force} ${b.name.toLowerCase()}`;
+    });
   },
 
   onAdd() {
@@ -48,7 +59,7 @@ export const WindLegend = L.Control.extend({
     L.DomEvent.disableScrollPropagation(box);
 
     const head = L.DomUtil.create('div', 'legend-head', box);
-    head.innerHTML = '<span>10 m wind</span><button class="legend-toggle" '
+    head.innerHTML = `<span>${this._title}</span><button class="legend-toggle" `
       + 'aria-label="Collapse">−</button>';
 
     const body = L.DomUtil.create('div', 'legend-body', box);
@@ -60,7 +71,7 @@ export const WindLegend = L.Control.extend({
     const barWrap = L.DomUtil.create('div', 'legend-bar-wrap', body);
     const stops = [];
     for (let k = 0; k <= 10; k += 1) {
-      stops.push(`${viridisCss(normaliseSpeed((k / 10) * this._maxSpeed, this._maxSpeed))} ${k * 10}%`);
+      stops.push(`${rampCss(this._ramp, normaliseSpeed((k / 10) * this._maxSpeed, this._maxSpeed))} ${k * 10}%`);
     }
     barWrap.innerHTML =
       `<div class="legend-bar" style="background:linear-gradient(to right,${stops.join(',')})"></div>`
@@ -69,11 +80,10 @@ export const WindLegend = L.Control.extend({
 
     for (const s of samplesFor(this._maxSpeed)) {
       const row = L.DomUtil.create('div', 'legend-row', body);
-      const b = beaufort(s);
       row.innerHTML =
         `<canvas width="46" height="14"></canvas>`
         + `<span class="legend-speed">${s}</span>`
-        + `<span class="legend-name">F${b.force} ${b.name.toLowerCase()}</span>`;
+        + `<span class="legend-name">${this._describe(s)}</span>`;
       this._arrow(row.querySelector('canvas'), s);
     }
     const foot = L.DomUtil.create('div', 'legend-foot', body);
@@ -100,8 +110,9 @@ export const WindLegend = L.Control.extend({
 
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    for (const [stroke, width] of [['rgba(20,20,20,0.55)', 3.2],
-                                   [speedColour(speed, this._maxSpeed), 1.6]]) {
+    for (const [stroke, width] of [['rgba(20,20,20,0.55)', 3.2 * this._weight],
+                                   [speedColour(speed, this._maxSpeed, this._arrowRamp),
+                                    1.6 * this._weight]]) {
       ctx.strokeStyle = stroke;
       ctx.lineWidth = width;
       ctx.beginPath();
@@ -118,4 +129,33 @@ export const WindLegend = L.Control.extend({
 
 export function windLegend(opts) {
   return new WindLegend(opts);
+}
+
+/**
+ * Speed bands for a surface current, in the place Beaufort sits for wind.
+ *
+ * Beaufort is a wind scale and means nothing for water. These are the bands a
+ * drift argument is actually made in: whether the current dominates the leeway
+ * term, and whether you are in the jet.
+ */
+export function currentBand(speedMs) {
+  if (speedMs < 0.25) return 'weak · leeway competes';
+  if (speedMs < 0.5) return 'moderate';
+  if (speedMs < 1.0) return 'strong';
+  if (speedMs < 1.6) return 'swift · jet edge';
+  return 'Gulf Stream core';
+}
+
+/** The legend for the surface current: magma bar, cyan arrows, water bands. */
+export function currentLegend(opts = {}) {
+  return new WindLegend({
+    title: 'Surface current',
+    ramp: MAGMA,
+    arrowRamp: CURRENT_RAMP,
+    weight: 1.45,
+    describe: currentBand,
+    maxSpeed: 2.5,
+    position: 'bottomright',
+    ...opts,
+  });
 }
