@@ -77,9 +77,26 @@ from zarr.codecs import ZstdCodec
 from sar.utils.data_io import open_forcing
 from sar.utils.geo import to_display_longitude
 
-# One chunk = 48 timesteps x the whole box = 1.11 MB of float32. See the module
-# docstring; this is the number the whole layout turns on.
-TIME_CHUNK = 48
+# Timesteps per chunk, PER PRODUCT. A chunk is one HTTP GET, so this number is
+# really "how much does the browser download to show one moment".
+#
+# It is per product because the two grids are nowhere near the same size. ERA5
+# is 77 x 77 over the box; HYCOM is 476 x 238 -- NINETEEN TIMES the cells per
+# timestep. The same 48-step chunk is therefore:
+#
+#     wind     48 steps x 77 x 77     ->  1.1 MB over the wire
+#     current  48 steps x 476 x 238   -> 29.0 MB over the wire
+#
+# 29 MB to display a single frame is unusable, and that -- not disk space -- is
+# the real constraint on the current archive. Eight timesteps brings it to
+# 4.8 MB, comparable to wind, at FULL spatial resolution.
+#
+# An earlier version halved the current grid instead. That was the wrong lever:
+# it threw away half the data to fix a problem that chunking fixes without
+# losing anything. 8 steps at 3-hourly is a 24 h chunk, which is also a natural
+# unit to scrub through.
+TIME_CHUNK = {"wind": 48, "current": 8}
+DEFAULT_TIME_CHUNK = 48
 
 # Measured, not picked: 1.58x against 1.26x at level 3, and the 2.03 GB tier
 # still writes in 1.7 minutes. Decode cost in the browser is level-independent.
@@ -115,6 +132,7 @@ def open_archive(data: Path, product: str = "wind") -> tuple[xr.Dataset, list[st
     derived Parquet; the reason is the same.
     """
     spec = PRODUCTS[product]
+    chunk = TIME_CHUNK.get(product, DEFAULT_TIME_CHUNK)
     files = sorted((data / "raw").glob(f"{spec['prefix']}*.nc"))
     if not files:
         raise FileNotFoundError(f"no {spec['prefix']}*.nc in {data / 'raw'}")
@@ -140,7 +158,7 @@ def open_archive(data: Path, product: str = "wind") -> tuple[xr.Dataset, list[st
         # were actually measured rather than reasoned about. With dask in place
         # first, the concat is a graph and peak memory is a few chunks.
         parts.append(ds[list(spec["vars"])].chunk(
-            {"time": TIME_CHUNK, "lat": -1, "lon": -1}))
+            {"time": chunk, "lat": -1, "lon": -1}))
         names.append(f.name)
 
     combined = xr.concat(parts, dim="time").sortby("time")
@@ -148,7 +166,7 @@ def open_archive(data: Path, product: str = "wind") -> tuple[xr.Dataset, list[st
     # Already dask, because each part was chunked before the concat. Re-stated
     # here so a later edit that removes the per-part chunk still has a graph,
     # and because a no-op rechunk costs nothing.
-    combined = combined.chunk({"time": TIME_CHUNK, "lat": -1, "lon": -1})
+    combined = combined.chunk({"time": chunk, "lat": -1, "lon": -1})
 
     times = combined["time"].values
     duplicated = np.zeros(times.size, dtype=bool)
@@ -292,7 +310,7 @@ def time_axis_spec(times: np.ndarray, *, allow_gaps: bool = False) -> dict:
 
 
 def write_zarr_tier(ds: xr.Dataset, path: Path, stride: int,
-                    *, time_chunk: int = TIME_CHUNK, level: int = ZSTD_LEVEL,
+                    *, time_chunk: int = DEFAULT_TIME_CHUNK, level: int = ZSTD_LEVEL,
                     allow_gaps: bool = False) -> dict:
     """Write one downsampled tier as a Zarr v3 store. Returns its description.
 
@@ -404,8 +422,9 @@ def export_archive(data: Path, out: Path, product: str = "wind",
     written = {}
     for name, stride in tiers.items():
         path = out / f"{product}_{name}.zarr"
-        written[name] = write_zarr_tier(display, path, stride, level=level,
-                                        allow_gaps=allow_gaps)
+        written[name] = write_zarr_tier(
+            display, path, stride, level=level, allow_gaps=allow_gaps,
+            time_chunk=TIME_CHUNK.get(product, DEFAULT_TIME_CHUNK))
         written[name]["verified"] = verify_tier(path, display, spec["vars"][0])
 
     manifest = {
