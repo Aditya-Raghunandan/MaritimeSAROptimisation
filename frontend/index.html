@@ -62,18 +62,18 @@
         display: inline-flex;
         align-items: center;
         background: #fff;
-        border-radius: 5px;
-        padding: 5px 9px;
+        border-radius: 6px;
+        padding: 6px 11px;
         line-height: 0;
         flex: none;
       }
-      .brand img { height: 26px; width: auto; display: block; }
+      .brand img { height: 38px; width: auto; display: block; }
 
       .titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-      header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+      header h1 { font-size: 15.5px; margin: 0; font-weight: 600; letter-spacing: .2px; }
       .subtitle {
         margin: 0;
-        font-size: 10.5px;
+        font-size: 11.5px;
         color: var(--ink-3);
         letter-spacing: .1px;
         white-space: nowrap;
@@ -109,29 +109,46 @@
       .colophon {
         display: flex;
         flex-wrap: wrap;
-        gap: 4px 14px;
-        color: var(--ink-3);
-        font-size: 10.5px;
-        border-top: 1px solid var(--line);
+        align-items: baseline;
+        gap: 3px 16px;
+        color: #6f6f66;
+        font-size: 10px;
+        letter-spacing: .15px;
+        border-top: 1px solid rgba(255, 255, 255, .05);
         padding-top: 7px;
-        margin-top: 1px;
       }
-      .colophon a { color: var(--ink-3); text-decoration: none; border-bottom: 1px solid var(--line); }
+      .colophon a { color: #7f7f74; text-decoration: none; border-bottom: 1px solid rgba(255,255,255,.12); }
       .colophon a:hover { color: var(--ink-2); border-bottom-color: var(--ink-3); }
       .colophon .sep { margin-left: auto; }
 
       .map-wrap { position: relative; min-height: 0; }
       #map { width: 100%; height: 100%; background: #0d1a26; }
 
+      /*
+        The footer was a flat black slab: three rows of equal weight -- the
+        controls, a status line that is usually empty, and the colophon -- all
+        the same colour as each other and nearly the same as the map behind
+        them, so the eye had nothing to rank.
+
+        Now the bar it sits in is lifted half a step off the page, the status
+        line collapses to nothing when it has nothing to say instead of
+        reserving a line, and the colophon is pushed down in contrast and size
+        so it reads as a footnote rather than as a third control row.
+      */
       footer {
         border-top: 1px solid var(--line);
-        background: var(--surface-1);
-        padding: 9px 14px 11px;
+        background: linear-gradient(var(--surface-1), var(--surface-0));
+        padding: 10px 16px 9px;
         display: grid;
-        gap: 6px;
+        gap: 7px;
       }
       .controls { display: flex; align-items: center; gap: 10px; }
-      #time { flex: 1; accent-color: var(--accent); }
+      #time {
+        flex: 1;
+        accent-color: var(--accent);
+        min-width: 120px;
+        height: 4px;
+      }
       button {
         font: inherit;
         padding: 4px 11px;
@@ -168,7 +185,14 @@
         min-width: 62px;
         text-align: center;
       }
-      #status { color: var(--ink-2); min-height: 1.4em; font-variant-numeric: tabular-nums; }
+      #status {
+        color: var(--ink-2);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.4;
+      }
+      /* Empty means gone, not a reserved blank line. :empty is exact -- the
+         status is set to '' rather than to a space precisely so this works. */
+      #status:empty { display: none; }
 
       /*
         The point panel floats OVER the map rather than living in the footer.
