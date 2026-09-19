@@ -18,6 +18,7 @@
 import L from 'leaflet';
 
 import { beaufort } from './beaufort.js';
+import { currentBand } from './drift.js';
 import { CURRENT_RAMP, MAX_ARROW_PX, SPEED_RAMP, arrowLength, speedColour } from './style.js';
 import { MAGMA, VIRIDIS, normaliseSpeed, rampCss } from './colormap.js';
 
@@ -129,21 +130,6 @@ export const WindLegend = L.Control.extend({
 
 export function windLegend(opts) {
   return new WindLegend(opts);
-}
-
-/**
- * Speed bands for a surface current, in the place Beaufort sits for wind.
- *
- * Beaufort is a wind scale and means nothing for water. These are the bands a
- * drift argument is actually made in: whether the current dominates the leeway
- * term, and whether you are in the jet.
- */
-export function currentBand(speedMs) {
-  if (speedMs < 0.25) return 'weak · leeway competes';
-  if (speedMs < 0.5) return 'moderate';
-  if (speedMs < 1.0) return 'strong';
-  if (speedMs < 1.6) return 'swift · jet edge';
-  return 'Gulf Stream core';
 }
 
 /** The legend for the surface current: magma bar, cyan arrows, water bands. */

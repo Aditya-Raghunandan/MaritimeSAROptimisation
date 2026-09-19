@@ -295,6 +295,8 @@
       }
       .tile-value .unit { font-size: 11px; font-weight: 400; color: var(--ink-3); margin-left: 2px; }
       .tile-value.warm { color: var(--warm); }
+      .tile-value.cool { color: #48b1e3; }
+      .tiles-2 { grid-template-columns: repeat(2, 1fr); margin: 0 -12px 9px; border-top: 1px solid var(--line); }
       .tile-sub { color: var(--ink-3); font-size: 10px; margin-top: 2px; line-height: 1.25; }
 
       /*
@@ -521,6 +523,31 @@
           <summary>Wind speed across the loaded window</summary>
           <div class="section-body" style="padding-left: 2px; padding-right: 6px;">
             <div id="chart"></div>
+          </div>
+        </details>
+
+        <details class="section" id="ocean-section" open>
+          <summary>The ocean here</summary>
+          <div class="section-body">
+            <div class="tiles tiles-2">
+              <div class="tile">
+                <div class="tile-label">Current now</div>
+                <div class="tile-value cool" id="o-speed">&mdash;<span class="unit">m/s</span></div>
+                <div class="tile-sub" id="o-band">&mdash;</div>
+              </div>
+              <div class="tile">
+                <div class="tile-label">Setting towards</div>
+                <div class="tile-value" id="o-dir">&mdash;</div>
+                <div class="tile-sub" id="o-carry">&mdash;</div>
+              </div>
+            </div>
+            <p class="lead" id="o-lead">&mdash;</p>
+            <div class="row"><span class="k">Carried in 6 h</span><span class="v" id="o-6h">&mdash;</span></div>
+            <div class="row"><span class="k">Carried in 24 h</span><span class="v" id="o-24h">&mdash;</span></div>
+            <div class="row"><span class="k">Current : leeway</span><span class="v" id="o-ratio">&mdash;</span></div>
+            <div class="row"><span class="k">Resultant (current + leeway)</span><span class="v" id="o-resultant">&mdash;</span></div>
+            <div class="row"><span class="k">Search area after 24 h</span><span class="v" id="o-area">&mdash;</span></div>
+            <div class="row pending"><span class="k">Stochastic spread &eta;</span><span class="v">awaiting the engine</span></div>
           </div>
         </details>
 

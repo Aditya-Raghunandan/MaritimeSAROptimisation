@@ -27,7 +27,7 @@ import 'uplot/dist/uPlot.min.css';
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
 import { beaufort, describe, detectionOutlook } from './beaufort.js';
 import {
-  bearingFrom, bearingTowards, compass, explain, leewayDistance,
+  ALPHA, bearingFrom, bearingTowards, compass, currentBand, explain, leewayDistance,
   leewayFractionOfCurrent, leewaySpeed, summarise,
 } from './drift.js';
 
@@ -140,6 +140,76 @@ export class PointPanel {
     set('#d-vscurrent', frac === null ? '—' : `${(frac * 100).toFixed(1)} %`);
 
     /*
+      THE OCEAN SECTION.
+
+      The panel was entirely about wind, because for a week wind was all there
+      was. It now has a measured current at the same cell and can answer the
+      question the project is actually about: where does this person go, and
+      how big is the box you would have to search to find them.
+
+      Every row here is arithmetic on two vectors we already hold. None of it
+      is a model run -- the stochastic term is the engine's and is named as
+      pending rather than estimated, because a spread is exactly the number
+      somebody would quote.
+    */
+    const cur = p.currentAt;
+    const hasCurrent = Boolean(cur) && Number.isFinite(cur.u) && Number.isFinite(cur.v);
+    const oceanSection = this.root.querySelector('#ocean-section');
+    if (oceanSection) {
+      if (!hasCurrent) {
+        unit('#o-speed', '—', '');
+        set('#o-band', cur === null ? 'current layer is off' : 'land, or not loaded');
+        set('#o-dir', '—');
+        set('#o-carry', '—');
+        set('#o-lead', cur === null
+          ? 'Switch on a current layer and click again to see what the water does here.'
+          : 'No current value at this cell — HYCOM has land or no data here.');
+        for (const id of ['#o-6h', '#o-24h', '#o-ratio', '#o-resultant', '#o-area']) set(id, '—');
+      } else {
+        const cs = Math.hypot(cur.u, cur.v);
+        const cTowards = bearingTowards(cur.u, cur.v);
+
+        // The resultant is the first two terms of D002, computed the same way
+        // ResultantSource computes them, so the panel and the arrow on the map
+        // cannot disagree about this cell.
+        const ru = cur.u + ALPHA * p.u;
+        const rv = cur.v + ALPHA * p.v;
+        const rs = Math.hypot(ru, rv);
+        const rTowards = bearingTowards(ru, rv);
+
+        const km24 = (rs * 86400) / 1000;
+        // A datum displaced this far, with no spread term, still has to be
+        // searched as an AREA rather than a point -- this is the lower bound
+        // on that area, and it is a lower bound precisely because eta is
+        // missing. Circle of radius = one hour of resultant travel.
+        const radiusKm = (rs * 3600) / 1000;
+        const areaKm2 = Math.PI * radiusKm * radiusKm;
+
+        unit('#o-speed', cs.toFixed(2), 'm/s');
+        set('#o-band', currentBand(cs));
+        set('#o-dir', `${cTowards.toFixed(0)}° ${compass(cTowards)}`);
+        set('#o-carry', `${formatDistance(cs * 86400)} in a day`);
+
+        set('#o-6h', formatDistance(cs * 6 * 3600));
+        set('#o-24h', formatDistance(cs * 24 * 3600));
+
+        const lee2 = leewaySpeed(speed);
+        set('#o-ratio', lee2 > 0 ? `${(cs / lee2).toFixed(1)} : 1` : '—');
+        set('#o-resultant', `${rs.toFixed(2)} m/s towards ${rTowards.toFixed(0)}° ${compass(rTowards)}`);
+        set('#o-area', `≥ ${areaKm2 < 10 ? areaKm2.toFixed(1) : Math.round(areaKm2)} km² · ${km24.toFixed(0)} km downstream`);
+
+        // The sentence, because a column of numbers is not an argument.
+        const dominant = cs > lee2 * 2 ? 'the water'
+          : (lee2 > cs * 2 ? 'the wind' : 'neither');
+        set('#o-lead', dominant === 'the water'
+          ? `The current dominates here: ${(cs / lee2).toFixed(1)}× the leeway, so the datum follows the water and a wind-only estimate would send searchers to the wrong place.`
+          : (dominant === 'the wind'
+            ? `Unusually, leeway is the larger term here — ${(lee2 / cs).toFixed(1)}× the current — so a drifter tracks the weather more than the sea.`
+            : 'Wind and water are comparable here, so the two terms must be added as vectors rather than ranked. This is the regime that earns the leeway term its place in the model.'));
+      }
+    }
+
+    /*
       The surface current row was hard-coded to "awaiting HYCOM pull" in the
       markup, which stopped being true the moment the archive was published.
       A pending label that outlives the thing it was waiting for is worse than
@@ -148,7 +218,6 @@ export class PointPanel {
       Still labelled pending when there is genuinely nothing loaded, because
       the current layer is off by default and a blank row would be ambiguous.
     */
-    const cur = p.currentAt;
     const curRow = this.root.querySelector('#d-current');
     if (curRow) {
       const row = curRow.closest('.row');

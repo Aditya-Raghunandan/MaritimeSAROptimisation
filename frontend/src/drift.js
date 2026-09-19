@@ -153,3 +153,24 @@ export function explain(windSpeed, towardsDeg, currentSpeed, sweepWidthM) {
 
   return { lead, caveat: caveat.replace(/\s+/g, ' ').trim() };
 }
+
+/**
+ * Speed bands for a surface current, where Beaufort sits for wind.
+ *
+ * Lives here rather than in legend.js because legend.js imports Leaflet, and
+ * the point panel needs this too -- routing it through the legend would drag a
+ * map library into a module that only does arithmetic, which is the coupling
+ * this project splits files to avoid. drift.js imports nothing.
+ *
+ * Beaufort is a WIND scale and means nothing for water. These are the bands a
+ * drift argument is actually made in: whether the current dominates the leeway
+ * term, and whether you are in the jet.
+ */
+export function currentBand(speedMs) {
+  if (!Number.isFinite(speedMs)) return '—';
+  if (speedMs < 0.25) return 'weak · leeway competes';
+  if (speedMs < 0.5) return 'moderate';
+  if (speedMs < 1.0) return 'strong';
+  if (speedMs < 1.6) return 'swift · jet edge';
+  return 'Gulf Stream core';
+}
