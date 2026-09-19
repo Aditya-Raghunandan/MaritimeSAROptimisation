@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { normaliseSpeed, viridis, viridisCss } from './colormap.js';
+import { normaliseSpeed, viridis, viridisCss } from '../src/colormap.js';
 
 const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 function lightness([r, g, b]) {

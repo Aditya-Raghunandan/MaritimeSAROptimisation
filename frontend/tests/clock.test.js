@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { Clock } from './clock.js';
+import { Clock } from '../src/clock.js';
 
 const START = new Date('2021-01-01T00:00:00Z');
 const END = new Date('2021-01-03T00:00:00Z');

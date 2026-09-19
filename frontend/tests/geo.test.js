@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { bearing, formatDistance } from './geo.js';
+import { bearing, formatDistance } from '../src/geo.js';
 
 const at = (lat, lng) => ({ lat, lng });
 
