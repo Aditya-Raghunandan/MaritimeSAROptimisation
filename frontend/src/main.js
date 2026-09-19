@@ -512,8 +512,25 @@ async function start() {
       off by default now -- it was the only rendering, and as the only one it
       had to carry all three jobs badly.
     */
-    raster = rasterLayer(field, { maxSpeed: field.valueRange[1], opacity: 0.38 });
-    particles = particleLayer(field, { maxSpeed: field.valueRange[1] });
+    /*
+      0.38 was a compromise for stacking two rasters, and the presets removed
+      the need for it -- no preset paints both, because two full-domain rasters
+      is mud. At 0.38 viridis over a dark basemap is not a field, it is a green
+      tint over the sea: the ramp's own contrast is thrown away and what reads
+      is the average, not the structure. Back up to where the pattern is the
+      thing you see.
+    */
+    raster = rasterLayer(field, { maxSpeed: field.valueRange[1], opacity: 0.62 });
+    // Thin, fast, short-lived wisps. More of them, because wind structure is
+    // spread across the whole domain rather than concentrated in one jet.
+    particles = particleLayer(field, {
+      maxSpeed: field.valueRange[1],
+      count: 900,
+      trail: 7,
+      maxAgeMs: 3400,
+      alpha: 0.7,
+      width: 0.8,
+    });
     quiver = quiverLayer(field, { maxSpeed: field.valueRange[1] });
 
     raster.addTo(map);
@@ -562,13 +579,18 @@ async function start() {
     // The current's raster carries a touch more weight than the wind's: most
     // of it is near-black by construction, so what actually paints is the jet.
     currentRaster = rasterLayer(current.layer, { maxSpeed: cMax, ramp: MAGMA, opacity: 0.55 });
+    // Thick, slow, long-lived ribbons -- roughly half as many as the wind's,
+    // twice the stroke weight, three times the trail and four times the life.
+    // A boundary current is slower than the wind above it and far more
+    // persistent, so a long coherent ribbon is what it actually looks like.
     currentParticles = particleLayer(current.layer, {
       maxSpeed: cMax,
-      rgb: [124, 232, 255],
-      count: 430,
-      trail: 18,
-      maxAgeMs: 9000,
-      alpha: 0.82,
+      rgb: [140, 240, 255],
+      count: 340,
+      trail: 26,
+      maxAgeMs: 14000,
+      alpha: 0.9,
+      width: 1.75,
     });
     currentQuiver = quiverLayer(current.layer, {
       maxSpeed: cMax, ramp: CURRENT_RAMP, weight: 1.45,
