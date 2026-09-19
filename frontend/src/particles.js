@@ -91,6 +91,11 @@ export const ParticleLayer = L.Layer.extend({
       differently should move differently on the map.
     */
     this._rgb = opts.rgb ?? [255, 255, 255];
+    // Stroke weight multiplier. Colour was not enough on its own: two clouds
+    // of equally thin streaks read as one field in two tints. Wind is drawn as
+    // thin fast wisps and current as thick slow ribbons, which is also what
+    // the two actually are.
+    this._width = opts.width ?? 1;
     this._particles = [];
     this._raf = null;
   },
@@ -267,7 +272,7 @@ export const ParticleLayer = L.Layer.extend({
         const t = n / (p.past.length - 1);
         ctx.strokeStyle = `rgba(${this._rgb[0]}, ${this._rgb[1]}, ${this._rgb[2]}, `
           + `${(this._alpha * t * t).toFixed(3)})`;
-        ctx.lineWidth = 0.6 + 0.8 * t;
+        ctx.lineWidth = (0.6 + 0.8 * t) * this._width;
         ctx.beginPath();
         ctx.moveTo(p.past[n - 1][0], p.past[n - 1][1]);
         ctx.lineTo(p.past[n][0], p.past[n][1]);
