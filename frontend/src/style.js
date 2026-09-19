@@ -29,7 +29,10 @@ export const SPEED_RAMP = ['#fde3d3', '#f9b98f', '#f28a54', '#eb6834', '#c04a1c'
 // motion, so the arrows are an annotation over the top -- a readable value at
 // a real cell centre every so often. At 26 px they crowded the streaks into
 // mush.
-const TARGET_SPACING_PX = 38;
+// Raised with MAX_ARROW_PX below. These two move together or not at all: a
+// longer arrow at the old spacing overlaps its neighbour, which is the mush
+// this constant exists to prevent.
+const TARGET_SPACING_PX = 48;
 
 /**
  * Colour for a speed, as a step of the ramp.
@@ -83,4 +86,8 @@ export function arrowLength(speed, maxSpeed, maxPx) {
 export const MIN_ARROW_PX = 4;
 
 /** Longest drawn arrow, px. Beyond this neighbouring arrows cross. */
-export const MAX_ARROW_PX = 22;
+// Longer than it was. At 22 px the arrows read as texture rather than as
+// values you could take a bearing off, which is what they are there for --
+// the raster already carries the pattern and the particles carry the motion,
+// so the arrow's one job is to be legible at a real cell centre.
+export const MAX_ARROW_PX = 30;
