@@ -103,3 +103,53 @@ describe('Clock', () => {
     expect(c.label()).toBe('2021-01-01 14:00 UTC');
   });
 });
+
+/*
+  Switching published tier changes the stride, not the moment. This is the
+  property that makes the time-resolution control a two-line change rather
+  than a re-index of every layer, and it only holds because the clock stores a
+  timestamp.
+*/
+describe('setStep', () => {
+  const start = new Date('2021-01-01T00:00:00Z');
+  const end = new Date('2021-01-11T00:00:00Z');
+
+  it('keeps the moment when the granularity changes', () => {
+    const clock = new Clock(start, end, 86400);
+    clock.setIndex(3);                       // 2021-01-04, daily
+    const before = clock.t.getTime();
+
+    clock.setStep(3600);                     // to hourly
+    expect(clock.t.getTime()).toBe(before);
+    expect(clock.label()).toContain('2021-01-04');
+  });
+
+  it('re-expresses the same moment as a finer index', () => {
+    const clock = new Clock(start, end, 86400);
+    clock.setIndex(3);
+    expect(clock.index).toBe(3);
+
+    clock.setStep(3600);
+    expect(clock.index).toBe(72);            // 3 days = 72 hours
+    expect(clock.steps).toBe(240);           // 10 days of hours
+  });
+
+  it('notifies listeners, because the slider has to be rescaled', () => {
+    const clock = new Clock(start, end, 86400);
+    let calls = 0;
+    clock.onChange(() => { calls += 1; });
+    clock.setStep(3600);
+    expect(calls).toBe(1);
+  });
+
+  it('ignores a no-op or a nonsense step rather than firing listeners', () => {
+    const clock = new Clock(start, end, 86400);
+    let calls = 0;
+    clock.onChange(() => { calls += 1; });
+    clock.setStep(86400);
+    clock.setStep(0);
+    clock.setStep(-60);
+    expect(calls).toBe(0);
+    expect(clock.stepSeconds).toBe(86400);
+  });
+});

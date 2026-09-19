@@ -49,6 +49,22 @@ export class Clock {
     this.setTime(new Date(this.start.getTime() + clamped * this.stepSeconds * 1000));
   }
 
+  /**
+   * Change the granularity the slider steps in, keeping the moment.
+   *
+   * Switching published tier changes how finely the archive can be stepped,
+   * not what time it is. Because this clock holds a timestamp rather than a
+   * frame index, the current moment survives the change and every layer
+   * re-derives its own frame from it -- which is the entire reason it holds a
+   * timestamp. Swapping an index-based clock between a daily and an hourly
+   * tier would land on 1/24th of the intended date.
+   */
+  setStep(stepSeconds) {
+    if (!(stepSeconds > 0) || stepSeconds === this.stepSeconds) return;
+    this.stepSeconds = stepSeconds;
+    for (const fn of this._listeners) fn(this.t);
+  }
+
   setTime(when) {
     if (when.getTime() === this.t.getTime()) return;
     this.t = when;
