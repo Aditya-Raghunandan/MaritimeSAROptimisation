@@ -320,3 +320,75 @@ class TestGappedArchiveIsNotPublished:
         m = archive.export_archive(tmp_path, tmp_path / "p", "wind",
                                    tiers={"hourly": 1}, level=1, allow_gaps=True)
         assert m["tiers"]["hourly"]["regular"] is False
+
+
+class TestRegulariseTime:
+    """The source really is missing timesteps; publishing them honestly.
+
+    HYCOM's study window has five irregular steps -- four of 6 h and one of
+    12 h against a 3-hourly cadence, which D011 records as 7 missing steps in
+    14,608. Interpolating across them would invent current fields in the very
+    store other results are checked against.
+    """
+
+    def _gapped(self, drop):
+        """A 3-hourly dataset with some timesteps removed."""
+        time = np.arange(np.datetime64("2021-01-01T00"),
+                         np.datetime64("2021-01-03T00"),
+                         np.timedelta64(3, "h")).astype("datetime64[ns]")
+        keep = np.array([k for k in range(time.size) if k not in drop])
+        lat = np.arange(17.0, 19.0, 1.0)
+        lon = np.arange(278.0, 280.0, 1.0)
+        u = np.arange(time.size * lat.size * lon.size, dtype="float32").reshape(
+            (time.size, lat.size, lon.size))
+        ds = xr.Dataset(
+            {"water_u": (("time", "lat", "lon"), u),
+             "water_v": (("time", "lat", "lon"), -u)},
+            coords={"time": time, "lat": lat, "lon": lon},
+        )
+        return ds.isel(time=keep), time
+
+    def test_a_gap_free_axis_is_returned_untouched(self):
+        ds, _ = self._gapped(drop=[])
+        out, info = archive.regularise_time(ds)
+        assert info["inserted"] == 0
+        assert out.sizes["time"] == ds.sizes["time"]
+
+    def test_missing_steps_come_back_as_nan(self):
+        ds, full = self._gapped(drop=[3])
+        out, info = archive.regularise_time(ds)
+        assert info["inserted"] == 1
+        assert out.sizes["time"] == full.size
+        assert np.array_equal(out["time"].values, full)
+        assert np.isnan(out["water_u"].isel(time=3).values).all()
+
+    def test_a_double_gap_inserts_both(self):
+        # A 12 h hole in a 3-hourly axis is three missing steps, not one.
+        ds, full = self._gapped(drop=[4, 5, 6])
+        out, info = archive.regularise_time(ds)
+        assert info["inserted"] == 3
+        assert out.sizes["time"] == full.size
+
+    def test_the_real_values_are_not_moved(self):
+        """The whole point: nothing is interpolated and nothing shifts."""
+        ds, _ = self._gapped(drop=[2, 5])
+        out, _ = archive.regularise_time(ds)
+        for t in ds["time"].values:
+            assert np.array_equal(out["water_u"].sel(time=t).values,
+                                  ds["water_u"].sel(time=t).values)
+
+    def test_the_axis_is_regular_afterwards(self):
+        ds, _ = self._gapped(drop=[1, 4, 5])
+        out, _ = archive.regularise_time(ds)
+        # This is the property that lets the client reconstruct timestamps.
+        archive.time_axis_spec(out["time"].values)      # raises if not regular
+
+    def test_a_cadence_that_is_simply_wrong_raises(self):
+        # A step that is not a whole multiple of the modal one is not a gap --
+        # it means the cadence itself is wrong, and filling would hide that.
+        time = np.array(["2021-01-01T00", "2021-01-01T03", "2021-01-01T07"],
+                        dtype="datetime64[ns]")
+        ds = xr.Dataset({"water_u": (("time",), np.zeros(3, dtype="float32"))},
+                        coords={"time": time})
+        with pytest.raises(ValueError, match="not whole multiples"):
+            archive.regularise_time(ds)
