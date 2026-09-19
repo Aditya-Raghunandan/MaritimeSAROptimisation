@@ -659,15 +659,24 @@ async function start() {
   });
 
   /*
-    The ruler and the rings are MUTUALLY EXCLUSIVE, and they have to be.
+    THE RULER AND THE RINGS CAN NOW BE ON TOGETHER.
 
-    Each registers its own map click handler, so with both on a single click
-    added a ruler point AND moved the rings AND was then swallowed before the
-    ruler's readout ran -- the rings chased the ruler and the ruler appeared to
-    do nothing. Three owners for one click. Turning either on now turns the
-    other off, which is also the honest interaction: both are "click the map to
-    place something", and there is no sensible meaning for a click when both
-    are listening.
+    They were mutually exclusive, and the reason was real: each registered its
+    own map click handler, so with both on a single click added a ruler point
+    AND moved the rings AND was swallowed before the ruler's readout ran --
+    three owners for one click. Exclusivity fixed the click by throwing away
+    the case people actually want, which is measuring a leg against rings that
+    stay on the map while you do it.
+
+    What was missing is the state between on and off: DRAWN BUT NOT LISTENING.
+    Both tools can now be on; at most one is ARMED, and arming is what owns the
+    click. Turning a tool on arms it and disarms the other without erasing it.
+    Turning the armed tool off hands the click back to the other if it is still
+    on, rather than leaving a visible tool that quietly ignores you.
+
+    The rings keep working while disarmed -- the centre handle drags on its own
+    mousedown and +/- resize on a keydown, neither of which is the map click --
+    so they act as a scale reference while the ruler owns the pointer.
   */
   const ringControls = document.getElementById('ring-controls');
   const ringRadius = document.getElementById('ring-radius');
@@ -688,41 +697,62 @@ async function start() {
   const rulerBtn = document.getElementById('ruler');
   const ringsBtn = document.getElementById('rings');
 
-  function setTool(which) {
-    if (which !== 'ruler' && ruler.active) {
-      ruler.toggle();
-      rulerBtn.classList.remove('on');
+  // Which tool owns a map click: 'ruler', 'rings', or null for the point panel.
+  let armed = null;
+
+  function arm(which) {
+    armed = which;
+    ruler.setArmed(which === 'ruler');
+    rings.setArmed(which === 'rings');
+    // The button that owns the click reads as active; a tool that is on but
+    // not listening is shown as merely present, so the map never looks like it
+    // is ignoring a control that appears pressed.
+    rulerBtn.classList.toggle('armed', armed === 'ruler');
+    ringsBtn.classList.toggle('armed', armed === 'rings');
+  }
+
+  /** Whichever tool is still on takes the click back. */
+  function rearmSurvivor(justTurnedOff) {
+    if (justTurnedOff !== armed) return;
+    if (justTurnedOff !== 'ruler' && ruler.active) arm('ruler');
+    else if (justTurnedOff !== 'rings' && rings.active) arm('rings');
+    else arm(null);
+  }
+
+  function toolStatus() {
+    if (armed === 'ruler') {
+      return 'Ruler has the click — click two or more points. '
+        + (rings.active ? 'Rings stay on the map; drag the dot or use −/+.' : '');
     }
-    if (which !== 'rings' && rings.active) {
-      rings.toggle();
-      ringsBtn.classList.remove('on');
-      ringControls.hidden = true;
+    if (armed === 'rings') {
+      return 'Rings have the click — click to move the datum, drag the dot, or use −/+. '
+        + (ruler.active ? 'The ruler stays drawn; press Ruler to measure again.' : '');
     }
+    return '';
   }
 
   rulerBtn.addEventListener('click', () => {
-    setTool('ruler');
     const on = ruler.toggle();
     rulerBtn.classList.toggle('on', on);
-    setStatus(on
-      ? 'Ruler — click two or more points. Each leg is labelled on the map.'
-      : '');
+    if (on) arm('ruler'); else rearmSurvivor('ruler');
+    setStatus(toolStatus());
   });
 
   ringsBtn.addEventListener('click', () => {
-    setTool('rings');
     const on = rings.toggle();
     ringsBtn.classList.toggle('on', on);
     ringControls.hidden = !on;
-    if (!on) setStatus('');
+    if (on) arm('rings'); else rearmSurvivor('rings');
+    setStatus(toolStatus());
   });
   document.getElementById('ring-bigger').addEventListener('click', () => rings.rescale(1.25));
   document.getElementById('ring-smaller').addEventListener('click', () => rings.rescale(0.8));
 
   map.on('click', (e) => {
-    // Whichever tool is active owns the click and handles its own readout.
-    // The point panel is what a click means when neither is.
-    if (ruler.active || rings.active) return;
+    // The ARMED tool owns the click and handles its own readout. A tool that
+    // is on but disarmed is drawn only, so the point panel is still what a
+    // click means when nothing is armed.
+    if (armed) return;
     showSeries(e.latlng);
   });
 

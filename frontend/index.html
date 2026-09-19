@@ -142,7 +142,11 @@
         cursor: pointer;
       }
       button:hover { border-color: var(--ink-3); color: var(--ink); }
-      button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+      /* On but not listening: present, outlined, clearly not the owner of the
+         click. Armed: filled. Two states, so a tool can be visible without
+         appearing to be the one you are about to talk to. */
+      button.on { background: transparent; color: var(--accent); border-color: var(--accent); }
+      button.on.armed { background: var(--accent); color: #fff; border-color: var(--accent); }
       #play { min-width: 36px; }
       .tier-control { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); }
       #tier {
