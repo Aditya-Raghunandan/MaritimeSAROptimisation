@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { normaliseSpeed, viridis, viridisCss } from '../src/colormap.js';
+import { MAGMA, VIRIDIS, normaliseSpeed, ramp, rampCss, viridis, viridisCss } from '../src/colormap.js';
 
 const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 function lightness([r, g, b]) {
@@ -81,5 +81,55 @@ describe('normaliseSpeed', () => {
   it('is NaN for absent data or a zero scale, not 0', () => {
     expect(normaliseSpeed(NaN, 20)).toBeNaN();
     expect(normaliseSpeed(5, 0)).toBeNaN();
+  });
+});
+
+/*
+  Two ramps, because there are two fields. Wind and current were painted
+  identically and could not be told apart at a glance, which on a projector
+  across a room is the only glance anyone gets.
+*/
+describe('magma, the current ramp', () => {
+  // OKLab lightness is the gate a sequential ramp has to pass; a cheap proxy
+  // that catches the same failure is that perceived luminance rises at every
+  // anchor. A non-monotonic ramp invents banding where the data is smooth.
+  const luma = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+  it('rises monotonically in luminance, like viridis', () => {
+    for (const anchors of [VIRIDIS, MAGMA]) {
+      for (let i = 1; i < anchors.length; i += 1) {
+        expect(luma(anchors[i])).toBeGreaterThan(luma(anchors[i - 1]));
+      }
+    }
+  });
+
+  it('is genuinely different from viridis at every stop', () => {
+    // If the two ramps were close, splitting the products by colour would buy
+    // nothing. Checked rather than assumed.
+    for (let k = 1; k <= 9; k += 1) {
+      const a = ramp(VIRIDIS, k / 10);
+      const b = ramp(MAGMA, k / 10);
+      const dist = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+      expect(dist).toBeGreaterThan(40);
+    }
+  });
+
+  it('starts near black so the slow ocean recedes and the jet glows', () => {
+    expect(luma(MAGMA[0])).toBeLessThan(10);
+  });
+
+  it('clamps rather than wraps, so the fastest is never drawn as the slowest', () => {
+    expect(ramp(MAGMA, 5)).toEqual(MAGMA[MAGMA.length - 1]);
+    expect(ramp(MAGMA, -5)).toEqual(MAGMA[0]);
+  });
+
+  it('returns null for NaN, which is absent rather than zero', () => {
+    expect(ramp(MAGMA, NaN)).toBeNull();
+    expect(rampCss(MAGMA, NaN)).toBe('transparent');
+  });
+
+  it('viridis is still exactly what it was', () => {
+    expect(viridis(0.5)).toEqual(ramp(VIRIDIS, 0.5));
+    expect(viridisCss(0.5)).toBe(rampCss(VIRIDIS, 0.5));
   });
 });

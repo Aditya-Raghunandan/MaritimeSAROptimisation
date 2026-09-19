@@ -23,6 +23,17 @@
 /** One hue, light -> dark. See the module docstring for the validation. */
 export const SPEED_RAMP = ['#fde3d3', '#f9b98f', '#f28a54', '#eb6834', '#c04a1c', '#8c3410'];
 
+/**
+ * The CURRENT's arrow ramp. One hue, light to dark, same rule as the wind's.
+ *
+ * Cyan against the current's magma raster, which is the same contrast argument
+ * that put orange arrows on a viridis raster: the arrows must not be mistaken
+ * for the field they sit on. It also puts the two products in opposite colour
+ * families at the mark level -- warm arrows are wind, cool arrows are water --
+ * which is the distinction that has to survive a projector at ten metres.
+ */
+export const CURRENT_RAMP = ['#d7f6ff', '#9be5f7', '#56ccec', '#22aedb', '#1487b4', '#0e6489'];
+
 /** Target on-screen spacing between arrows, px. Below this they overlap into mush. */
 // Sparser than it was. The arrows used to BE the field and had to cover it;
 // now the painted raster carries the pattern and the particles carry the
