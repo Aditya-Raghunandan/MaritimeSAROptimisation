@@ -45,13 +45,16 @@ Nothing large is in this repository, by construction rather than by discipline.
 | The site | GitHub Pages, code only |
 
 The published copy is a **derived, downsampled** copy for the website; the raw
-NetCDF on the cluster remains what analysis reads. Schemas, conventions and the
-reasoning are in [`docs/viz-export.md`](docs/viz-export.md).
+NetCDF on the cluster remains what analysis reads. Schemas and conventions are in
+[`docs/viz-export.md`](docs/viz-export.md); the architecture that produced them, and why
+each part of it is shaped the way it is, is in
+[`docs/data_pipeline_architecture.md`](docs/data_pipeline_architecture.md).
 
 ## Documentation
 
 | | |
 |---|---|
+| [**`docs/data_pipeline_architecture.md`**](docs/data_pipeline_architecture.md) | **Start here.** The whole system as an architecture — diagrams, data flows, storage tiers, the client, the Slurm topology, and the measurement or failure behind every design choice |
 | [`docs/current-fetch.md`](docs/current-fetch.md) | HYCOM retrieval, the D020 raw tier, and the OPeNDAP request-size ceiling |
 | [`docs/viz-export.md`](docs/viz-export.md) | what the website reads: Zarr layout, Parquet trajectories, conventions |
 | [`docs/linear_time_interpolation.md`](docs/linear_time_interpolation.md) | time interpolation and the `ForcingProvider` interface |
