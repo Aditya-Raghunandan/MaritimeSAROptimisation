@@ -24,6 +24,64 @@ import { TYPICAL_CURRENT_MS } from './geo.js';
 
 const DATA = import.meta.env.VITE_DATA_BASE ?? 'data';
 
+/*
+  THE CONTROL PICKS A SPAN. THE TIER FOLLOWS.
+
+  Choosing a published tier was the wrong handle. What a viewer wants is "show
+  me a day" or "show me a year"; which stride the archive happens to publish is
+  our implementation detail, and picking it left the slider spanning five years
+  at one-hour steps -- 43,824 positions, one pixel of travel worth several
+  hours, and no way to step through a single day.
+
+  So the span is chosen and `chooseTier` picks the FINEST tier that fits the
+  span into a slider you can actually resolve. A slider is a few hundred pixels
+  wide, so more than a few hundred positions buys nothing.
+
+    1 day       -> hourly     24 steps
+    3 days      -> hourly     72 steps
+    1 week      -> 6-hourly   28 steps
+    30 days     -> 6-hourly  120 steps
+    1 year      -> daily     365 steps
+    everything  -> daily    1826 steps
+
+  THE FLOOR IS ONE HOUR, and it is a property of the data rather than of this
+  control. ERA5 publishes hourly and HYCOM 3-hourly; there is no sub-hourly
+  forcing to show. Offering a 60-minute view would mean interpolating between
+  published hours and presenting the result as observation, which is the same
+  thing this project refuses to do when filling HYCOM's real gaps with NaN
+  rather than with invented current. Minutes arrive with the drift engine,
+  which emits roughly every 15 min (D009) on its own axis -- and the clock
+  holds a timestamp precisely so that layer can have a finer cadence than the
+  forcing underneath it.
+*/
+const SPANS = [
+  { id: 'day', label: '1 day', seconds: 86400 },
+  { id: '3days', label: '3 days', seconds: 3 * 86400 },
+  { id: 'week', label: '1 week', seconds: 7 * 86400 },
+  { id: 'month', label: '30 days', seconds: 30 * 86400 },
+  { id: 'year', label: '1 year', seconds: 365 * 86400 },
+  { id: 'all', label: 'whole archive', seconds: null },
+];
+
+/** More positions than this and the slider cannot resolve them anyway. */
+const MAX_SLIDER_STEPS = 400;
+
+/**
+ * The finest published tier that fits `spanSeconds` into a usable slider.
+ *
+ * Finest-first, so a short span gets the most detail the archive actually
+ * holds. Falls back to the coarsest tier when nothing fits, which is what the
+ * whole-archive span always does.
+ */
+function chooseTier(tiers, spanSeconds) {
+  const byStride = Object.entries(tiers).sort((a, b) => a[1].step_seconds - b[1].step_seconds);
+  if (!spanSeconds) return byStride[byStride.length - 1][0];
+  for (const [name, tier] of byStride) {
+    if (spanSeconds / tier.step_seconds <= MAX_SLIDER_STEPS) return name;
+  }
+  return byStride[byStride.length - 1][0];
+}
+
 // CARTO's raster basemaps now want a key, and without one they serve a
 // watermarked tile. It is read from the environment rather than written here:
 // the repository is public, and a key in it is a key published. It still ends
@@ -533,6 +591,7 @@ async function start() {
   L.control.layers(BASEMAPS, overlays, { collapsed: true }).addTo(map);
 
   const slider = document.getElementById('time');
+  clock.setWindowSpan(null);   // replaced below once the span control is wired
   slider.max = String(clock.steps - 1);
   slider.addEventListener('input', () => clock.setIndex(Number(slider.value)));
 
@@ -551,54 +610,115 @@ async function start() {
     72 MB for daily, but only the chunks actually scrubbed through are ever
     fetched, so the honest number to show is the chunk size, not the tier size.
   */
-  const tierSelect = document.getElementById('tier');
+  const windowLabel = document.getElementById('window-label');
+  const winBack = document.getElementById('win-back');
+  const winFwd = document.getElementById('win-fwd');
+
+  /** Re-point the slider at the clock's current window. */
+  function syncSlider() {
+    slider.max = String(clock.steps - 1);
+    slider.value = String(clock.index);
+    if (windowLabel) windowLabel.textContent = clock.windowLabel();
+    if (winBack) winBack.disabled = !clock.canShift(-1);
+    if (winFwd) winFwd.disabled = !clock.canShift(1);
+  }
+
+  async function shiftWindow(n) {
+    if (!clock.shiftWindow(n)) return;
+    syncSlider();
+    await redraw();
+  }
+
+  if (winBack) winBack.addEventListener('click', () => shiftWindow(-1));
+  if (winFwd) winFwd.addEventListener('click', () => shiftWindow(1));
+
+  /*
+    THE SPAN CONTROL.
+
+    One handle: how much time the slider covers. The tier follows from it, so
+    the viewer never has to know what a "6-hourly tier" is -- they ask for a
+    week and get the finest stride the archive can serve a week at.
+
+    Switching is opening a different store, not reloading the page, and the
+    moment survives because the clock holds a timestamp. Only the stride and
+    the reach change.
+  */
+  const spanSelect = document.getElementById('span');
   const archive = manifest._archive;
-  if (tierSelect && archive && archive.tiers) {
-    const names = Object.keys(archive.tiers);
-    tierSelect.innerHTML = '';
-    for (const name of names) {
-      const t = archive.tiers[name];
-      const opt = document.createElement('option');
-      opt.value = name;
-      opt.textContent = `${name} · ${t.frames.toLocaleString()} frames · ${(t.bytes / 1e6).toFixed(0)} MB`;
-      tierSelect.appendChild(opt);
+
+  /** Roughly what one sliderful costs to fetch, in chunks and megabytes. */
+  function fetchCost(tier, steps) {
+    const chunks = Math.max(1, Math.ceil(steps / tier.chunks.time));
+    const perChunk = tier.chunk_bytes_uncompressed / (tier.compression_ratio || 1);
+    return { chunks, mb: (chunks * perChunk) / 1e6 };
+  }
+
+  async function applySpan(spanSeconds, { quiet = false } = {}) {
+    if (!archive || !archive.tiers) return;
+    const name = chooseTier(archive.tiers, spanSeconds);
+    const tier = archive.tiers[name];
+
+    if (name !== manifest._tier) {
+      const source = await openTier(manifest._base, archive, name);
+      // Mutated in place, not replaced: the resultant layer and the clock
+      // listeners closed over this object when they were wired.
+      axis.start = new Date(tier.start);
+      axis.stepSeconds = tier.step_seconds;
+      axis.frames = tier.frames;
+      field.source = source;
+      manifest._tier = name;
     }
-    tierSelect.value = manifest._tier;
-    tierSelect.disabled = names.length < 2;
 
-    tierSelect.addEventListener('change', async () => {
-      const name = tierSelect.value;
-      const previous = manifest._tier;
-      tierSelect.disabled = true;
-      setStatus(`switching to ${name} …`);
+    clock.setStep(tier.step_seconds);
+    clock.setWindowSpan(spanSeconds);
+    syncSlider();
+    setProvenance(name, tier);
+
+    await field.ensure(clock.frameOf(axis));
+    await redraw();
+
+    if (!quiet) {
+      const cost = fetchCost(tier, clock.steps);
+      setStatus(`${clock.windowLabel()} — ${clock.steps} steps of `
+        + `${describeStep(tier.step_seconds)}, about `
+        + `${cost.mb < 1 ? `${Math.round(cost.mb * 1000)} kB` : `${cost.mb.toFixed(1)} MB`} `
+        + `over ${cost.chunks} chunk${cost.chunks === 1 ? '' : 's'}.`);
+    }
+  }
+
+  if (spanSelect && archive && archive.tiers) {
+    const finest = Math.min(...Object.values(archive.tiers).map((t) => t.step_seconds));
+    spanSelect.innerHTML = '';
+    for (const sp of SPANS) {
+      const name = chooseTier(archive.tiers, sp.seconds);
+      const stride = archive.tiers[name].step_seconds;
+      const opt = document.createElement('option');
+      opt.value = String(sp.seconds ?? '');
+      opt.textContent = `${sp.label} · ${describeStep(stride)} steps`;
+      spanSelect.appendChild(opt);
+    }
+    // Open on a day: the finest view the archive supports, which is what
+    // someone arriving at a drift map is most likely to want to look at.
+    spanSelect.value = '86400';
+
+    spanSelect.addEventListener('change', async () => {
+      const raw = spanSelect.value;
+      const spanSeconds = raw === '' ? null : Number(raw);
+      spanSelect.disabled = true;
+      setStatus('switching …');
       try {
-        const source = await openTier(manifest._base, archive, name);
-        const t = archive.tiers[name];
-
-        // Mutated in place, not replaced: the resultant layer and the clock
-        // listeners closed over this object when they were wired.
-        axis.start = new Date(t.start);
-        axis.stepSeconds = t.step_seconds;
-        axis.frames = t.frames;
-
-        field.source = source;
-        manifest._tier = name;
-        clock.setStep(t.step_seconds);
-
-        slider.max = String(clock.steps - 1);
-        slider.value = String(clock.index);
-        setProvenance(name, t);
-
-        await field.ensure(clock.frameOf(axis));
-        await redraw();
-        setStatus(`${name} — one step is ${describeStep(t.step_seconds)}.`);
+        await applySpan(spanSeconds);
       } catch (err) {
-        tierSelect.value = previous;
-        setStatus(`could not switch to ${name}: ${err.message}`);
+        setStatus(`could not switch: ${err.message}`);
       } finally {
-        tierSelect.disabled = names.length < 2;
+        spanSelect.disabled = false;
       }
     });
+
+    // The floor is the data's, not the control's, and it is worth saying once.
+    if (finest > 3600) {
+      console.info(`finest published stride is ${describeStep(finest)}`);
+    }
   }
 
   /*
@@ -623,9 +743,21 @@ async function start() {
 
   async function tick() {
     if (!playing) return;
-    const next = clock.index + 1 >= clock.steps ? 0 : clock.index + 1;
-    clock.setIndex(next);
-    slider.value = String(next);
+    if (clock.index + 1 >= clock.steps) {
+      /*
+        Off the end of the window. Advance into the next one rather than
+        looping, so play means "time passes" at every tier -- an hourly view
+        that looped the same 24 h forever would be a toy. At the end of the
+        archive there is nowhere to advance to, so it wraps to the start,
+        which is the old behaviour where it still applies.
+      */
+      if (!clock.shiftWindow(1)) clock.setIndex(0);
+      else clock.setIndex(0);
+      syncSlider();
+    } else {
+      clock.setIndex(clock.index + 1);
+      slider.value = String(clock.index);
+    }
     await redraw();
     if (playing) playTimer = setTimeout(tick, 110);
   }
@@ -720,7 +852,11 @@ async function start() {
 
     if (pinned) showSeries(pinned);
   }
-  clock.onChange(() => { slider.value = String(clock.index); redraw(); });
+  clock.onChange(() => {
+    slider.value = String(clock.index);
+    if (windowLabel) windowLabel.textContent = clock.windowLabel();
+    redraw();
+  });
 
   function showSeries(latlng) {
     if (!field) return;
@@ -912,6 +1048,16 @@ async function start() {
   setProvenance(manifest._tier, manifest._archive && manifest._archive.tiers
     ? manifest._archive.tiers[manifest._tier] : null);
 
+  // Open on one day at the finest stride the archive serves, rather than on
+  // five years of daily steps -- the default view should be the one that shows
+  // the data at its real resolution.
+  try {
+    await applySpan(86400, { quiet: true });
+  } catch (err) {
+    setStatus(`could not open the default span: ${err.message}`);
+  }
+
+  syncSlider();
   await redraw();
   setStatus('Click anywhere for a time series at that cell.');
 }

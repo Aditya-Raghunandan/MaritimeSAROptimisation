@@ -165,8 +165,17 @@
       button.on { background: transparent; color: var(--accent); border-color: var(--accent); }
       button.on.armed { background: var(--accent); color: #fff; border-color: var(--accent); }
       #play { min-width: 36px; }
+      .win-step { min-width: 28px; padding: 4px 8px; line-height: 1; }
+      .win-step:disabled { opacity: .35; cursor: default; border-color: var(--line); color: var(--ink-3); }
+      #window-label {
+        color: var(--ink-2);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        min-width: 150px;
+        text-align: center;
+      }
       .tier-control { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); }
-      #tier {
+      #span {
         font: inherit;
         padding: 4px 8px;
         border: 1px solid var(--line);
@@ -175,8 +184,8 @@
         color: var(--ink-2);
         cursor: pointer;
       }
-      #tier:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink); }
-      #tier:disabled { opacity: .55; cursor: default; }
+      #span:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink); }
+      #span:disabled { opacity: .55; cursor: default; }
       #ring-controls { display: inline-flex; align-items: center; gap: 6px; }
       #ring-controls button { min-width: 30px; padding: 4px 8px; }
       #ring-radius {
@@ -507,10 +516,13 @@
     <footer>
       <div class="controls">
         <button id="play" title="Play through the window (space)" aria-label="Play">&#9654;</button>
+        <button id="win-back" class="win-step" title="Previous window" aria-label="Previous window">&#8249;</button>
         <input id="time" type="range" min="0" max="0" value="0" step="1" />
-        <label class="tier-control" for="tier">
-          <span>Step</span>
-          <select id="tier" title="Time resolution. Only the chunks you scrub through are downloaded."></select>
+        <button id="win-fwd" class="win-step" title="Next window" aria-label="Next window">&#8250;</button>
+        <span id="window-label" title="The span the slider covers">&mdash;</span>
+        <label class="tier-control" for="span">
+          <span>Span</span>
+          <select id="span" title="How much time the slider covers. The stride follows from it; only the chunks you scrub through are downloaded."></select>
         </label>
         <button id="ruler" title="Click points on the map to measure distance and bearing">Ruler</button>
         <button id="rings" title="Range rings you can place and resize">Rings</button>
