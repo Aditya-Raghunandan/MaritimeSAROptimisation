@@ -651,6 +651,117 @@ async function start() {
   }
   L.control.layers(BASEMAPS, overlays, { collapsed: true }).addTo(map);
 
+  /*
+    VIEW PRESETS.
+
+    The layer control is a flat list of eleven checkboxes, three of which are
+    disabled placeholders. It is the right tool for "turn that one thing off"
+    and the wrong one for the question people actually ask, which is "show me
+    the wind" or "show me where a person would drift". Getting from one of
+    those to another is four clicks in the right order, and on a touchscreen in
+    front of an audience nobody is going to do it.
+
+    So the named combinations are one button each, and the checkbox list stays
+    underneath for anything a preset does not cover. Presets do not replace the
+    control; they are the shortcut through it.
+
+    Each preset is a SET of layers to end up with, not a diff to apply. Diffs
+    accumulate error -- press two presets in a row and the state depends on the
+    order -- while a set is idempotent and can be pressed from anywhere.
+  */
+  const PRESETS = [
+    {
+      id: 'wind',
+      label: 'Wind',
+      hint: 'what the atmosphere is doing',
+      layers: () => [raster, particles, quiver],
+    },
+    {
+      id: 'current',
+      label: 'Current',
+      hint: 'the Gulf Stream, on its own',
+      layers: () => [currentRaster, currentParticles, currentQuiver],
+    },
+    {
+      id: 'both',
+      label: 'Both',
+      hint: 'wind streaks over the current field',
+      // Not every renderer of each: two rasters is mud and two sets of arrows
+      // is a lattice. The current carries the colour, the wind carries the
+      // motion, and that reads as one picture rather than two competing ones.
+      layers: () => [currentRaster, particles, quiver],
+    },
+    {
+      id: 'drift',
+      label: 'Drift',
+      hint: 'where a person would actually go',
+      // The answer the project exists to give. Current underneath for context,
+      // resultant arrows on top; no wind marks, because the wind is already
+      // inside the resultant as the leeway term and drawing it twice invites
+      // the reader to add it twice.
+      layers: () => [currentRaster, resultant],
+    },
+    {
+      id: 'clean',
+      label: 'Clean',
+      hint: 'basemap only',
+      layers: () => [],
+    },
+  ];
+
+  const ALL_FIELD_LAYERS = () => [
+    raster, particles, quiver,
+    currentRaster, currentParticles, currentQuiver,
+    resultant,
+  ].filter(Boolean);
+
+  function applyPreset(preset) {
+    const want = new Set(preset.layers().filter(Boolean));
+    for (const layer of ALL_FIELD_LAYERS()) {
+      const on = map.hasLayer(layer);
+      if (want.has(layer) && !on) map.addLayer(layer);
+      else if (!want.has(layer) && on) map.removeLayer(layer);
+    }
+    for (const btn of presetBar.querySelectorAll('button')) {
+      btn.classList.toggle('on', btn.dataset.preset === preset.id);
+    }
+    setStatus(`${preset.label} — ${preset.hint}.`);
+  }
+
+  const presetBar = L.DomUtil.create('div', 'preset-bar');
+  L.DomEvent.disableClickPropagation(presetBar);
+  for (const preset of PRESETS) {
+    const btn = L.DomUtil.create('button', '', presetBar);
+    btn.type = 'button';
+    btn.dataset.preset = preset.id;
+    btn.textContent = preset.label;
+    btn.title = preset.hint;
+    btn.addEventListener('click', () => applyPreset(preset));
+  }
+
+  const PresetControl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd() { return presetBar; },
+  });
+  new PresetControl().addTo(map);
+
+  /*
+    Touching a checkbox directly means no preset describes what is on screen
+    any more, so none of them should look selected. Saying "this is the Wind
+    view" over something that is not it is worse than saying nothing.
+  */
+  map.on('overlayadd overlayremove', () => {
+    const current_ = PRESETS.find((preset) => {
+      const want = new Set(preset.layers().filter(Boolean));
+      return ALL_FIELD_LAYERS().every((l) => want.has(l) === map.hasLayer(l));
+    });
+    for (const btn of presetBar.querySelectorAll('button')) {
+      btn.classList.toggle('on', Boolean(current_) && btn.dataset.preset === current_.id);
+    }
+  });
+
+  applyPreset(PRESETS[0]);
+
   const slider = document.getElementById('time');
   clock.setWindowSpan(null);   // replaced below once the span control is wired
   slider.max = String(clock.steps - 1);
