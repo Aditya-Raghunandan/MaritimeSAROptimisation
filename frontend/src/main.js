@@ -986,6 +986,7 @@ async function start() {
   const panel = new PointPanel({
     root: document.getElementById('point'),
     chart: document.getElementById('chart'),
+    oceanChart: document.getElementById('chart-ocean'),
     onClose: () => { pinned = null; highlight.clearLayers(); setStatus(''); },
   });
 
@@ -1088,12 +1089,30 @@ async function start() {
       has not been fetched -- the panel says which, rather than showing a zero.
     */
     let currentAt = null;
+    let currentSeries = null;
+    let currentAxis = null;
+    let currentCursor = 0;
     if (current) {
       const cFrame = clock.frameOf(current.axis);
       const cCell = current.layer.grid.cellAt(field.grid.lat(cell.j), field.grid.lon(cell.i));
       if (cCell && current.layer.isResident(cFrame)) {
         const [cu, cv] = current.layer.vector(cFrame, cCell.j, cCell.i);
         currentAt = { u: cu, v: cv };
+
+        // The current's own series, over ITS resident span on ITS axis. Not
+        // the wind's: the two are on different cadences and different chunk
+        // boundaries, so what is loaded of one says nothing about the other.
+        const cSpan = residentSpanOf(current.layer, cFrame, current.axis.frames);
+        currentSeries = current.layer.seriesAt(
+          cCell.j, cCell.i, cSpan.to - cSpan.from, cSpan.from,
+        );
+        currentAxis = {
+          start: new Date(current.axis.start.getTime()
+            + cSpan.from * current.axis.stepSeconds * 1000),
+          stepSeconds: current.axis.stepSeconds,
+          frames: cSpan.to - cSpan.from,
+        };
+        currentCursor = cFrame - cSpan.from;
       }
     }
 
@@ -1122,6 +1141,9 @@ async function start() {
       currentSpeed: currentAt && Number.isFinite(currentAt.u)
         ? Math.hypot(currentAt.u, currentAt.v) : TYPICAL_CURRENT_MS,
       currentAt,
+      currentSeries,
+      currentAxis,
+      currentCursor,
     });
     setStatus('');
   }

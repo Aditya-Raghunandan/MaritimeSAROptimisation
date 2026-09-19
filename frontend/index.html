@@ -241,7 +241,13 @@
         position: absolute;
         left: 12px;
         bottom: 12px;
-        width: 440px;
+        /*
+          Wide enough for two columns of real content. The panel carries two
+          fields now -- wind on the left, ocean on the right, each with its own
+          chart -- and stacking them made it a scrolling column where the thing
+          you clicked for was usually below the fold.
+        */
+        width: 900px;
         max-width: calc(100% - 24px);
         max-height: calc(100% - 24px);
         overflow: hidden auto;
@@ -297,6 +303,33 @@
       .tile-value.warm { color: var(--warm); }
       .tile-value.cool { color: #48b1e3; }
       .tiles-2 { grid-template-columns: repeat(2, 1fr); margin: 0 -12px 9px; border-top: 1px solid var(--line); }
+
+      /*
+        Two columns, wind then ocean. The divider is a border rather than a gap
+        so the two halves read as one panel split, not as two panels that
+        happen to be adjacent.
+      */
+      .panel-cols { display: grid; grid-template-columns: 1fr 1fr; }
+      .panel-col { min-width: 0; }
+      .panel-col + .panel-col { border-left: 1px solid var(--line); }
+      .panel-col > details.section:first-child { border-top: 1px solid var(--line); }
+
+      /* One column again when there is not room for two. Below this the
+         side-by-side charts are narrower than their own axis labels. */
+      @media (max-width: 880px) {
+        .panel-cols { grid-template-columns: 1fr; }
+        .panel-col + .panel-col { border-left: none; }
+      }
+
+      /* An empty chart slot says why rather than drawing dead axes. */
+      #chart-ocean.empty { min-height: 0; }
+      #chart-ocean.empty::before {
+        content: attr(data-empty);
+        display: block;
+        color: var(--ink-3);
+        font-size: 11px;
+        padding: 6px 0 10px;
+      }
       .tile-sub { color: var(--ink-3); font-size: 10px; margin-top: 2px; line-height: 1.25; }
 
       /*
@@ -510,6 +543,8 @@
           </div>
         </div>
 
+        <div class="panel-cols">
+        <div class="panel-col">
         <details class="section" open>
           <summary>What this wind would do</summary>
           <div class="section-body">
@@ -526,6 +561,9 @@
           </div>
         </details>
 
+        </div>
+
+        <div class="panel-col">
         <details class="section" id="ocean-section" open>
           <summary>The ocean here</summary>
           <div class="section-body">
@@ -550,6 +588,15 @@
             <div class="row pending"><span class="k">Stochastic spread &eta;</span><span class="v">awaiting the engine</span></div>
           </div>
         </details>
+
+        <details class="section" open>
+          <summary>Current speed across the loaded window</summary>
+          <div class="section-body" style="padding-left: 2px; padding-right: 6px;">
+            <div id="chart-ocean" data-empty="Switch on a current layer and click again."></div>
+          </div>
+        </details>
+        </div>
+        </div>
 
         <details class="section">
           <summary>The numbers behind it</summary>
