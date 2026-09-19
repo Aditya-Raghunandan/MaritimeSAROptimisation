@@ -31,6 +31,7 @@ export class Ruler {
   constructor(map, opts = {}) {
     this.map = map;
     this.active = false;
+    this.armed = false;
     this.points = [];
     this.layer = L.layerGroup().addTo(map);
     this.onChange = opts.onChange ?? (() => {});
@@ -46,17 +47,41 @@ export class Ruler {
     };
   }
 
+  /**
+   * Turn the ruler on or off. ON means DRAWN, not necessarily listening.
+   *
+   * Arming is separate (`setArmed`) so this tool and the range rings can be on
+   * at the same time. They used to be mutually exclusive, and the reason was
+   * real: both registered their own map click handler, so with both on a
+   * single click added a ruler point AND moved the rings AND was swallowed
+   * before the ruler's readout ran -- three owners for one click. Making them
+   * exclusive fixed the click and threw away the legitimate case, which is
+   * measuring a leg against rings that stay on the map while you do it.
+   *
+   * Drawn-and-not-listening is the state that was missing.
+   */
   toggle() {
     this.active = !this.active;
-    if (this.active) {
+    if (!this.active) {
+      this.setArmed(false);
+      this.clear();
+    }
+    return this.active;
+  }
+
+  /** Whether a map click belongs to this tool. At most one tool is armed. */
+  setArmed(armed) {
+    const want = Boolean(armed) && this.active;
+    if (want === this.armed) return this.armed;
+    this.armed = want;
+    if (want) {
       this.map.on('click', this._onClick);
       L.DomUtil.addClass(this.map.getContainer(), 'measuring');
     } else {
       this.map.off('click', this._onClick);
       L.DomUtil.removeClass(this.map.getContainer(), 'measuring');
-      this.clear();
     }
-    return this.active;
+    return this.armed;
   }
 
   clear() {
@@ -157,6 +182,7 @@ export class RangeRings {
     this.baseKm = [...this.radiiKm];
     this.scale = 1;
     this.active = false;
+    this.armed = false;
     this.centre = null;
     this.layer = L.layerGroup();
     this.onChange = opts.onChange ?? (() => {});
@@ -173,21 +199,39 @@ export class RangeRings {
     };
   }
 
+  /**
+   * Turn the rings on or off. ON means DRAWN, not necessarily listening.
+   *
+   * See `Ruler.toggle` for why arming is separate. The rings keep working
+   * while disarmed: the centre handle is dragged with its own mousedown, and
+   * +/- resize on a keydown, neither of which is the map click. So the rings
+   * can sit on the map as a scale reference while the ruler owns the pointer,
+   * which is what having both on is for.
+   */
   toggle() {
     this.active = !this.active;
     if (this.active) {
       this.layer.addTo(this.map);
-      this.map.on('click', this._onClick);
       document.addEventListener('keydown', this._onKey);
       // Somewhere to start, so the tool is visibly on before the first click.
       this.placeAt(this.map.getCenter());
     } else {
-      this.map.off('click', this._onClick);
+      this.setArmed(false);
       document.removeEventListener('keydown', this._onKey);
       this.clear();
       this.map.removeLayer(this.layer);
     }
     return this.active;
+  }
+
+  /** Whether a map click re-centres the rings. At most one tool is armed. */
+  setArmed(armed) {
+    const want = Boolean(armed) && this.active;
+    if (want === this.armed) return this.armed;
+    this.armed = want;
+    if (want) this.map.on('click', this._onClick);
+    else this.map.off('click', this._onClick);
+    return this.armed;
   }
 
   clear() {
