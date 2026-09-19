@@ -46,7 +46,12 @@ export class PointPanel {
   constructor(els) {
     this.root = els.root;
     this.chartEl = els.chart;
-    this.plot = null;
+    this.oceanChartEl = els.oceanChart ?? null;
+    // Two plots, because there are two fields and they share nothing but a
+    // time axis: wind runs 0-25 m/s and current 0-2.5, so one pair of axes
+    // would flatten the current into the zero line and make the panel say the
+    // sea is still. Separate scales are the only honest way to draw both.
+    this.plots = { wind: null, ocean: null };
     this._onClose = els.onClose ?? (() => {});
 
     this.root.querySelector('#point-close').addEventListener('click', () => this.hide());
@@ -57,9 +62,14 @@ export class PointPanel {
 
     if (typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver(() => {
-        if (this.plot && this.isOpen) this.plot.setSize({ width: this._width(), height: CHART_HEIGHT });
+        if (!this.isOpen) return;
+        for (const [key, el] of this._slots()) {
+          const plot = this.plots[key];
+          if (plot) plot.setSize({ width: this._width(el), height: CHART_HEIGHT });
+        }
       });
       this._ro.observe(this.chartEl);
+      if (this.oceanChartEl) this._ro.observe(this.oceanChartEl);
     }
   }
 
@@ -72,9 +82,14 @@ export class PointPanel {
     this._onClose();
   }
 
+  _slots() {
+    return [['wind', this.chartEl], ['ocean', this.oceanChartEl]].filter(([, el]) => el);
+  }
+
   /** Never returns 0: a zero-width plot is the bug described at the top. */
-  _width() {
-    return Math.max(MIN_WIDTH, this.chartEl.clientWidth || this.root.clientWidth - 16);
+  _width(el) {
+    const target = el ?? this.chartEl;
+    return Math.max(MIN_WIDTH, target.clientWidth || this.root.clientWidth / 2 - 24);
   }
 
   /**
@@ -231,20 +246,32 @@ export class PointPanel {
       }
     }
 
-    this._drawSeries(p.series, p.axis, p.cursor);
+    this._drawSeries('wind', this.chartEl, p.series, p.axis, p.cursor, '#eb6834');
+
+    // The ocean's own series, on its own scale. Absent when the current layer
+    // has never been switched on, in which case the slot says so rather than
+    // drawing an empty pair of axes that looks like a dead chart.
+    if (this.oceanChartEl) {
+      const has = p.currentSeries && p.currentSeries.length > 1;
+      this.oceanChartEl.classList.toggle('empty', !has);
+      if (has) {
+        this._drawSeries('ocean', this.oceanChartEl, p.currentSeries,
+          p.currentAxis, p.currentCursor ?? 0, '#48b1e3');
+      }
+    }
   }
 
-  _drawSeries(series, axis, cursor) {
+  _drawSeries(key, el, series, axis, cursor, stroke) {
     const xs = new Array(series.length);
     for (let f = 0; f < series.length; f += 1) {
       xs[f] = axis.start.getTime() / 1000 + f * axis.stepSeconds;
     }
     const data = [xs, Array.from(series, (x) => (Number.isFinite(x) ? x : null))];
 
-    if (!this.plot) {
-      this.plot = new uPlot(
+    if (!this.plots[key]) {
+      this.plots[key] = new uPlot(
         {
-          width: this._width(),
+          width: this._width(el),
           height: CHART_HEIGHT,
           padding: [8, 8, 0, 0],
           scales: { x: { time: true } },
@@ -259,9 +286,9 @@ export class PointPanel {
             { label: 'time' },
             {
               label: 'm/s',
-              stroke: '#eb6834',
+              stroke,
               width: 2,
-              fill: 'rgba(235, 104, 52, 0.14)',
+              fill: stroke === '#eb6834' ? 'rgba(235, 104, 52, 0.14)' : 'rgba(72, 177, 227, 0.16)',
               // A gap is drawn as a gap. Joining across unloaded frames would
               // invent weather that was never fetched.
               spanGaps: false,
@@ -272,16 +299,16 @@ export class PointPanel {
           legend: { live: true },
         },
         data,
-        this.chartEl,
+        el,
       );
     } else {
-      this.plot.setSize({ width: this._width(), height: CHART_HEIGHT });
-      this.plot.setData(data);
+      this.plots[key].setSize({ width: this._width(el), height: CHART_HEIGHT });
+      this.plots[key].setData(data);
     }
 
-    // Park the cursor on the frame the map is showing, so the chart and the
+    // Park the cursor on the frame the map is showing, so both charts and the
     // map always agree about which moment is on screen.
-    const at = this.plot.valToPos(xs[Math.min(cursor, xs.length - 1)], 'x');
-    if (Number.isFinite(at)) this.plot.setCursor({ left: at, top: 0 });
+    const at = this.plots[key].valToPos(xs[Math.min(cursor, xs.length - 1)], 'x');
+    if (Number.isFinite(at)) this.plots[key].setCursor({ left: at, top: 0 });
   }
 }
