@@ -33,7 +33,7 @@ const DATA = import.meta.env.VITE_DATA_BASE ?? 'data';
 // so the map works for anyone who clones this.
 const CARTO_KEY = import.meta.env.VITE_CARTO_KEY ?? '';
 const carto = (style) => `https://basemaps.cartocdn.com/rastertiles/${style}/{z}/{x}/{y}.png`
-  + (CARTO_KEY ? `?key=${CARTO_KEY}` : '');
+  + `?key=${CARTO_KEY}`;
 const CARTO_ATTR = '&copy; OpenStreetMap contributors, &copy; CARTO';
 
 /**
@@ -59,23 +59,42 @@ const BASEMAPS = {
     the subject: the Gulf Stream follows the shelf edge and separates at Cape
     Hatteras because the shelf turns away there.
   */
-  'Dark (field first)': L.tileLayer(carto('dark_all'),
-    { maxZoom: 19, attribution: CARTO_ATTR }),
   'Ocean (bathymetry)': L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
     { maxZoom: 13, attribution: 'Esri, GEBCO, NOAA, National Geographic, and other contributors' },
   ),
-  'Light (data first)': L.tileLayer(carto('light_all'),
-    { maxZoom: 19, attribution: CARTO_ATTR }),
-  // Voyager carries its own place names, which is what makes it useful here:
-  // the domain is open water and the landmarks are how anyone orients.
-  'Street (named places)': L.tileLayer(carto('voyager'),
-    { maxZoom: 19, attribution: CARTO_ATTR }),
   Satellite: L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     { maxZoom: 17, attribution: 'Esri, Maxar, Earthstar Geographics' },
   ),
 };
+
+/*
+  CARTO basemaps are added ONLY when a key is present, and that is a behaviour
+  choice rather than tidiness. Without a key CARTO still serves the tile -- it
+  just stamps a watermark across it. Since the dark CARTO map is the one worth
+  defaulting to, a missing key would otherwise mean the site opens watermarked,
+  which is the worst of both: it looks broken and it is nobody's fault that is
+  visible. Omitting them means a fork, a local checkout with no .env.local, or
+  a deploy whose secret was never set all open on Esri Ocean and look
+  deliberate.
+
+  Voyager carries its own place names, which is what makes it useful here: the
+  domain is open water and the landmarks are how anyone orients.
+*/
+if (CARTO_KEY) {
+  Object.assign(BASEMAPS, {
+    'Dark (field first)': L.tileLayer(carto('dark_all'),
+      { maxZoom: 19, attribution: CARTO_ATTR }),
+    'Light (data first)': L.tileLayer(carto('light_all'),
+      { maxZoom: 19, attribution: CARTO_ATTR }),
+    'Street (named places)': L.tileLayer(carto('voyager'),
+      { maxZoom: 19, attribution: CARTO_ATTR }),
+  });
+}
+
+/** Dark when we can, bathymetry when we cannot. See above. */
+const DEFAULT_BASEMAP = CARTO_KEY ? 'Dark (field first)' : 'Ocean (bathymetry)';
 
 /**
  * Place names, drawn OVER the basemap rather than baked into it.
@@ -225,7 +244,7 @@ async function start() {
     zoomSnap: 0.125,
     zoomDelta: 0.125,
     wheelPxPerZoomLevel: 240,
-    layers: [BASEMAPS['Dark (field first)']],
+    layers: [BASEMAPS[DEFAULT_BASEMAP]],
     // The study box is 19 deg square. Panning to the Pacific shows nothing and
     // is where every projection problem lives, so the map is held near the
     // data: a generous margin to keep the coastline and the Gulf Stream's exit
