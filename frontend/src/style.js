@@ -21,7 +21,26 @@
  */
 
 /** One hue, light -> dark. See the module docstring for the validation. */
-export const SPEED_RAMP = ['#fde3d3', '#f9b98f', '#f28a54', '#eb6834', '#c04a1c', '#8c3410'];
+/*
+ * SATURATED ALL THE WAY DOWN, and that is the fix rather than a preference.
+ *
+ * Both ramps used to START NEAR WHITE -- #fde3d3 for wind, #d7f6ff for current
+ * -- and most of the domain is slow most of the time, so most arrows on the
+ * map were a pale grey smudge in both products and the wind/current split only
+ * existed at speeds that are rare. Hue has to carry the distinction where the
+ * data actually lives, which is the bottom third of the range.
+ *
+ * Still light-to-dark, so magnitude still reads as it did. What changed is
+ * that the light end is now a saturated amber rather than an off-white.
+ *
+ * GENERATED, NOT PICKED. Both ramps are a constant OKLab hue with lightness
+ * stepped evenly down and chroma held near the gamut edge -- amber at h = 62
+ * deg, cyan at h = 233 deg, L from 0.88 to 0.50. A first attempt at this was
+ * hand-picked hex and the style test caught it at 34 deg of hue spread against
+ * its 30 deg gate: "one hue, light to dark, not a rainbow" is exactly the
+ * property eyeballing a swatch cannot verify.
+ */
+export const SPEED_RAMP = ['#ffcd8d', '#ffaf62', '#ed9235', '#d27908', '#b0660c', '#8e5311'];
 
 /**
  * The CURRENT's arrow ramp. One hue, light to dark, same rule as the wind's.
@@ -32,7 +51,7 @@ export const SPEED_RAMP = ['#fde3d3', '#f9b98f', '#f28a54', '#eb6834', '#c04a1c'
  * families at the mark level -- warm arrows are wind, cool arrows are water --
  * which is the distinction that has to survive a projector at ten metres.
  */
-export const CURRENT_RAMP = ['#d7f6ff', '#9be5f7', '#56ccec', '#22aedb', '#1487b4', '#0e6489'];
+export const CURRENT_RAMP = ['#9ae2ff', '#73c9f6', '#48b1e3', '#1e98cb', '#037fad', '#04668c'];
 
 /** Target on-screen spacing between arrows, px. Below this they overlap into mush. */
 // Sparser than it was. The arrows used to BE the field and had to cover it;
