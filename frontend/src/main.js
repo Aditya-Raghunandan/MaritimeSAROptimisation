@@ -11,7 +11,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Clock } from './clock.js';
 import { buildLayer } from './layers.js';
-import { ZarrSource, pickTier } from './sources.js';
+import { ZarrSource, pickTier, residentSpanOf } from './sources.js';
 import { quiverLayer } from './quiver.js';
 import { windLegend } from './legend.js';
 import { ResultantSource, resultantScale } from './resultant.js';
@@ -122,15 +122,16 @@ const LABELS = L.tileLayer(
  * nobody can perceive hourly detail while scrubbing across a year and the
  * download is 1.32 GB against 0.07 GB for the same five years.
  */
-async function loadArchive(base) {
-  const res = await fetch(`${base}/wind_archive.json`);
-  if (!res.ok) throw new Error(`no archive manifest at ${base}/wind_archive.json`);
-  const archive = await res.json();
-
-  const anyTier = Object.values(archive.tiers)[0];
-  const spanDays = (new Date(anyTier.end) - new Date(anyTier.start)) / 86400000;
-  const tierName = pickTier(archive.tiers, spanDays);
+/**
+ * Open one published tier of an archive as a field source.
+ *
+ * Separate from `loadArchive` because it is called again every time the viewer
+ * changes the time resolution: the tiers are the same data at different
+ * strides, so switching is opening a different store, not reloading the page.
+ */
+async function openTier(base, archive, tierName) {
   const tier = archive.tiers[tierName];
+  if (!tier) throw new Error(`the archive does not publish a "${tierName}" tier`);
 
   // A tier published with --allow-gaps cannot have its timestamps
   // reconstructed as start + k * step. Refusing is right: the alternative is a
@@ -142,12 +143,25 @@ async function loadArchive(base) {
     );
   }
 
-  const source = await new ZarrSource(`${base}/${tier.path}`, {
+  return new ZarrSource(`${base}/${tier.path}`, {
     frames: tier.frames,
     chunks: tier.chunks,
     variables: archive.variables,
     grid: archive.grid,
   }).open();
+}
+
+async function loadArchive(base) {
+  const res = await fetch(`${base}/wind_archive.json`);
+  if (!res.ok) throw new Error(`no archive manifest at ${base}/wind_archive.json`);
+  const archive = await res.json();
+
+  const anyTier = Object.values(archive.tiers)[0];
+  const spanDays = (new Date(anyTier.end) - new Date(anyTier.start)) / 86400000;
+  const tierName = pickTier(archive.tiers, spanDays);
+  const tier = archive.tiers[tierName];
+
+  const source = await openTier(base, archive, tierName);
 
   const [latMin, lonMin, latMax, lonMax] = archive.bbox;
   const endMs = new Date(tier.start).getTime() + tier.frames * tier.step_seconds * 1000;
@@ -178,6 +192,7 @@ async function loadArchive(base) {
     },
     _tier: tierName,
     _archive: archive,
+    _base: base,
   };
 
   return { manifest, layers: [buildLayer(manifest.layers[0], source)] };
@@ -202,6 +217,27 @@ async function loadBundle(base) {
 
 function setStatus(text) {
   document.getElementById('status').textContent = text;
+}
+
+/** "one hour", "three hours", "a day" -- a step length anyone can read. */
+function describeStep(stepSeconds) {
+  const hours = stepSeconds / 3600;
+  if (hours >= 24) return hours === 24 ? 'a day' : `${hours / 24} days`;
+  if (hours === 1) return 'one hour';
+  return `${hours} hours`;
+}
+
+/**
+ * The provenance line, which must be rewritten whenever the tier changes --
+ * it names the store, its compression and its size, and all three move.
+ */
+function setProvenance(tierName, tier) {
+  const el = document.getElementById('provenance');
+  if (!el) return;
+  if (!tier) { el.textContent = ''; return; }
+  el.textContent = `${tierName} · ${tier.frames.toLocaleString()} frames · `
+    + `${describeStep(tier.step_seconds)} per step · ${tier.compression} · `
+    + `${(tier.bytes / 1e6).toFixed(0)} MB published`;
 }
 
 async function start() {
@@ -401,6 +437,71 @@ async function start() {
   slider.addEventListener('input', () => clock.setIndex(Number(slider.value)));
 
   /*
+    TIME RESOLUTION. The archive is published at several strides of the same
+    data, and until now the client picked one from the total span and gave the
+    viewer no say -- five years spans 1,826 days, so it always chose `daily`
+    and playback jumped a day at a time with no way to look inside one.
+
+    Switching tier is opening a different store, not reloading the page. The
+    clock holds a TIMESTAMP, so the moment survives the change and every layer
+    re-derives its own frame from it; only the slider's granularity changes.
+    An index-based clock would land on 1/24th of the intended date here.
+
+    The cost is stated rather than hidden: the hourly tier is 1.27 GB against
+    72 MB for daily, but only the chunks actually scrubbed through are ever
+    fetched, so the honest number to show is the chunk size, not the tier size.
+  */
+  const tierSelect = document.getElementById('tier');
+  const archive = manifest._archive;
+  if (tierSelect && archive && archive.tiers) {
+    const names = Object.keys(archive.tiers);
+    tierSelect.innerHTML = '';
+    for (const name of names) {
+      const t = archive.tiers[name];
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = `${name} · ${t.frames.toLocaleString()} frames · ${(t.bytes / 1e6).toFixed(0)} MB`;
+      tierSelect.appendChild(opt);
+    }
+    tierSelect.value = manifest._tier;
+    tierSelect.disabled = names.length < 2;
+
+    tierSelect.addEventListener('change', async () => {
+      const name = tierSelect.value;
+      const previous = manifest._tier;
+      tierSelect.disabled = true;
+      setStatus(`switching to ${name} …`);
+      try {
+        const source = await openTier(manifest._base, archive, name);
+        const t = archive.tiers[name];
+
+        // Mutated in place, not replaced: the resultant layer and the clock
+        // listeners closed over this object when they were wired.
+        axis.start = new Date(t.start);
+        axis.stepSeconds = t.step_seconds;
+        axis.frames = t.frames;
+
+        field.source = source;
+        manifest._tier = name;
+        clock.setStep(t.step_seconds);
+
+        slider.max = String(clock.steps - 1);
+        slider.value = String(clock.index);
+        setProvenance(name, t);
+
+        await field.ensure(clock.frameOf(axis));
+        await redraw();
+        setStatus(`${name} — one step is ${describeStep(t.step_seconds)}.`);
+      } catch (err) {
+        tierSelect.value = previous;
+        setStatus(`could not switch to ${name}: ${err.message}`);
+      } finally {
+        tierSelect.disabled = names.length < 2;
+      }
+    });
+  }
+
+  /*
     Play through the window.
     Each tick AWAITS the redraw rather than firing on a fixed interval, so
     playback slows down when a chunk has to be fetched instead of racing ahead
@@ -506,10 +607,27 @@ async function start() {
     if (!field.isResident(frame)) return;
 
     const [u, v] = field.vector(frame, cell.j, cell.i);
-    // Still free: whatever is resident already holds this cell at every one of
-    // its timesteps, so the series is the same memory read along a different
-    // axis. Unloaded frames come back NaN and are drawn as a gap, not joined.
-    const series = field.seriesAt(cell.j, cell.i, axis.frames);
+
+    /*
+      Plot what is actually loaded, not the whole tier.
+
+      This used to ask for `axis.frames` -- 1,826 at the daily tier, 43,824 at
+      hourly -- when only the cached chunks have values. The chart drew a
+      sliver of real data against four empty years, and the panel reported a
+      window mean "over 192 frames" without saying which 192. Both were honest
+      and neither was legible.
+
+      The series is still free: whatever is resident already holds this cell at
+      every one of its timesteps, so it is the same memory read along a
+      different axis. What changed is that the x-range now matches it.
+    */
+    const span = residentSpanOf(field, frame, axis.frames);
+    const series = field.seriesAt(cell.j, cell.i, span.to - span.from, span.from);
+    const spanAxis = {
+      start: new Date(axis.start.getTime() + span.from * axis.stepSeconds * 1000),
+      stepSeconds: axis.stepSeconds,
+      frames: span.to - span.from,
+    };
 
     panel.show({
       lat: field.grid.lat(cell.j),
@@ -517,8 +635,8 @@ async function start() {
       u,
       v,
       series,
-      axis,
-      cursor: frame,
+      axis: spanAxis,
+      cursor: frame - span.from,
       when: clock.label(),
       currentSpeed: TYPICAL_CURRENT_MS,
     });
@@ -608,10 +726,8 @@ async function start() {
     showSeries(e.latlng);
   });
 
-  document.getElementById('provenance').textContent =
-    `${manifest.provenance.source_file} | ${manifest.clock.frames} frames | ` +
-    `built ${manifest.generated.slice(0, 10)}` +
-    (manifest.provenance.git_sha ? ` | ${manifest.provenance.git_sha}` : '');
+  setProvenance(manifest._tier, manifest._archive && manifest._archive.tiers
+    ? manifest._archive.tiers[manifest._tier] : null);
 
   await redraw();
   setStatus('Click anywhere for a time series at that cell.');
