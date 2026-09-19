@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Maritime SAR — drift and search</title>
+    <title>Maritime Search and Rescue — drift prediction and search patterns</title>
     <style>
       /*
         Dark chrome, light map. The chrome was white and it dominated: the map
@@ -40,15 +40,85 @@
 
       header {
         display: flex;
-        align-items: baseline;
-        gap: 16px;
-        padding: 9px 14px;
+        align-items: center;
+        gap: 14px;
+        padding: 8px 14px;
         border-bottom: 1px solid var(--line);
         background: var(--surface-1);
       }
+
+      /*
+        The Wits mark is a full-colour crest and wordmark drawn for a light
+        background -- navy #12326e and gold #e5c991. Dropped straight onto the
+        near-black chrome its wordmark disappears, so it sits on a light plate.
+        Recolouring somebody else's crest to suit our theme is not ours to do;
+        giving it the background it was drawn for is.
+
+        Fixed height, width auto: it is vector, so it stays sharp at any size,
+        and constraining the height keeps the lockup's aspect ratio rather than
+        squashing it.
+      */
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        background: #fff;
+        border-radius: 5px;
+        padding: 5px 9px;
+        line-height: 0;
+        flex: none;
+      }
+      .brand img { height: 26px; width: auto; display: block; }
+
+      .titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
       header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .2px; }
-      #stamp { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); }
-      #provenance { margin-left: auto; color: var(--ink-3); font-size: 11px; }
+      .subtitle {
+        margin: 0;
+        font-size: 10.5px;
+        color: var(--ink-3);
+        letter-spacing: .1px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .header-right {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex: none;
+      }
+      #stamp {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--accent);
+      }
+      #provenance { color: var(--ink-3); font-size: 11px; text-align: right; }
+
+      /*
+        Narrow screens drop the subtitle and the provenance line rather than
+        wrapping the header into two rows, which would resize the map.
+      */
+      @media (max-width: 900px) {
+        .subtitle, #provenance { display: none; }
+      }
+
+      /* Who made this, and for what. The site is public, so it should say so
+         without anyone having to open the repository. */
+      .colophon {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 14px;
+        color: var(--ink-3);
+        font-size: 10.5px;
+        border-top: 1px solid var(--line);
+        padding-top: 7px;
+        margin-top: 1px;
+      }
+      .colophon a { color: var(--ink-3); text-decoration: none; border-bottom: 1px solid var(--line); }
+      .colophon a:hover { color: var(--ink-2); border-bottom-color: var(--ink-3); }
+      .colophon .sep { margin-left: auto; }
 
       .map-wrap { position: relative; min-height: 0; }
       #map { width: 100%; height: 100%; background: #0d1a26; }
@@ -311,9 +381,24 @@
   </head>
   <body>
     <header>
-      <h1>Maritime SAR</h1>
-      <span id="stamp">—</span>
-      <span id="provenance"></span>
+      <a class="brand" href="https://www.wits.ac.za/"
+         target="_blank" rel="noopener noreferrer"
+         title="University of the Witwatersrand, Johannesburg">
+        <img src="/brand/wits-logo.svg"
+             alt="University of the Witwatersrand" width="247" height="88" />
+      </a>
+
+      <div class="titles">
+        <h1>Maritime Search and Rescue</h1>
+        <p class="subtitle">
+          Drift prediction and search-pattern comparison &middot; Gulf Stream, 17&ndash;36&nbsp;N 82&ndash;63&nbsp;W
+        </p>
+      </div>
+
+      <div class="header-right">
+        <span id="stamp">&mdash;</span>
+        <span id="provenance"></span>
+      </div>
     </header>
 
     <div class="map-wrap">
@@ -392,6 +477,19 @@
         </span>
       </div>
       <div id="status"></div>
+
+      <div class="colophon">
+        <span>
+          ELEN4012A Investigation Project &middot; School of Electrical and Information
+          Engineering, University of the Witwatersrand
+        </span>
+        <span>Aditya Raghunandan &middot; Sun&eacute; Toerien</span>
+        <span class="sep">
+          <a href="https://github.com/Aditya-Raghunandan/MaritimeSAROptimisation">Source</a>
+          &middot;
+          <a href="https://huggingface.co/datasets/AdityaRugs/MaritimeSARoperations">Data</a>
+        </span>
+      </div>
     </footer>
 
     <script type="module" src="/src/main.js"></script>
