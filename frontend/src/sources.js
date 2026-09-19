@@ -32,6 +32,31 @@
 
 import * as zarr from 'zarrita';
 
+/**
+ * Whether a field can be READ synchronously at this frame.
+ *
+ * Leaflet calls a layer's `onAdd` synchronously from `addTo(map)`, and our
+ * renderers paint from there -- before anything has been fetched. On the Zarr
+ * path frame 0 is not resident until `ensure(0)` resolves, and `vector` throws
+ * rather than returning zeros, deliberately. Thrown out of `onAdd` that
+ * exception escapes `start()` and leaves every control below the renderers
+ * unwired, which reads as a working map with dead buttons rather than a crash.
+ *
+ * So the renderers ASK instead of trying. `particles.js` already wrapped its
+ * read in try/catch; this is the same question asked before the call rather
+ * than after it, which is what `raster` and `quiver` need -- they paint whole
+ * grids, so a per-cell try/catch would be a throw per cell.
+ *
+ * An object that cannot answer is treated as READY, not as not-ready: the
+ * flat-bundle path hands renderers a plain buffer-backed field that is always
+ * resident, and it must keep painting exactly as it did.
+ */
+export function isFrameReady(field, frame) {
+  if (typeof field?.isResident === 'function') return field.isResident(frame);
+  if (typeof field?.source?.isResident === 'function') return field.source.isResident(frame);
+  return true;
+}
+
 /** Frames already in memory: the whole window, always. */
 export class BufferSource {
   /**

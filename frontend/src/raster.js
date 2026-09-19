@@ -32,6 +32,7 @@
 import L from 'leaflet';
 
 import { normaliseSpeed, viridis } from './colormap.js';
+import { isFrameReady } from './sources.js';
 
 export const RasterLayer = L.Layer.extend({
   /**
@@ -105,6 +106,12 @@ export const RasterLayer = L.Layer.extend({
 
   /** Fill the grid-resolution buffer: one pixel per cell. */
   _paintSource() {
+    // Nothing is fetched when Leaflet calls onAdd -> _reset -> _draw -> here.
+    // Painting anyway would throw out of addTo(map) and unwire the rest of the
+    // page; painting zeros would be worse still, because a calm field is a
+    // plausible picture. Leave the buffer transparent and come back on the
+    // next setFrame, which redraw() issues as soon as the chunk lands.
+    if (!isFrameReady(this._field, this._frame)) return;
     const g = this._field.grid;
     const ctx = this._src.getContext('2d');
     const img = ctx.createImageData(g.nlon, g.nlat);

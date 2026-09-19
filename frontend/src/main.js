@@ -287,6 +287,32 @@ async function start() {
   const field = layers.find((l) => l.type === 'field');
   if (field) windLegend({ maxSpeed: field.valueRange[1] }).addTo(map);
 
+  /*
+    THE FIRST FRAME BEFORE THE FIRST PAINT, and this await is load-bearing.
+
+    Every renderer below draws from Leaflet's `onAdd`, which `addTo(map)` calls
+    synchronously. On the Zarr path nothing is resident until a chunk has been
+    fetched, and `ZarrSource.vector` throws on a non-resident frame rather than
+    returning zeros -- correctly, because a calm field is a plausible, wrong
+    picture. Without this line that throw escaped `start()` and the layer
+    control, the slider, play, the ruler, the rings, the click handler and the
+    provenance line were never wired: a map that renders with dead controls.
+
+    It never showed on the flat-bundle path, where `BufferSource` is always
+    resident, so making Zarr the default turned a latent ordering assumption
+    into a crash. The renderers now also refuse to paint a non-resident frame
+    (see `isFrameReady`), but that is the backstop; this is the fix.
+  */
+  if (field) {
+    try {
+      await field.ensure(clock.frameOf(axis));
+    } catch (err) {
+      // Wire the page anyway. A tool that works over a blank field is more
+      // use than a dead page, and the status line says what went wrong.
+      setStatus(`Could not load the first frame: ${err.message}`);
+    }
+  }
+
   // Our own renderer, not leaflet-velocity. That library indexes its grid with
   // floorMod(lon, 360) against raw map bounds, so at low zoom it painted copies
   // of our box across the Pacific, and it rebuilds on a 750 ms debounce, so a
