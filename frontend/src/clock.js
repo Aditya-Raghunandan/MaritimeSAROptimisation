@@ -26,6 +26,10 @@ export class Clock {
     this.end = end;
     this.stepSeconds = stepSeconds;
     this.t = new Date(start.getTime());
+    // The slider spans a WINDOW, not the whole archive. Defaults to the whole
+    // archive so a caller that never sets one behaves as before.
+    this.winStart = new Date(start.getTime());
+    this.winEnd = new Date(end.getTime());
     this._listeners = new Set();
   }
 
@@ -34,19 +38,102 @@ export class Clock {
     return new Clock(new Date(c.start), new Date(c.end), c.step_seconds);
   }
 
-  /** Number of slider positions. End is exclusive, so this is a count of steps. */
+  /**
+   * Number of slider positions, ACROSS THE WINDOW.
+   *
+   * The slider used to span the whole archive at whatever stride was chosen,
+   * which made the finer tiers useless: hourly over five years is 43,824
+   * positions, so one pixel of travel was several hours and there was no way
+   * to step through a single day. A slider is a fixed number of pixels, so
+   * what it spans has to be bounded by something other than the archive.
+   */
   get steps() {
-    return Math.max(1, Math.round((this.end - this.start) / (this.stepSeconds * 1000)));
+    return Math.max(1, Math.round((this.winEnd - this.winStart) / (this.stepSeconds * 1000)));
   }
 
   get index() {
-    return Math.round((this.t - this.start) / (this.stepSeconds * 1000));
+    return Math.round((this.t - this.winStart) / (this.stepSeconds * 1000));
   }
 
-  /** Move to a slider position, clamped into range. */
+  /** Move to a slider position, clamped into the window. */
   setIndex(i) {
     const clamped = Math.min(Math.max(i, 0), this.steps - 1);
-    this.setTime(new Date(this.start.getTime() + clamped * this.stepSeconds * 1000));
+    this.setTime(new Date(this.winStart.getTime() + clamped * this.stepSeconds * 1000));
+  }
+
+  /**
+   * Put a window of `spanSeconds` around the current moment.
+   *
+   * Aligned to a whole multiple of the span from the epoch rather than centred
+   * on `t`, so a 24 h window is a UTC DAY -- 00:00 to 00:00 -- rather than an
+   * arbitrary window that happens to contain the cursor. A window whose edges
+   * move every time you touch the slider is impossible to reason about, and
+   * "the 6th of May" is a thing a reader can name.
+   *
+   * `null` or 0 means the whole archive, which is what the coarsest tier
+   * wants: at daily resolution the archive IS the overview.
+   */
+  setWindowSpan(spanSeconds) {
+    if (!spanSeconds) {
+      this.winStart = new Date(this.start.getTime());
+      this.winEnd = new Date(this.end.getTime());
+    } else {
+      const ms = spanSeconds * 1000;
+      const aligned = Math.floor(this.t.getTime() / ms) * ms;
+      this.winStart = new Date(Math.max(aligned, this.start.getTime()));
+      this.winEnd = new Date(Math.min(aligned + ms, this.end.getTime()));
+    }
+    this._clampIntoWindow();
+    for (const fn of this._listeners) fn(this.t);
+    return this.windowSpanSeconds;
+  }
+
+  /** Window length in seconds, or null when it is the whole archive. */
+  get windowSpanSeconds() {
+    const whole = this.winStart.getTime() === this.start.getTime()
+      && this.winEnd.getTime() === this.end.getTime();
+    return whole ? null : (this.winEnd - this.winStart) / 1000;
+  }
+
+  /**
+   * Slide the window by `n` of its own lengths, carrying the cursor with it.
+   *
+   * The cursor keeps its offset into the window, so stepping forward a day at
+   * 09:00 lands on 09:00 the next day rather than snapping to midnight.
+   * Returns false when there is nothing that way, so the caller can grey out
+   * the button rather than offering a move that does nothing.
+   */
+  shiftWindow(n) {
+    const span = this.winEnd - this.winStart;
+    if (!span) return false;
+    const offset = this.t - this.winStart;
+    const wantStart = this.winStart.getTime() + n * span;
+    const maxStart = this.end.getTime() - span;
+    const clamped = Math.min(Math.max(wantStart, this.start.getTime()), maxStart);
+    if (clamped === this.winStart.getTime()) return false;
+
+    this.winStart = new Date(clamped);
+    this.winEnd = new Date(clamped + span);
+    this.t = new Date(clamped + offset);
+    this._clampIntoWindow();
+    for (const fn of this._listeners) fn(this.t);
+    return true;
+  }
+
+  /** Can the window move that way at all? For enabling the arrows. */
+  canShift(n) {
+    const span = this.winEnd - this.winStart;
+    if (!span) return false;
+    const maxStart = this.end.getTime() - span;
+    const want = Math.min(Math.max(this.winStart.getTime() + n * span, this.start.getTime()), maxStart);
+    return want !== this.winStart.getTime();
+  }
+
+  _clampIntoWindow() {
+    const lo = this.winStart.getTime();
+    const hi = this.winEnd.getTime() - this.stepSeconds * 1000;
+    const t = Math.min(Math.max(this.t.getTime(), lo), Math.max(lo, hi));
+    this.t = new Date(t);
   }
 
   /**
@@ -62,6 +149,7 @@ export class Clock {
   setStep(stepSeconds) {
     if (!(stepSeconds > 0) || stepSeconds === this.stepSeconds) return;
     this.stepSeconds = stepSeconds;
+    this._clampIntoWindow();
     for (const fn of this._listeners) fn(this.t);
   }
 
@@ -94,5 +182,27 @@ export class Clock {
   label() {
     const iso = this.t.toISOString();
     return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+  }
+
+  /** The window as a readable range, for the label beside the slider. */
+  windowLabel() {
+    const day = (d) => d.toISOString().slice(0, 10);
+    const hm = (d) => d.toISOString().slice(11, 16);
+    const span = this.windowSpanSeconds;
+    if (span === null) return `${day(this.winStart)} → ${day(this.winEnd)}`;
+
+    // `winEnd` is exclusive, so the last moment inside the window is one
+    // millisecond before it. Using winEnd itself printed a whole day as
+    // "00:00-00:00", which reads as an empty range rather than as a full one.
+    const last = new Date(this.winEnd.getTime() - 1);
+    const wholeDays = span % 86400 === 0
+      && this.winStart.getTime() % 86400000 === 0;
+
+    if (wholeDays && span === 86400) return `${day(this.winStart)} UTC`;
+    if (wholeDays) return `${day(this.winStart)} → ${day(last)} UTC`;
+    if (day(this.winStart) === day(last)) {
+      return `${day(this.winStart)} ${hm(this.winStart)}–${hm(this.winEnd)} UTC`;
+    }
+    return `${day(this.winStart)} ${hm(this.winStart)} → ${day(last)} ${hm(this.winEnd)} UTC`;
   }
 }

@@ -153,3 +153,87 @@ describe('setStep', () => {
     expect(clock.stepSeconds).toBe(86400);
   });
 });
+
+/*
+  The slider spans a WINDOW, not the archive. Spanning five years at hourly is
+  43,824 positions -- one pixel of travel is several hours and a single day
+  cannot be stepped through, which made the fine tiers useless the moment they
+  became reachable.
+*/
+describe('window', () => {
+  const ARCHIVE_START = new Date('2019-01-01T00:00:00Z');
+  const ARCHIVE_END = new Date('2024-01-01T00:00:00Z');
+  const at = (step, when) => {
+    const c = new Clock(ARCHIVE_START, ARCHIVE_END, step);
+    c.setTime(new Date(when));
+    return c;
+  };
+
+  it('defaults to the whole archive, as it always did', () => {
+    const c = new Clock(ARCHIVE_START, ARCHIVE_END, 3600);
+    expect(c.steps).toBe(43824);
+    expect(c.windowSpanSeconds).toBeNull();
+  });
+
+  it('an hourly day is 24 positions', () => {
+    const c = at(3600, '2019-05-06T09:00:00Z');
+    c.setWindowSpan(86400);
+    expect(c.steps).toBe(24);
+    expect(c.index).toBe(9);
+  });
+
+  it('aligns to the UTC day rather than centring on the cursor', () => {
+    const c = at(3600, '2019-05-06T09:00:00Z');
+    c.setWindowSpan(86400);
+    expect(c.winStart.toISOString()).toBe('2019-05-06T00:00:00.000Z');
+    expect(c.winEnd.toISOString()).toBe('2019-05-07T00:00:00.000Z');
+    expect(c.windowLabel()).toBe('2019-05-06 UTC');
+  });
+
+  it('keeps the moment when the window is applied', () => {
+    const c = at(3600, '2019-05-06T09:00:00Z');
+    c.setWindowSpan(86400);
+    expect(c.t.toISOString()).toBe('2019-05-06T09:00:00.000Z');
+  });
+
+  it('shifts a whole window and carries the cursor offset with it', () => {
+    const c = at(3600, '2019-05-06T09:00:00Z');
+    c.setWindowSpan(86400);
+    expect(c.shiftWindow(1)).toBe(true);
+    expect(c.t.toISOString()).toBe('2019-05-07T09:00:00.000Z');
+    expect(c.index).toBe(9);
+    expect(c.windowLabel()).toBe('2019-05-07 UTC');
+  });
+
+  it('refuses to shift past the archive, and says so before you try', () => {
+    const c = at(3600, '2019-01-01T00:00:00Z');
+    c.setWindowSpan(86400);
+    expect(c.canShift(-1)).toBe(false);
+    expect(c.shiftWindow(-1)).toBe(false);
+    expect(c.canShift(1)).toBe(true);
+  });
+
+  it('null span returns to the whole archive', () => {
+    const c = at(86400, '2020-06-01T00:00:00Z');
+    c.setWindowSpan(86400 * 7);
+    expect(c.steps).toBe(7);
+    c.setWindowSpan(null);
+    expect(c.steps).toBe(1826);
+    expect(c.windowSpanSeconds).toBeNull();
+  });
+
+  it('a multi-day window names both ends', () => {
+    const c = at(21600, '2019-05-06T09:00:00Z');
+    c.setWindowSpan(7 * 86400);
+    expect(c.steps).toBe(28);
+    expect(c.windowLabel()).toMatch(/^2019-05-\d\d → 2019-05-\d\d UTC$/);
+  });
+
+  it('clamps the cursor into the window rather than leaving it outside', () => {
+    const c = at(3600, '2019-05-06T09:00:00Z');
+    c.setWindowSpan(86400);
+    c.setIndex(999);
+    expect(c.index).toBe(23);
+    expect(c.t.toISOString()).toBe('2019-05-06T23:00:00.000Z');
+  });
+});
