@@ -45,6 +45,7 @@
 import L from 'leaflet';
 
 import { MAX_ARROW_PX, arrowLength, decimation, speedColour } from './style.js';
+import { isFrameReady } from './sources.js';
 
 /** Drawn under every arrow so it stays legible over any basemap tile. */
 const OUTLINE = 'rgba(15, 15, 15, 0.45)';
@@ -133,6 +134,12 @@ export const QuiverLayer = L.Layer.extend({
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size.x, size.y);
+
+    // Cleared, then nothing -- the frame is not resident. Same reasoning as
+    // raster.js: this runs synchronously from onAdd before the first fetch,
+    // and an exception here escapes start(). Clearing first means a stale
+    // frame is removed rather than left behind under a new one.
+    if (!isFrameReady(this._field, this._frame)) return;
 
     const g = this._field.grid;
     const cellPx = this._cellSpacingPx();
