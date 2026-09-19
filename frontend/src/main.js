@@ -151,6 +151,53 @@ async function openTier(base, archive, tierName) {
   }).open();
 }
 
+/**
+ * Load one published product as a field layer, or null if it is not there.
+ *
+ * Null rather than throwing: the wind archive is what the clock is built from
+ * and the map is useless without it, but the current archive is an overlay.
+ * A site that refuses to open because one of two datasets is missing is worse
+ * than one that opens and says which it has -- and during the five days
+ * between publishing wind and publishing current, that was the live state.
+ */
+async function loadProduct(base, product, valueRange) {
+  let archive;
+  try {
+    const res = await fetch(`${base}/${product}_archive.json`);
+    if (!res.ok) return null;
+    archive = await res.json();
+  } catch {
+    return null;
+  }
+
+  const anyTier = Object.values(archive.tiers)[0];
+  const spanDays = (new Date(anyTier.end) - new Date(anyTier.start)) / 86400000;
+  const tierName = pickTier(archive.tiers, spanDays);
+  const tier = archive.tiers[tierName];
+  const source = await openTier(base, archive, tierName);
+
+  const layer = buildLayer({
+    id: archive.product,
+    type: 'field',
+    label: archive.label,
+    units: archive.units,
+    grid: archive.grid,
+    value_range: valueRange,
+  }, source);
+
+  return {
+    archive,
+    tierName,
+    tier,
+    layer,
+    axis: {
+      start: new Date(tier.start),
+      stepSeconds: tier.step_seconds,
+      frames: tier.frames,
+    },
+  };
+}
+
 async function loadArchive(base) {
   const res = await fetch(`${base}/wind_archive.json`);
   if (!res.ok) throw new Error(`no archive manifest at ${base}/wind_archive.json`);
@@ -195,7 +242,22 @@ async function loadArchive(base) {
     _base: base,
   };
 
-  return { manifest, layers: [buildLayer(manifest.layers[0], source)] };
+  /*
+    The surface current, as a second field.
+
+    Its own grid (476 x 238 against wind's 77 x 77), its own cadence (3-hourly
+    against hourly) and its own tiers -- which is exactly why nothing here
+    merges the two onto a common grid. The clock maps a shared moment to each
+    layer's own nearest frame, and the resultant samples the current by nearest
+    neighbour at each wind cell centre. What must agree is the conventions, not
+    the grids.
+
+    Top of scale is 2.5 m/s, not wind's 25: the Gulf Stream core runs about
+    1.8 m/s, so on the wind ramp every current arrow would be invisible.
+  */
+  const current = await loadProduct(base, 'current', [0, 2.5]);
+
+  return { manifest, layers: [buildLayer(manifest.layers[0], source)], current };
 }
 
 async function loadBundle(base) {
@@ -261,7 +323,7 @@ async function start() {
       throw bundleErr;
     }
   }
-  const { manifest, layers } = bundle;
+  const { manifest, layers, current } = bundle;
 
   const [latMin, lonMin, latMax, lonMax] = manifest.bbox;
   const dataBounds = L.latLngBounds([latMin, lonMin], [latMax, lonMax]);
@@ -358,6 +420,9 @@ async function start() {
   let quiver = null;
   let raster = null;
   let particles = null;
+  let currentRaster = null;
+  let currentParticles = null;
+  let currentQuiver = null;
   if (field) {
     /*
       Three renderings of the same field, because they answer different
@@ -385,6 +450,37 @@ async function start() {
     overlays[`${field.label} — arrows`] = quiver;
   }
 
+  /*
+    The surface current, rendered the same three ways and OFF by default.
+
+    Off because wind and current painted on top of each other are two flow
+    fields in one frame and neither is readable; the viewer turns on the one
+    they are asking about. The resultant layer below is the one that shows
+    them combined, which is the honest way to see both at once.
+
+    Its renderers are the same functions as wind's -- the whole reason
+    FieldLayer carries its own grid is so a renderer never has to know which
+    product it was handed, and this is the first time two products prove it.
+  */
+  if (current) {
+    currentRaster = rasterLayer(current.layer, { maxSpeed: current.layer.valueRange[1] });
+    currentParticles = particleLayer(current.layer, { maxSpeed: current.layer.valueRange[1] });
+    currentQuiver = quiverLayer(current.layer, { maxSpeed: current.layer.valueRange[1] });
+
+    overlays[`${current.layer.label} — speed`] = currentRaster;
+    overlays[`${current.layer.label} — flow`] = currentParticles;
+    overlays[`${current.layer.label} — arrows`] = currentQuiver;
+
+    // Same rule as the wind field: make the first frame resident before any
+    // renderer can be added, so switching the layer on never paints a frame
+    // that is not there.
+    try {
+      await current.layer.ensure(clock.frameOf(current.axis));
+    } catch (err) {
+      setStatus(`Surface current did not load: ${err.message}`);
+    }
+  }
+
   // The remaining three types have no data yet. They are listed as disabled so
   // the map says what is coming rather than pretending it is complete.
   overlays['Place names'] = LABELS;
@@ -404,7 +500,11 @@ async function start() {
   if (field) {
     const source = new ResultantSource(
       { source: field.source, grid: field.grid, axis },
-      null,                       // currents: awaiting the HYCOM publish
+      // The second argument, at last. Everything else about this layer was
+      // already the code that would be used -- passing it is the whole change,
+      // and `isPartial` flips to false on its own, so the caveat the UI shows
+      // stops saying the current is missing without anyone editing the wording.
+      current ? { source: current.layer.source, grid: current.layer.grid, axis: current.axis } : null,
     );
     const meta = source.describe();
     const scale = resultantScale(field.valueRange[1], !source.isPartial);
@@ -590,6 +690,34 @@ async function start() {
       if (map.hasLayer(quiver)) quiver.setFrame(frame);
       particles.setFrame(frame);
     }
+
+    /*
+      The current is on its own axis, so it gets its own frame from the shared
+      moment rather than reusing the wind's index. Wind is hourly and current
+      3-hourly; reusing the index would run the current at a third speed and
+      three times behind, and it would look entirely plausible while doing it.
+
+      Only fetched when a current layer is actually on the map. The 3-hourly
+      tier is 4.3 GB, and nobody should download a chunk of it to render a
+      layer that is switched off.
+    */
+    if (current) {
+      const shown = [currentRaster, currentQuiver, currentParticles].filter((l) => l && map.hasLayer(l));
+      const resultantOn = resultant && map.hasLayer(resultant);
+      if (shown.length || resultantOn) {
+        const cFrame = clock.frameOf(current.axis);
+        if (!current.layer.isResident(cFrame)) {
+          try {
+            await current.layer.ensure(cFrame);
+          } catch (err) {
+            setStatus(`current: ${err.message}`);
+          }
+          if (mine !== drawToken) return;
+        }
+        for (const l of shown) l.setFrame(cFrame);
+      }
+    }
+
     if (pinned) showSeries(pinned);
   }
   clock.onChange(() => { slider.value = String(clock.index); redraw(); });
@@ -621,6 +749,24 @@ async function start() {
       every one of its timesteps, so it is the same memory read along a
       different axis. What changed is that the x-range now matches it.
     */
+    /*
+      Sample the current at the same place, on its own grid and its own frame.
+
+      Nearest neighbour at the wind cell centre, the same rule ResultantSource
+      uses, so the panel and the resultant arrow can never disagree about what
+      the current is doing here. Null when the archive is absent or the frame
+      has not been fetched -- the panel says which, rather than showing a zero.
+    */
+    let currentAt = null;
+    if (current) {
+      const cFrame = clock.frameOf(current.axis);
+      const cCell = current.layer.grid.cellAt(field.grid.lat(cell.j), field.grid.lon(cell.i));
+      if (cCell && current.layer.isResident(cFrame)) {
+        const [cu, cv] = current.layer.vector(cFrame, cCell.j, cCell.i);
+        currentAt = { u: cu, v: cv };
+      }
+    }
+
     const span = residentSpanOf(field, frame, axis.frames);
     const series = field.seriesAt(cell.j, cell.i, span.to - span.from, span.from);
     const spanAxis = {
@@ -638,7 +784,14 @@ async function start() {
       axis: spanAxis,
       cursor: frame - span.from,
       when: clock.label(),
-      currentSpeed: TYPICAL_CURRENT_MS,
+      // The MEASURED current at this cell if the archive is loaded, falling
+      // back to the Gulf Stream typical. Comparing leeway against a constant
+      // 1.8 m/s was right while nothing better existed and is wrong now that
+      // the real field is one nearest-neighbour lookup away -- the whole point
+      // of the comparison is whether leeway matters HERE.
+      currentSpeed: currentAt && Number.isFinite(currentAt.u)
+        ? Math.hypot(currentAt.u, currentAt.v) : TYPICAL_CURRENT_MS,
+      currentAt,
     });
     setStatus('');
   }

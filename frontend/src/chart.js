@@ -85,7 +85,10 @@ export class PointPanel {
    *   axis          { start, stepSeconds, frames }
    *   cursor        frame index the clock is on
    *   when          label for the current timestamp
-   *   currentSpeed  typical current to compare leeway against, m/s
+   *   currentSpeed  current to compare leeway against, m/s -- the MEASURED
+   *                 value at this cell when the current archive is loaded,
+   *                 otherwise the Gulf Stream typical of 1.8
+   *   currentAt     { u, v, measured } at this cell, or null if not loaded
    */
   show(p) {
     // Visible BEFORE anything is measured. Everything below depends on this.
@@ -135,6 +138,29 @@ export class PointPanel {
     set('#d-24h', formatDistance(leewayDistance(speed, 24)));
     set('#d-set', `${towards.toFixed(0)}° ${compass(towards)}`);
     set('#d-vscurrent', frac === null ? '—' : `${(frac * 100).toFixed(1)} %`);
+
+    /*
+      The surface current row was hard-coded to "awaiting HYCOM pull" in the
+      markup, which stopped being true the moment the archive was published.
+      A pending label that outlives the thing it was waiting for is worse than
+      no label: it tells the reader the system is less finished than it is.
+
+      Still labelled pending when there is genuinely nothing loaded, because
+      the current layer is off by default and a blank row would be ambiguous.
+    */
+    const cur = p.currentAt;
+    const curRow = this.root.querySelector('#d-current');
+    if (curRow) {
+      const row = curRow.closest('.row');
+      if (cur && Number.isFinite(cur.u) && Number.isFinite(cur.v)) {
+        const cs = Math.hypot(cur.u, cur.v);
+        set('#d-current', `${cs.toFixed(2)} m/s towards ${compass(bearingTowards(cur.u, cur.v))}`);
+        if (row) row.classList.remove('pending');
+      } else {
+        set('#d-current', cur === null ? 'switch on the current layer' : 'land or no data here');
+        if (row) row.classList.add('pending');
+      }
+    }
 
     this._drawSeries(p.series, p.axis, p.cursor);
   }
