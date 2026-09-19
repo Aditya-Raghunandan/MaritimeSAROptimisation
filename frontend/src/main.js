@@ -512,7 +512,7 @@ async function start() {
       off by default now -- it was the only rendering, and as the only one it
       had to carry all three jobs badly.
     */
-    raster = rasterLayer(field, { maxSpeed: field.valueRange[1] });
+    raster = rasterLayer(field, { maxSpeed: field.valueRange[1], opacity: 0.38 });
     particles = particleLayer(field, { maxSpeed: field.valueRange[1] });
     quiver = quiverLayer(field, { maxSpeed: field.valueRange[1] });
 
@@ -559,7 +559,9 @@ async function start() {
                  laminar, so long coherent streaks are what it looks like.
     */
     const cMax = current.layer.valueRange[1];
-    currentRaster = rasterLayer(current.layer, { maxSpeed: cMax, ramp: MAGMA });
+    // The current's raster carries a touch more weight than the wind's: most
+    // of it is near-black by construction, so what actually paints is the jet.
+    currentRaster = rasterLayer(current.layer, { maxSpeed: cMax, ramp: MAGMA, opacity: 0.55 });
     currentParticles = particleLayer(current.layer, {
       maxSpeed: cMax,
       rgb: [124, 232, 255],

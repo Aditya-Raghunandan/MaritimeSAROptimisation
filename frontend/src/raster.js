@@ -47,7 +47,15 @@ export const RasterLayer = L.Layer.extend({
     // are read against, and at 0.72 it was competing with them rather than
     // sitting behind them -- especially over the satellite basemap, where the
     // sea already carries texture.
-    this._opacity = opts.opacity ?? 0.55;
+    /*
+      Lower than it was, because two of these can now be on at once.
+
+      At 0.55 each, wind over current is mud: neither field is readable and the
+      basemap is gone too. The painted raster is the BACKGROUND the streaks and
+      arrows are read against, so it can afford to be faint -- it carries the
+      pattern, not the value.
+    */
+    this._opacity = opts.opacity ?? 0.42;
     // Per product. Wind is viridis; current is magma, whose near-black low end
     // lets the two thirds of the box under 0.3 m/s recede so the Gulf Stream
     // is the only bright thing on the map.
