@@ -44,7 +44,7 @@ from pathlib import Path
 import numpy as np
 
 from sar.utils.data_io import open_forcing, select_window
-from sar.utils.geo import to_display_longitude
+from sar.utils.geo import regular_axis_step, to_display_longitude
 
 # Layer types the frontend knows how to draw. Listed here so the exporter and
 # the client cannot drift apart silently -- an unknown type is a bug, not a
@@ -80,19 +80,18 @@ def grid_spec(lat: np.ndarray, lon_store: np.ndarray) -> dict:
     lat = np.asarray(lat, dtype=float)
     lon = np.sort(to_display_longitude(np.asarray(lon_store, dtype=float)))
 
-    for name, axis in (("lat", lat), ("lon", lon)):
-        if axis.size < 2:
-            raise ValueError(f"{name} needs at least 2 points to describe a step")
-        steps = np.diff(axis)
-        if not np.allclose(steps, steps[0], rtol=0, atol=1e-9):
-            raise ValueError(
-                f"{name} is not regularly spaced (steps {steps.min()} to {steps.max()}); "
-                "the client reconstructs coordinates from a single step and would be wrong"
-            )
+    # One fitted step per axis, and a refusal if the axis does not fit one. The
+    # judgement is `sar.utils.geo.regular_axis_step` so that the client's
+    # `lat0 + k * dlat` and the engine's bilinear weights agree on what regular means.
+    # It replaced a comparison of consecutive gaps at atol=1e-9, which rejected the real
+    # HYCOM archive: its coordinates are float32, so a true 0.08 degree longitude grid
+    # arrives with gaps from 0.079956 to 0.080018 and no amount of it is an error.
+    dlat = regular_axis_step(lat, "lat")
+    dlon = regular_axis_step(lon, "lon")
 
     return {
-        "lat0": float(lat[0]), "dlat": float(np.diff(lat)[0]), "nlat": int(lat.size),
-        "lon0": float(lon[0]), "dlon": float(np.diff(lon)[0]), "nlon": int(lon.size),
+        "lat0": float(lat[0]), "dlat": dlat, "nlat": int(lat.size),
+        "lon0": float(lon[0]), "dlon": dlon, "nlon": int(lon.size),
     }
 
 

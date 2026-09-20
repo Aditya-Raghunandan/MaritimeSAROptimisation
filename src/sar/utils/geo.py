@@ -60,6 +60,51 @@ def normalise_grid(ds: xr.Dataset) -> xr.Dataset:
     return ds.sortby("lat").sortby("lon")
 
 
+def regular_axis_step(axis, name: str = "axis") -> float:
+    """The single step of a regular coordinate axis, or raise if it is not regular.
+
+    Every grid this project reads is regular, and three separate places rely on that:
+    the bilinear weights in `sar.model.interpolate`, the `lat0 + k * dlat` the browser
+    reconstructs from `sar.viz.export`'s manifest, and the pivot in
+    `sar.utils.data_io.open_forcing_table`. They must agree on what "regular" means, so
+    they all call this.
+
+    JUDGED AGAINST A FITTED LINE, NOT AGAINST NEIGHBOURING GAPS. Comparing consecutive
+    differences to each other looks equivalent and is not, because HYCOM stores its
+    coordinates as float32 and this repo's real archive fails that test: over the D014
+    box the longitude gaps run 0.079956 to 0.080018, which `np.allclose(rtol=1e-4)` and
+    `atol=1e-9` both reject, while the axis is in fact a perfectly regular 0.08 grid
+    written in a type that cannot represent it exactly. Measured 2026-09-19 on
+    `current_2019-01-01_2019-01-03.txt`: the largest departure from the fitted line is
+    5.5e-05 degrees, which is 0.07 % of a step and about 5 m on the ground.
+
+    The tolerance is therefore derived from what float32 can represent at the axis's own
+    magnitude, which is the actual cause: eight units in the last place, capped at a
+    twentieth of a step so a coarse axis can never hide a genuinely irregular one. A
+    stretched or curvilinear grid departs by a sizeable fraction of a step and still
+    fails by orders of magnitude.
+    """
+    axis = np.asarray(axis, dtype=float)
+    if axis.size < 2:
+        raise ValueError(f"{name} needs at least 2 points to have a step, got {axis.size}")
+
+    step = float((axis[-1] - axis[0]) / (axis.size - 1))
+    if step == 0.0:
+        raise ValueError(f"{name} has a zero step: first and last value are both {axis[0]}")
+
+    ulp32 = float(np.spacing(np.float32(np.abs(axis).max())))
+    tolerance = min(8.0 * ulp32, 0.05 * abs(step))
+    departure = float(np.abs(axis - (axis[0] + step * np.arange(axis.size))).max())
+    if departure > tolerance:
+        raise ValueError(
+            f"{name} is not regularly spaced: it departs from a {step:.6g} step by "
+            f"{departure:.3g} ({departure / abs(step):.2%} of a step), and only "
+            f"{tolerance:.3g} is allowed. Coordinates reconstructed as "
+            f"{name}0 + k * d{name} would be wrong."
+        )
+    return step
+
+
 def assert_conventions(ds: xr.Dataset) -> None:
     """Fail loudly if a dataset is not in the stored convention.
 
