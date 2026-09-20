@@ -46,7 +46,12 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from sar.utils.geo import assert_conventions, normalise_grid, to_store_longitude
+from sar.utils.geo import (
+    assert_conventions,
+    normalise_grid,
+    regular_axis_step,
+    to_store_longitude,
+)
 
 # D014 study box. Imported by figures and the exporter so the number lives in
 # one place; `sar.fetch.wind` remains the source of truth for the fetch itself.
@@ -89,21 +94,103 @@ def _arrival_convention(ds: xr.Dataset) -> str:
     return ARRIVAL_D020
 
 
+# Tidy one-row-per-record tables, as `scripts/fetch_current_range.py` writes. Its
+# default is .txt, so this is the format most of the local archive is actually in.
+TABLE_SUFFIXES = {".txt": "whitespace", ".csv": "csv", ".parquet": "parquet"}
+
+# The columns a tidy forcing table must carry before anything can be made of it.
+TABLE_INDEX = ("time", "lat", "lon")
+
+
+def _read_table(path: Path) -> pd.DataFrame:
+    """Read a tidy forcing table into a DataFrame, whatever of the three types it is."""
+    kind = TABLE_SUFFIXES[path.suffix.lower()]
+    if kind == "parquet":
+        return pd.read_parquet(path)
+    # `to_string` pads columns to align them, so the separator is RUNS of whitespace,
+    # not single spaces. The writer deliberately renders the timestamp as
+    # 2019-01-01T00:00:00 with no space in it, because a raw space would split the
+    # date and the time into two fields on read-back.
+    sep = r"\s+" if kind == "whitespace" else ","
+    return pd.read_csv(path, sep=sep, engine="c")
+
+
+def open_forcing_table(path: str | Path) -> xr.Dataset:
+    """Open a tidy forcing TABLE and pivot it onto its grid, in the D020 convention.
+
+    `scripts/fetch_current_range.py` writes one row per (time, lat, lon) record and
+    defaults to `.txt`, so the local current archive is a table rather than NetCDF:
+    `data/current/current_2019-01-01_2019-01-03.txt` is 2,718,912 rows over a
+    476 x 238 grid and 24 three-hourly steps. Nothing could read it back into a grid,
+    which meant nothing downstream of the fetchers could use the only currents we have.
+
+    The pivot is a real reshape, not a reindex: a record missing from the table becomes
+    NaN, which is the same thing HYCOM means by land, and 11.8 % of that file is already
+    NaN for exactly that reason. Both axes are checked for regularity afterwards, since
+    a table carries no guarantee that its rows cover a complete rectangle.
+
+    Expect a few seconds and a few tens of megabytes for a file of that size; a table is
+    a poor way to store a grid, and this exists to read what was written rather than to
+    recommend it. Prefer `.parquet` over `.txt` for anything large.
+    """
+    path = Path(path)
+    df = _read_table(path)
+
+    missing = [c for c in TABLE_INDEX if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{path.name} is missing the column(s) {missing}; a forcing table needs "
+            f"{list(TABLE_INDEX)} plus its value columns, and has {list(df.columns)}"
+        )
+    values = [c for c in df.columns if c not in TABLE_INDEX]
+    if not values:
+        raise ValueError(f"{path.name} has no value columns beside {list(TABLE_INDEX)}")
+
+    df["time"] = pd.to_datetime(df["time"])
+    duplicated = df.duplicated(subset=list(TABLE_INDEX)).sum()
+    if duplicated:
+        raise ValueError(
+            f"{path.name} has {duplicated} duplicate (time, lat, lon) rows, so it cannot "
+            "be pivoted onto a grid without silently dropping records"
+        )
+
+    ds = df.set_index(list(TABLE_INDEX)).to_xarray()
+    for name in ("lat", "lon"):
+        # Raises if the table's rows do not lie on a regular grid. A table can hold any
+        # scatter of points at all, and every consumer downstream assumes a grid.
+        regular_axis_step(ds[name].values, name)
+
+    ds.attrs["sar_table_rows"] = int(len(df))
+    ds.attrs["sar_table_variables"] = values
+    return ds
+
+
 def open_forcing(path: str | Path) -> xr.Dataset:
     """Open a stored forcing file and return it in the D020 convention.
 
-    Works on both wind (`era5_*.nc`) and current (`hycom_*.nc`) files -- it
-    normalises the grid and does not care which variables are present.
+    Reads both of the shapes this project writes, chosen by the file's suffix:
 
-    The returned dataset carries `attrs["sar_arrival_convention"]`, either
-    `"d020"` or `"pre-d020"`. A pre-D020 file is repaired and warned about; it
-    is not an error, because most of the local archive is still that way.
+    - `.nc` / `.nc4` / `.zarr`, gridded, as `sar.fetch.current --out` and
+      `sar.fetch.wind` write, opened through xarray.
+    - `.txt` / `.csv` / `.parquet`, a tidy one-row-per-record table as
+      `scripts/fetch_current_range.py` writes, pivoted back onto its grid by
+      `open_forcing_table`.
+
+    Works for wind (`era5_*`) and current (`hycom_*`, `current_*`) alike: it normalises
+    the grid and does not care which variables are present.
+
+    The returned dataset carries `attrs["sar_arrival_convention"]`, either `"d020"` or
+    `"pre-d020"`. A pre-D020 file is repaired and warned about; it is not an error,
+    because most of the local archive is still that way.
     """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"no forcing file at {path}")
 
-    ds = xr.open_dataset(path)
+    if path.suffix.lower() in TABLE_SUFFIXES:
+        ds = open_forcing_table(path)
+    else:
+        ds = xr.open_dataset(path)
     arrival = _arrival_convention(ds)
 
     ds = normalise_grid(ds)
