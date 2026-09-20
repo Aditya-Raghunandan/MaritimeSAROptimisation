@@ -32,6 +32,47 @@
 
 import * as zarr from 'zarrita';
 
+/**
+ * Whether a field can be READ synchronously at this frame.
+ *
+ * Leaflet calls a layer's `onAdd` synchronously from `addTo(map)`, and our
+ * renderers paint from there -- before anything has been fetched. On the Zarr
+ * path frame 0 is not resident until `ensure(0)` resolves, and `vector` throws
+ * rather than returning zeros, deliberately. Thrown out of `onAdd` that
+ * exception escapes `start()` and leaves every control below the renderers
+ * unwired, which reads as a working map with dead buttons rather than a crash.
+ *
+ * So the renderers ASK instead of trying. `particles.js` already wrapped its
+ * read in try/catch; this is the same question asked before the call rather
+ * than after it, which is what `raster` and `quiver` need -- they paint whole
+ * grids, so a per-cell try/catch would be a throw per cell.
+ *
+ * An object that cannot answer is treated as READY, not as not-ready: the
+ * flat-bundle path hands renderers a plain buffer-backed field that is always
+ * resident, and it must keep painting exactly as it did.
+ */
+export function isFrameReady(field, frame) {
+  if (typeof field?.isResident === 'function') return field.isResident(frame);
+  if (typeof field?.source?.isResident === 'function') return field.source.isResident(frame);
+  return true;
+}
+
+/**
+ * The frame range a field can answer for right now, as `{ from, to }`, `to`
+ * exclusive.
+ *
+ * Asked by the click-a-point chart so it plots the hours it actually has
+ * rather than the whole tier. A field that cannot answer reports the whole
+ * axis, because the flat-bundle path really does hold all of it.
+ */
+export function residentSpanOf(field, frame, frames) {
+  const src = typeof field?.residentSpan === 'function' ? field
+    : (typeof field?.source?.residentSpan === 'function' ? field.source : null);
+  if (!src) return { from: 0, to: frames };
+  const span = src.residentSpan(frame);
+  return span.to > span.from ? span : { from: 0, to: frames };
+}
+
 /** Frames already in memory: the whole window, always. */
 export class BufferSource {
   /**
@@ -48,6 +89,9 @@ export class BufferSource {
   }
 
   isResident() { return true; }
+
+  /** All of it, always. The flat bundle is the whole window by construction. */
+  residentSpan() { return { from: 0, to: this.frames }; }
 
   async ensure() { /* nothing to fetch: it is all here */ }
 
@@ -165,6 +209,32 @@ export class ZarrSource {
     // u and v are separate arrays here, not interleaved as in the flat bundle.
     const at = (frame - chunk.lo) * this.nlat * this.nlon + j * this.nlon + i;
     return [chunk.u[at], chunk.v[at]];
+  }
+
+  /**
+   * The contiguous run of frames in memory around `frame`.
+   *
+   * The click-a-point chart used to plot the whole tier's axis -- five years
+   * of it -- when only the cached chunks have values, so it drew a sliver of
+   * data against four empty years and reported a mean "over 192 frames"
+   * without saying which 192. The honest x-range is what is actually loaded,
+   * so the chart asks for it rather than assuming the axis.
+   *
+   * Contiguous, not the union of every cached chunk: the LRU can hold two runs
+   * either side of a gap after a long scrub, and joining across that gap would
+   * put a straight line through hours nobody has fetched.
+   */
+  residentSpan(frame) {
+    const c = this.chunkOf(frame);
+    if (!this._cache.has(c)) return { from: frame, to: frame };
+    let lo = c;
+    let hi = c;
+    while (this._cache.has(lo - 1)) lo -= 1;
+    while (this._cache.has(hi + 1)) hi += 1;
+    return {
+      from: lo * this.chunkFrames,
+      to: Math.min((hi + 1) * this.chunkFrames, this.frames),
+    };
   }
 
   /** Bytes currently held, for the status line. Chunks are ~1.11 MB each. */

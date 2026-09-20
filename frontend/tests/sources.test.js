@@ -43,7 +43,7 @@ vi.mock('zarrita', () => {
   };
 });
 
-const { BufferSource, ZarrSource, pickTier } = await import('./sources.js');
+const { BufferSource, ZarrSource, isFrameReady, pickTier, residentSpanOf } = await import('../src/sources.js');
 
 const GRID = { nlat: 2, nlon: 3 };
 
@@ -240,5 +240,138 @@ describe('pickTier', () => {
 
   it('a manifest with no tiers is an error, not a silent blank map', () => {
     expect(() => pickTier({}, 10)).toThrow(/no tiers/);
+  });
+});
+
+/*
+  isFrameReady is the guard that stopped a live site painting nothing and
+  unwiring every control below the renderers. Leaflet calls onAdd from
+  addTo(map) synchronously, our renderers paint from there, and on the Zarr
+  path frame 0 is not resident until ensure() resolves -- so vector() threw,
+  the throw escaped start(), and the layer control, slider, ruler and rings
+  were never wired.
+*/
+describe('isFrameReady', () => {
+  it('delegates to a field that can answer for itself', () => {
+    const field = { isResident: (f) => f === 7 };
+    expect(isFrameReady(field, 7)).toBe(true);
+    expect(isFrameReady(field, 8)).toBe(false);
+  });
+
+  it('asks the wrapped source when the field is a thin wrapper', () => {
+    // main.js hands the quiver a { grid, vector, source } literal for the
+    // resultant layer; the residency answer lives one level down.
+    const field = { source: { isResident: (f) => f === 3 } };
+    expect(isFrameReady(field, 3)).toBe(true);
+    expect(isFrameReady(field, 4)).toBe(false);
+  });
+
+  it("prefers the field's own answer over the wrapped source's", () => {
+    const field = { isResident: () => false, source: { isResident: () => true } };
+    expect(isFrameReady(field, 0)).toBe(false);
+  });
+
+  it('treats a field that cannot answer as READY, not as not-ready', () => {
+    // The flat-bundle path is always resident and must keep painting exactly
+    // as it did. Defaulting to false here would blank that map instead.
+    expect(isFrameReady({ grid: {}, vector: () => [1, 2] }, 0)).toBe(true);
+    expect(isFrameReady({}, 0)).toBe(true);
+  });
+
+  it('does not throw on a missing field', () => {
+    expect(isFrameReady(undefined, 0)).toBe(true);
+    expect(isFrameReady(null, 0)).toBe(true);
+  });
+
+  it('a BufferSource is ready at once and a fresh ZarrSource is not', async () => {
+    const buffer = new BufferSource(new Float32Array(2 * 3 * 2), { nlat: 2, nlon: 3 }, 1);
+    expect(isFrameReady(buffer, 0)).toBe(true);
+
+    const zarrSource = new ZarrSource('https://example.invalid/wind.zarr', {
+      frames: shape.frames,
+      chunks: { time: 48 },
+      variables: ['u10', 'v10'],
+      grid: { nlat: 2, nlon: 3 },
+    });
+    // This is the exact state the page was in when it threw: opened, shapes
+    // agreed, nothing fetched.
+    await zarrSource.open();
+    expect(isFrameReady(zarrSource, 0)).toBe(false);
+    await zarrSource.ensure(0);
+    expect(isFrameReady(zarrSource, 0)).toBe(true);
+  });
+});
+
+/*
+  The click-a-point chart asks for this so it plots the hours it has rather
+  than the whole tier. Plotting the tier drew a sliver of data against four
+  empty years and reported a mean over an unnamed subset of frames.
+*/
+describe('residentSpan', () => {
+  const tier = () => new ZarrSource('https://example.invalid/wind.zarr', {
+    frames: shape.frames,                    // 96 frames, 48 per chunk -> 2 chunks
+    chunks: { time: 48 },
+    variables: ['u10', 'v10'],
+    grid: { nlat: 2, nlon: 3 },
+  });
+
+  it('is empty before anything is fetched', async () => {
+    const src = await tier().open();
+    expect(src.residentSpan(0)).toEqual({ from: 0, to: 0 });
+  });
+
+  it('covers the chunk holding the frame once it lands', async () => {
+    const src = await tier().open();
+    await src.ensure(10);
+    expect(src.residentSpan(10)).toEqual({ from: 0, to: 48 });
+  });
+
+  it('joins adjacent chunks into one run', async () => {
+    const src = await tier().open();
+    await src.ensure(10);
+    await src.ensure(60);
+    expect(src.residentSpan(10)).toEqual({ from: 0, to: 96 });
+    expect(src.residentSpan(60)).toEqual({ from: 0, to: 96 });
+  });
+
+  it('stops at the end of the axis rather than past it', async () => {
+    const src = await tier().open();
+    await src.ensure(95);
+    expect(src.residentSpan(95).to).toBe(96);
+  });
+
+  it('a BufferSource is the whole window', () => {
+    const buf = new BufferSource(new Float32Array(2 * 3 * 2 * 4), { nlat: 2, nlon: 3 }, 4);
+    expect(buf.residentSpan()).toEqual({ from: 0, to: 4 });
+  });
+});
+
+describe('residentSpanOf', () => {
+  it('unwraps a field that holds a source', async () => {
+    const src = await new ZarrSource('https://example.invalid/wind.zarr', {
+      frames: shape.frames,
+      chunks: { time: 48 },
+      variables: ['u10', 'v10'],
+      grid: { nlat: 2, nlon: 3 },
+    }).open();
+    await src.ensure(0);
+    expect(residentSpanOf({ source: src }, 0, 96)).toEqual({ from: 0, to: 48 });
+  });
+
+  it('falls back to the whole axis for a field that cannot answer', () => {
+    expect(residentSpanOf({ vector: () => [0, 0] }, 5, 40)).toEqual({ from: 0, to: 40 });
+    expect(residentSpanOf(null, 5, 40)).toEqual({ from: 0, to: 40 });
+  });
+
+  it('falls back to the whole axis rather than returning an empty range', async () => {
+    // An empty span would make the chart plot nothing at all, which looks
+    // like a broken panel rather than like data still arriving.
+    const src = await new ZarrSource('https://example.invalid/wind.zarr', {
+      frames: shape.frames,
+      chunks: { time: 48 },
+      variables: ['u10', 'v10'],
+      grid: { nlat: 2, nlon: 3 },
+    }).open();
+    expect(residentSpanOf(src, 0, 96)).toEqual({ from: 0, to: 96 });
   });
 });

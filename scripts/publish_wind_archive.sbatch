@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=windzarr
+#SBATCH --job-name=fieldzarr
 #SBATCH --partition=jaguarcluster
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=01:00:00
-#SBATCH --output=logs/windzarr_%j.out
-#SBATCH --error=logs/windzarr_%j.out
+#SBATCH --mem=24G
+#SBATCH --time=04:00:00
+#SBATCH --output=logs/fieldzarr_%j.out
+#SBATCH --error=logs/fieldzarr_%j.out
 
 # Publish the five-year ERA5 archive as multi-resolution Zarr (D021 step 4).
 # Reads /home/26p67/data/raw/era5_*.nc, writes /home/26p67/data/published/.
@@ -29,7 +29,15 @@
 # needs a credential, and a credential does not belong in a batch script.
 #
 # Submit from ~/SAR/viz-staging:
-#     sbatch scripts/publish_wind_archive.sbatch
+#     sbatch scripts/publish_wind_archive.sbatch                    # wind
+#     SAR_PRODUCT=current sbatch scripts/publish_wind_archive.sbatch  # current
+#
+# WHY 24 GB AND NOT 16. The current grid is 476 x 238 against wind's 77 x 77,
+# so the 3-hourly tier is 6.6 GB per variable and 13.2 GB with water_u and
+# water_v both live. write_zarr_tier chunks with dask so the write streams and
+# peak memory does not scale with the archive length, but the nodes only have
+# 31 GB and the source is being read at the same time -- 24 GB is headroom, not
+# a requirement.
 
 set -euo pipefail
 
@@ -39,11 +47,17 @@ PY="${SAR_PYTHON:-/home/26p67/envs/sar/bin/python}"
 STAGE="${SAR_STAGE:-/home/26p67/SAR/viz-staging}"
 DATA="${SAR_DATA:-/home/26p67/data}"
 OUT="${SAR_OUT:-$DATA/published}"
+PRODUCT="${SAR_PRODUCT:-wind}"
+# HYCOM really is missing 7 timesteps in 14,608 (D011). --fill-gaps puts them
+# back as NaN so the axis is regular; nothing is interpolated. Harmless for
+# wind, whose axis is already gap-free.
+FILL="${SAR_FILL_GAPS:---fill-gaps}"
 
 mkdir -p logs "$OUT"
 
 echo "host      $(hostname)"
 echo "python    $("$PY" -V)"
+echo "product   $PRODUCT"
 echo "reading   $DATA/raw"
 echo "writing   $OUT"
 echo "started   $(date -Is)"
@@ -51,7 +65,7 @@ echo
 
 cd "$STAGE"
 PYTHONPATH="$STAGE/src" "$PY" -u -m sar.viz.archive \
-    --data "$DATA" --out "$OUT" --product wind
+    --data "$DATA" --out "$OUT" --product "$PRODUCT" $FILL
 
 echo
 echo "finished  $(date -Is)"

@@ -27,7 +27,7 @@ import 'uplot/dist/uPlot.min.css';
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
 import { beaufort, describe, detectionOutlook } from './beaufort.js';
 import {
-  bearingFrom, bearingTowards, compass, explain, leewayDistance,
+  ALPHA, bearingFrom, bearingTowards, compass, currentBand, explain, leewayDistance,
   leewayFractionOfCurrent, leewaySpeed, summarise,
 } from './drift.js';
 
@@ -46,7 +46,12 @@ export class PointPanel {
   constructor(els) {
     this.root = els.root;
     this.chartEl = els.chart;
-    this.plot = null;
+    this.oceanChartEl = els.oceanChart ?? null;
+    // Two plots, because there are two fields and they share nothing but a
+    // time axis: wind runs 0-25 m/s and current 0-2.5, so one pair of axes
+    // would flatten the current into the zero line and make the panel say the
+    // sea is still. Separate scales are the only honest way to draw both.
+    this.plots = { wind: null, ocean: null };
     this._onClose = els.onClose ?? (() => {});
 
     this.root.querySelector('#point-close').addEventListener('click', () => this.hide());
@@ -57,9 +62,14 @@ export class PointPanel {
 
     if (typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver(() => {
-        if (this.plot && this.isOpen) this.plot.setSize({ width: this._width(), height: CHART_HEIGHT });
+        if (!this.isOpen) return;
+        for (const [key, el] of this._slots()) {
+          const plot = this.plots[key];
+          if (plot) plot.setSize({ width: this._width(el), height: CHART_HEIGHT });
+        }
       });
       this._ro.observe(this.chartEl);
+      if (this.oceanChartEl) this._ro.observe(this.oceanChartEl);
     }
   }
 
@@ -72,9 +82,14 @@ export class PointPanel {
     this._onClose();
   }
 
+  _slots() {
+    return [['wind', this.chartEl], ['ocean', this.oceanChartEl]].filter(([, el]) => el);
+  }
+
   /** Never returns 0: a zero-width plot is the bug described at the top. */
-  _width() {
-    return Math.max(MIN_WIDTH, this.chartEl.clientWidth || this.root.clientWidth - 16);
+  _width(el) {
+    const target = el ?? this.chartEl;
+    return Math.max(MIN_WIDTH, target.clientWidth || this.root.clientWidth / 2 - 24);
   }
 
   /**
@@ -85,7 +100,10 @@ export class PointPanel {
    *   axis          { start, stepSeconds, frames }
    *   cursor        frame index the clock is on
    *   when          label for the current timestamp
-   *   currentSpeed  typical current to compare leeway against, m/s
+   *   currentSpeed  current to compare leeway against, m/s -- the MEASURED
+   *                 value at this cell when the current archive is loaded,
+   *                 otherwise the Gulf Stream typical of 1.8
+   *   currentAt     { u, v, measured } at this cell, or null if not loaded
    */
   show(p) {
     // Visible BEFORE anything is measured. Everything below depends on this.
@@ -136,20 +154,124 @@ export class PointPanel {
     set('#d-set', `${towards.toFixed(0)}° ${compass(towards)}`);
     set('#d-vscurrent', frac === null ? '—' : `${(frac * 100).toFixed(1)} %`);
 
-    this._drawSeries(p.series, p.axis, p.cursor);
+    /*
+      THE OCEAN SECTION.
+
+      The panel was entirely about wind, because for a week wind was all there
+      was. It now has a measured current at the same cell and can answer the
+      question the project is actually about: where does this person go, and
+      how big is the box you would have to search to find them.
+
+      Every row here is arithmetic on two vectors we already hold. None of it
+      is a model run -- the stochastic term is the engine's and is named as
+      pending rather than estimated, because a spread is exactly the number
+      somebody would quote.
+    */
+    const cur = p.currentAt;
+    const hasCurrent = Boolean(cur) && Number.isFinite(cur.u) && Number.isFinite(cur.v);
+    const oceanSection = this.root.querySelector('#ocean-section');
+    if (oceanSection) {
+      if (!hasCurrent) {
+        unit('#o-speed', '—', '');
+        set('#o-band', cur === null ? 'current layer is off' : 'land, or not loaded');
+        set('#o-dir', '—');
+        set('#o-carry', '—');
+        set('#o-lead', cur === null
+          ? 'Switch on a current layer and click again to see what the water does here.'
+          : 'No current value at this cell — HYCOM has land or no data here.');
+        for (const id of ['#o-6h', '#o-24h', '#o-ratio', '#o-resultant', '#o-area']) set(id, '—');
+      } else {
+        const cs = Math.hypot(cur.u, cur.v);
+        const cTowards = bearingTowards(cur.u, cur.v);
+
+        // The resultant is the first two terms of D002, computed the same way
+        // ResultantSource computes them, so the panel and the arrow on the map
+        // cannot disagree about this cell.
+        const ru = cur.u + ALPHA * p.u;
+        const rv = cur.v + ALPHA * p.v;
+        const rs = Math.hypot(ru, rv);
+        const rTowards = bearingTowards(ru, rv);
+
+        const km24 = (rs * 86400) / 1000;
+        // A datum displaced this far, with no spread term, still has to be
+        // searched as an AREA rather than a point -- this is the lower bound
+        // on that area, and it is a lower bound precisely because eta is
+        // missing. Circle of radius = one hour of resultant travel.
+        const radiusKm = (rs * 3600) / 1000;
+        const areaKm2 = Math.PI * radiusKm * radiusKm;
+
+        unit('#o-speed', cs.toFixed(2), 'm/s');
+        set('#o-band', currentBand(cs));
+        set('#o-dir', `${cTowards.toFixed(0)}° ${compass(cTowards)}`);
+        set('#o-carry', `${formatDistance(cs * 86400)} in a day`);
+
+        set('#o-6h', formatDistance(cs * 6 * 3600));
+        set('#o-24h', formatDistance(cs * 24 * 3600));
+
+        const lee2 = leewaySpeed(speed);
+        set('#o-ratio', lee2 > 0 ? `${(cs / lee2).toFixed(1)} : 1` : '—');
+        set('#o-resultant', `${rs.toFixed(2)} m/s towards ${rTowards.toFixed(0)}° ${compass(rTowards)}`);
+        set('#o-area', `≥ ${areaKm2 < 10 ? areaKm2.toFixed(1) : Math.round(areaKm2)} km² · ${km24.toFixed(0)} km downstream`);
+
+        // The sentence, because a column of numbers is not an argument.
+        const dominant = cs > lee2 * 2 ? 'the water'
+          : (lee2 > cs * 2 ? 'the wind' : 'neither');
+        set('#o-lead', dominant === 'the water'
+          ? `The current dominates here: ${(cs / lee2).toFixed(1)}× the leeway, so the datum follows the water and a wind-only estimate would send searchers to the wrong place.`
+          : (dominant === 'the wind'
+            ? `Unusually, leeway is the larger term here — ${(lee2 / cs).toFixed(1)}× the current — so a drifter tracks the weather more than the sea.`
+            : 'Wind and water are comparable here, so the two terms must be added as vectors rather than ranked. This is the regime that earns the leeway term its place in the model.'));
+      }
+    }
+
+    /*
+      The surface current row was hard-coded to "awaiting HYCOM pull" in the
+      markup, which stopped being true the moment the archive was published.
+      A pending label that outlives the thing it was waiting for is worse than
+      no label: it tells the reader the system is less finished than it is.
+
+      Still labelled pending when there is genuinely nothing loaded, because
+      the current layer is off by default and a blank row would be ambiguous.
+    */
+    const curRow = this.root.querySelector('#d-current');
+    if (curRow) {
+      const row = curRow.closest('.row');
+      if (cur && Number.isFinite(cur.u) && Number.isFinite(cur.v)) {
+        const cs = Math.hypot(cur.u, cur.v);
+        set('#d-current', `${cs.toFixed(2)} m/s towards ${compass(bearingTowards(cur.u, cur.v))}`);
+        if (row) row.classList.remove('pending');
+      } else {
+        set('#d-current', cur === null ? 'switch on the current layer' : 'land or no data here');
+        if (row) row.classList.add('pending');
+      }
+    }
+
+    this._drawSeries('wind', this.chartEl, p.series, p.axis, p.cursor, '#eb6834');
+
+    // The ocean's own series, on its own scale. Absent when the current layer
+    // has never been switched on, in which case the slot says so rather than
+    // drawing an empty pair of axes that looks like a dead chart.
+    if (this.oceanChartEl) {
+      const has = p.currentSeries && p.currentSeries.length > 1;
+      this.oceanChartEl.classList.toggle('empty', !has);
+      if (has) {
+        this._drawSeries('ocean', this.oceanChartEl, p.currentSeries,
+          p.currentAxis, p.currentCursor ?? 0, '#48b1e3');
+      }
+    }
   }
 
-  _drawSeries(series, axis, cursor) {
+  _drawSeries(key, el, series, axis, cursor, stroke) {
     const xs = new Array(series.length);
     for (let f = 0; f < series.length; f += 1) {
       xs[f] = axis.start.getTime() / 1000 + f * axis.stepSeconds;
     }
     const data = [xs, Array.from(series, (x) => (Number.isFinite(x) ? x : null))];
 
-    if (!this.plot) {
-      this.plot = new uPlot(
+    if (!this.plots[key]) {
+      this.plots[key] = new uPlot(
         {
-          width: this._width(),
+          width: this._width(el),
           height: CHART_HEIGHT,
           padding: [8, 8, 0, 0],
           scales: { x: { time: true } },
@@ -164,9 +286,9 @@ export class PointPanel {
             { label: 'time' },
             {
               label: 'm/s',
-              stroke: '#eb6834',
+              stroke,
               width: 2,
-              fill: 'rgba(235, 104, 52, 0.14)',
+              fill: stroke === '#eb6834' ? 'rgba(235, 104, 52, 0.14)' : 'rgba(72, 177, 227, 0.16)',
               // A gap is drawn as a gap. Joining across unloaded frames would
               // invent weather that was never fetched.
               spanGaps: false,
@@ -177,16 +299,16 @@ export class PointPanel {
           legend: { live: true },
         },
         data,
-        this.chartEl,
+        el,
       );
     } else {
-      this.plot.setSize({ width: this._width(), height: CHART_HEIGHT });
-      this.plot.setData(data);
+      this.plots[key].setSize({ width: this._width(el), height: CHART_HEIGHT });
+      this.plots[key].setData(data);
     }
 
-    // Park the cursor on the frame the map is showing, so the chart and the
+    // Park the cursor on the frame the map is showing, so both charts and the
     // map always agree about which moment is on screen.
-    const at = this.plot.valToPos(xs[Math.min(cursor, xs.length - 1)], 'x');
-    if (Number.isFinite(at)) this.plot.setCursor({ left: at, top: 0 });
+    const at = this.plots[key].valToPos(xs[Math.min(cursor, xs.length - 1)], 'x');
+    if (Number.isFinite(at)) this.plots[key].setCursor({ left: at, top: 0 });
   }
 }

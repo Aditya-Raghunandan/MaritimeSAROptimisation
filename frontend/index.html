@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Maritime SAR — drift and search</title>
+    <title>Maritime Search and Rescue — drift prediction and search patterns</title>
     <style>
       /*
         Dark chrome, light map. The chrome was white and it dominated: the map
@@ -40,28 +40,115 @@
 
       header {
         display: flex;
-        align-items: baseline;
-        gap: 16px;
-        padding: 9px 14px;
+        align-items: center;
+        gap: 14px;
+        padding: 8px 14px;
         border-bottom: 1px solid var(--line);
         background: var(--surface-1);
       }
-      header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .2px; }
-      #stamp { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); }
-      #provenance { margin-left: auto; color: var(--ink-3); font-size: 11px; }
+
+      /*
+        The Wits mark is a full-colour crest and wordmark drawn for a light
+        background -- navy #12326e and gold #e5c991. Dropped straight onto the
+        near-black chrome its wordmark disappears, so it sits on a light plate.
+        Recolouring somebody else's crest to suit our theme is not ours to do;
+        giving it the background it was drawn for is.
+
+        Fixed height, width auto: it is vector, so it stays sharp at any size,
+        and constraining the height keeps the lockup's aspect ratio rather than
+        squashing it.
+      */
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        background: #fff;
+        border-radius: 6px;
+        padding: 6px 11px;
+        line-height: 0;
+        flex: none;
+      }
+      .brand img { height: 38px; width: auto; display: block; }
+
+      .titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+      header h1 { font-size: 15.5px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+      .subtitle {
+        margin: 0;
+        font-size: 11.5px;
+        color: var(--ink-3);
+        letter-spacing: .1px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .header-right {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex: none;
+      }
+      #stamp {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--accent);
+      }
+      #provenance { color: var(--ink-3); font-size: 11px; text-align: right; }
+
+      /*
+        Narrow screens drop the subtitle and the provenance line rather than
+        wrapping the header into two rows, which would resize the map.
+      */
+      @media (max-width: 900px) {
+        .subtitle, #provenance { display: none; }
+      }
+
+      /* Who made this, and for what. The site is public, so it should say so
+         without anyone having to open the repository. */
+      .colophon {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 3px 16px;
+        color: #6f6f66;
+        font-size: 10px;
+        letter-spacing: .15px;
+        border-top: 1px solid rgba(255, 255, 255, .05);
+        padding-top: 7px;
+      }
+      .colophon a { color: #7f7f74; text-decoration: none; border-bottom: 1px solid rgba(255,255,255,.12); }
+      .colophon a:hover { color: var(--ink-2); border-bottom-color: var(--ink-3); }
+      .colophon .sep { margin-left: auto; }
 
       .map-wrap { position: relative; min-height: 0; }
       #map { width: 100%; height: 100%; background: #0d1a26; }
 
+      /*
+        The footer was a flat black slab: three rows of equal weight -- the
+        controls, a status line that is usually empty, and the colophon -- all
+        the same colour as each other and nearly the same as the map behind
+        them, so the eye had nothing to rank.
+
+        Now the bar it sits in is lifted half a step off the page, the status
+        line collapses to nothing when it has nothing to say instead of
+        reserving a line, and the colophon is pushed down in contrast and size
+        so it reads as a footnote rather than as a third control row.
+      */
       footer {
         border-top: 1px solid var(--line);
-        background: var(--surface-1);
-        padding: 9px 14px 11px;
+        background: linear-gradient(var(--surface-1), var(--surface-0));
+        padding: 10px 16px 9px;
         display: grid;
-        gap: 6px;
+        gap: 7px;
       }
       .controls { display: flex; align-items: center; gap: 10px; }
-      #time { flex: 1; accent-color: var(--accent); }
+      #time {
+        flex: 1;
+        accent-color: var(--accent);
+        min-width: 120px;
+        height: 4px;
+      }
       button {
         font: inherit;
         padding: 4px 11px;
@@ -72,8 +159,61 @@
         cursor: pointer;
       }
       button:hover { border-color: var(--ink-3); color: var(--ink); }
-      button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+      /* On but not listening: present, outlined, clearly not the owner of the
+         click. Armed: filled. Two states, so a tool can be visible without
+         appearing to be the one you are about to talk to. */
+      button.on { background: transparent; color: var(--accent); border-color: var(--accent); }
+      button.on.armed { background: var(--accent); color: #fff; border-color: var(--accent); }
       #play { min-width: 36px; }
+      /*
+        The preset bar sits above the layer control, in the same corner, because
+        it answers the same question faster. Sized for a touchscreen: 34 px tall
+        is comfortably past the 24 px that a finger starts missing below.
+      */
+      .preset-bar {
+        display: flex;
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        overflow: hidden;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, .45);
+      }
+      .preset-bar button {
+        border: none;
+        border-radius: 0;
+        background: rgba(26, 26, 25, .94);
+        color: var(--ink-2);
+        padding: 0 13px;
+        height: 34px;
+        font-size: 12.5px;
+        font-weight: 500;
+        letter-spacing: .1px;
+      }
+      .preset-bar button:hover { background: var(--surface-2); color: var(--ink); }
+      .preset-bar button.on { background: var(--accent); color: #fff; }
+
+      .win-step { min-width: 28px; padding: 4px 8px; line-height: 1; }
+      .win-step:disabled { opacity: .35; cursor: default; border-color: var(--line); color: var(--ink-3); }
+      #window-label {
+        color: var(--ink-2);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        min-width: 150px;
+        text-align: center;
+      }
+      .tier-control { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); }
+      #span {
+        font: inherit;
+        padding: 4px 8px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--surface-2);
+        color: var(--ink-2);
+        cursor: pointer;
+      }
+      #span:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink); }
+      #span:disabled { opacity: .55; cursor: default; }
       #ring-controls { display: inline-flex; align-items: center; gap: 6px; }
       #ring-controls button { min-width: 30px; padding: 4px 8px; }
       #ring-radius {
@@ -82,7 +222,14 @@
         min-width: 62px;
         text-align: center;
       }
-      #status { color: var(--ink-2); min-height: 1.4em; font-variant-numeric: tabular-nums; }
+      #status {
+        color: var(--ink-2);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.4;
+      }
+      /* Empty means gone, not a reserved blank line. :empty is exact -- the
+         status is set to '' rather than to a space precisely so this works. */
+      #status:empty { display: none; }
 
       /*
         The point panel floats OVER the map rather than living in the footer.
@@ -94,7 +241,13 @@
         position: absolute;
         left: 12px;
         bottom: 12px;
-        width: 440px;
+        /*
+          Wide enough for two columns of real content. The panel carries two
+          fields now -- wind on the left, ocean on the right, each with its own
+          chart -- and stacking them made it a scrolling column where the thing
+          you clicked for was usually below the fold.
+        */
+        width: 900px;
         max-width: calc(100% - 24px);
         max-height: calc(100% - 24px);
         overflow: hidden auto;
@@ -148,6 +301,35 @@
       }
       .tile-value .unit { font-size: 11px; font-weight: 400; color: var(--ink-3); margin-left: 2px; }
       .tile-value.warm { color: var(--warm); }
+      .tile-value.cool { color: #48b1e3; }
+      .tiles-2 { grid-template-columns: repeat(2, 1fr); margin: 0 -12px 9px; border-top: 1px solid var(--line); }
+
+      /*
+        Two columns, wind then ocean. The divider is a border rather than a gap
+        so the two halves read as one panel split, not as two panels that
+        happen to be adjacent.
+      */
+      .panel-cols { display: grid; grid-template-columns: 1fr 1fr; }
+      .panel-col { min-width: 0; }
+      .panel-col + .panel-col { border-left: 1px solid var(--line); }
+      .panel-col > details.section:first-child { border-top: 1px solid var(--line); }
+
+      /* One column again when there is not room for two. Below this the
+         side-by-side charts are narrower than their own axis labels. */
+      @media (max-width: 880px) {
+        .panel-cols { grid-template-columns: 1fr; }
+        .panel-col + .panel-col { border-left: none; }
+      }
+
+      /* An empty chart slot says why rather than drawing dead axes. */
+      #chart-ocean.empty { min-height: 0; }
+      #chart-ocean.empty::before {
+        content: attr(data-empty);
+        display: block;
+        color: var(--ink-3);
+        font-size: 11px;
+        padding: 6px 0 10px;
+      }
       .tile-sub { color: var(--ink-3); font-size: 10px; margin-top: 2px; line-height: 1.25; }
 
       /*
@@ -311,9 +493,24 @@
   </head>
   <body>
     <header>
-      <h1>Maritime SAR</h1>
-      <span id="stamp">—</span>
-      <span id="provenance"></span>
+      <a class="brand" href="https://www.wits.ac.za/"
+         target="_blank" rel="noopener noreferrer"
+         title="University of the Witwatersrand, Johannesburg">
+        <img src="/brand/wits-logo.svg"
+             alt="University of the Witwatersrand" width="247" height="88" />
+      </a>
+
+      <div class="titles">
+        <h1>Maritime Search and Rescue</h1>
+        <p class="subtitle">
+          Drift prediction and search-pattern comparison &middot; Gulf Stream, 17&ndash;36&nbsp;N 82&ndash;63&nbsp;W
+        </p>
+      </div>
+
+      <div class="header-right">
+        <span id="stamp">&mdash;</span>
+        <span id="provenance"></span>
+      </div>
     </header>
 
     <div class="map-wrap">
@@ -346,6 +543,8 @@
           </div>
         </div>
 
+        <div class="panel-cols">
+        <div class="panel-col">
         <details class="section" open>
           <summary>What this wind would do</summary>
           <div class="section-body">
@@ -362,6 +561,43 @@
           </div>
         </details>
 
+        </div>
+
+        <div class="panel-col">
+        <details class="section" id="ocean-section" open>
+          <summary>The ocean here</summary>
+          <div class="section-body">
+            <div class="tiles tiles-2">
+              <div class="tile">
+                <div class="tile-label">Current now</div>
+                <div class="tile-value cool" id="o-speed">&mdash;<span class="unit">m/s</span></div>
+                <div class="tile-sub" id="o-band">&mdash;</div>
+              </div>
+              <div class="tile">
+                <div class="tile-label">Setting towards</div>
+                <div class="tile-value" id="o-dir">&mdash;</div>
+                <div class="tile-sub" id="o-carry">&mdash;</div>
+              </div>
+            </div>
+            <p class="lead" id="o-lead">&mdash;</p>
+            <div class="row"><span class="k">Carried in 6 h</span><span class="v" id="o-6h">&mdash;</span></div>
+            <div class="row"><span class="k">Carried in 24 h</span><span class="v" id="o-24h">&mdash;</span></div>
+            <div class="row"><span class="k">Current : leeway</span><span class="v" id="o-ratio">&mdash;</span></div>
+            <div class="row"><span class="k">Resultant (current + leeway)</span><span class="v" id="o-resultant">&mdash;</span></div>
+            <div class="row"><span class="k">Search area after 24 h</span><span class="v" id="o-area">&mdash;</span></div>
+            <div class="row pending"><span class="k">Stochastic spread &eta;</span><span class="v">awaiting the engine</span></div>
+          </div>
+        </details>
+
+        <details class="section" open>
+          <summary>Current speed across the loaded window</summary>
+          <div class="section-body" style="padding-left: 2px; padding-right: 6px;">
+            <div id="chart-ocean" data-empty="Switch on a current layer and click again."></div>
+          </div>
+        </details>
+        </div>
+        </div>
+
         <details class="section">
           <summary>The numbers behind it</summary>
           <div class="section-body">
@@ -370,8 +606,8 @@
             <div class="row"><span class="k">Downwind in 6 h</span><span class="v" id="d-6h">&mdash;</span></div>
             <div class="row"><span class="k">Downwind in 24 h</span><span class="v" id="d-24h">&mdash;</span></div>
             <div class="row"><span class="k">Set towards</span><span class="v" id="d-set">&mdash;</span></div>
-            <div class="row"><span class="k">vs 1.8 m/s current</span><span class="v" id="d-vscurrent">&mdash;</span></div>
-            <div class="row pending"><span class="k">Surface current</span><span class="v">awaiting HYCOM pull</span></div>
+            <div class="row"><span class="k">Leeway vs current</span><span class="v" id="d-vscurrent">&mdash;</span></div>
+            <div class="row pending"><span class="k">Surface current</span><span class="v" id="d-current">switch on the current layer</span></div>
             <div class="row pending"><span class="k">Stochastic term &eta;</span><span class="v">awaiting the engine</span></div>
             <div class="row pending"><span class="k">Total drift &amp; POC</span><span class="v">awaiting the engine</span></div>
           </div>
@@ -382,7 +618,14 @@
     <footer>
       <div class="controls">
         <button id="play" title="Play through the window (space)" aria-label="Play">&#9654;</button>
+        <button id="win-back" class="win-step" title="Previous window" aria-label="Previous window">&#8249;</button>
         <input id="time" type="range" min="0" max="0" value="0" step="1" />
+        <button id="win-fwd" class="win-step" title="Next window" aria-label="Next window">&#8250;</button>
+        <span id="window-label" title="The span the slider covers">&mdash;</span>
+        <label class="tier-control" for="span">
+          <span>Span</span>
+          <select id="span" title="How much time the slider covers. The stride follows from it; only the chunks you scrub through are downloaded."></select>
+        </label>
         <button id="ruler" title="Click points on the map to measure distance and bearing">Ruler</button>
         <button id="rings" title="Range rings you can place and resize">Rings</button>
         <span id="ring-controls" hidden>
@@ -392,6 +635,19 @@
         </span>
       </div>
       <div id="status"></div>
+
+      <div class="colophon">
+        <span>
+          ELEN4012A Investigation Project &middot; School of Electrical and Information
+          Engineering, University of the Witwatersrand
+        </span>
+        <span>Aditya Raghunandan &middot; Sun&eacute; Toerien</span>
+        <span class="sep">
+          <a href="https://github.com/Aditya-Raghunandan/MaritimeSAROptimisation">Source</a>
+          &middot;
+          <a href="https://huggingface.co/datasets/AdityaRugs/MaritimeSARoperations">Data</a>
+        </span>
+      </div>
     </footer>
 
     <script type="module" src="/src/main.js"></script>

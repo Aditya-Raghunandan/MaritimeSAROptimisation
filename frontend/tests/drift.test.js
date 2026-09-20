@@ -9,9 +9,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  ALPHA, bearingFrom, bearingTowards, compass, leewayDistance,
-  leewayFractionOfCurrent, leewaySpeed, speed, summarise,
-} from './drift.js';
+  ALPHA, bearingFrom, bearingTowards, compass, currentBand, leewayDistance, leewayFractionOfCurrent, leewaySpeed, speed, summarise,
+} from '../src/drift.js';
 
 describe('ALPHA', () => {
   it('is 2 %, matching the Python side', () => {
@@ -103,5 +102,28 @@ describe('summarise', () => {
 
   it('handles a Float32Array, which is what actually arrives', () => {
     expect(summarise(new Float32Array([2, 4, 6])).mean).toBe(4);
+  });
+});
+
+describe('currentBand', () => {
+  it('names the bands a drift argument is made in, not Beaufort', () => {
+    // Beaufort is a wind scale. A current legend that reads "F4 moderate
+    // breeze" is describing the wrong fluid.
+    expect(currentBand(0.1)).toMatch(/weak/);
+    expect(currentBand(0.35)).toBe('moderate');
+    expect(currentBand(0.8)).toBe('strong');
+    expect(currentBand(1.3)).toMatch(/swift/);
+    expect(currentBand(2.0)).toBe('Gulf Stream core');
+  });
+
+  it('puts the Gulf Stream core where the Gulf Stream actually is', () => {
+    // D001 gives the core as about 1.8 m/s; the band has to contain it or the
+    // legend disagrees with the region the project is about.
+    expect(currentBand(1.8)).toBe('Gulf Stream core');
+  });
+
+  it('does not crash on a land cell', () => {
+    expect(currentBand(NaN)).toBe('—');
+    expect(currentBand(undefined)).toBe('—');
   });
 });

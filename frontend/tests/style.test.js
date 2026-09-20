@@ -9,8 +9,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { SPEED_RAMP, decimation, speedColour } from './style.js';
-import { Grid } from './layers.js';
+import { CURRENT_RAMP, SPEED_RAMP, decimation, speedColour } from '../src/style.js';
+import { Grid } from '../src/layers.js';
 
 describe('speedColour', () => {
   it('maps zero to the lightest step and the maximum to the darkest', () => {
@@ -128,5 +128,55 @@ describe('the bug this renderer exists to not have', () => {
     expect(grid.cellAt(25, -140)).toBeNull();     // the real Pacific
     expect(grid.cellAt(0, -70)).toBeNull();       // the Amazon latitude
     expect(grid.cellAt(25, -70)).not.toBeNull();  // and the box still works
+  });
+});
+
+/*
+  The current's arrow ramp gets the same gate as the wind's. It was added
+  without one, and the first hand-picked version of BOTH ramps failed the hue
+  test -- a swatch looks fine to the eye at 34 degrees of spread.
+*/
+describe('CURRENT_RAMP', () => {
+  const toLab = (hex) => {
+    const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    const [r, g, b] = [1, 3, 5].map((i) => lin(parseInt(hex.slice(i, i + 2), 16) / 255));
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    const A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+    const B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+    return {
+      L: 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+      h: ((Math.atan2(B, A) * 180) / Math.PI + 360) % 360,
+    };
+  };
+
+  it('is one hue, light to dark, like the wind ramp', () => {
+    const lab = CURRENT_RAMP.map(toLab);
+    for (let k = 1; k < lab.length; k += 1) {
+      expect(lab[k].L).toBeLessThan(lab[k - 1].L);
+    }
+    const hues = lab.map((x) => x.h);
+    expect(Math.max(...hues) - Math.min(...hues)).toBeLessThan(30);
+  });
+
+  it('is a different hue family from the wind ramp at every step', () => {
+    // If the two were close, splitting wind from current by arrow colour would
+    // buy nothing -- which is what the near-white low ends actually did.
+    const wind = SPEED_RAMP.map(toLab);
+    const curr = CURRENT_RAMP.map(toLab);
+    for (let k = 0; k < wind.length; k += 1) {
+      const d = Math.abs(wind[k].h - curr[k].h);
+      expect(Math.min(d, 360 - d)).toBeGreaterThan(90);
+    }
+  });
+
+  it('never goes near white, so hue reads where the data actually lives', () => {
+    // Most of the domain is slow most of the time. A ramp that starts at
+    // #d7f6ff makes most arrows a pale smudge in BOTH products.
+    for (const hex of [...SPEED_RAMP, ...CURRENT_RAMP]) {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+      expect(Math.min(r, g, b)).toBeLessThan(230);
+    }
   });
 });

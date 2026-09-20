@@ -92,6 +92,9 @@ export class FieldLayer {
 
   isResident(frame) { return this.source.isResident(frame); }
 
+  /** Which frames the source can answer for now. See sources.js. */
+  residentSpan(frame) { return this.source.residentSpan(frame); }
+
   /** [u, v] at a cell in a given frame. Synchronous; frame must be resident. */
   vector(frame, j, i) {
     return this.source.vector(frame, j, i);

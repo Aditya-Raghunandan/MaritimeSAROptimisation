@@ -320,3 +320,112 @@ class TestGappedArchiveIsNotPublished:
         m = archive.export_archive(tmp_path, tmp_path / "p", "wind",
                                    tiers={"hourly": 1}, level=1, allow_gaps=True)
         assert m["tiers"]["hourly"]["regular"] is False
+
+
+class TestRegulariseTime:
+    """The source really is missing timesteps; publishing them honestly.
+
+    HYCOM's study window has five irregular steps -- four of 6 h and one of
+    12 h against a 3-hourly cadence, which D011 records as 7 missing steps in
+    14,608. Interpolating across them would invent current fields in the very
+    store other results are checked against.
+    """
+
+    def _gapped(self, drop):
+        """A 3-hourly dataset with some timesteps removed."""
+        time = np.arange(np.datetime64("2021-01-01T00"),
+                         np.datetime64("2021-01-03T00"),
+                         np.timedelta64(3, "h")).astype("datetime64[ns]")
+        keep = np.array([k for k in range(time.size) if k not in drop])
+        lat = np.arange(17.0, 19.0, 1.0)
+        lon = np.arange(278.0, 280.0, 1.0)
+        u = np.arange(time.size * lat.size * lon.size, dtype="float32").reshape(
+            (time.size, lat.size, lon.size))
+        ds = xr.Dataset(
+            {"water_u": (("time", "lat", "lon"), u),
+             "water_v": (("time", "lat", "lon"), -u)},
+            coords={"time": time, "lat": lat, "lon": lon},
+        )
+        return ds.isel(time=keep), time
+
+    def test_a_gap_free_axis_is_returned_untouched(self):
+        ds, _ = self._gapped(drop=[])
+        out, info = archive.regularise_time(ds)
+        assert info["inserted"] == 0
+        assert out.sizes["time"] == ds.sizes["time"]
+
+    def test_missing_steps_come_back_as_nan(self):
+        ds, full = self._gapped(drop=[3])
+        out, info = archive.regularise_time(ds)
+        assert info["inserted"] == 1
+        assert out.sizes["time"] == full.size
+        assert np.array_equal(out["time"].values, full)
+        assert np.isnan(out["water_u"].isel(time=3).values).all()
+
+    def test_a_double_gap_inserts_both(self):
+        # A 12 h hole in a 3-hourly axis is three missing steps, not one.
+        ds, full = self._gapped(drop=[4, 5, 6])
+        out, info = archive.regularise_time(ds)
+        assert info["inserted"] == 3
+        assert out.sizes["time"] == full.size
+
+    def test_the_real_values_are_not_moved(self):
+        """The whole point: nothing is interpolated and nothing shifts."""
+        ds, _ = self._gapped(drop=[2, 5])
+        out, _ = archive.regularise_time(ds)
+        for t in ds["time"].values:
+            assert np.array_equal(out["water_u"].sel(time=t).values,
+                                  ds["water_u"].sel(time=t).values)
+
+    def test_the_axis_is_regular_afterwards(self):
+        ds, _ = self._gapped(drop=[1, 4, 5])
+        out, _ = archive.regularise_time(ds)
+        # This is the property that lets the client reconstruct timestamps.
+        archive.time_axis_spec(out["time"].values)      # raises if not regular
+
+    def test_a_cadence_that_is_simply_wrong_raises(self):
+        # A step that is not a whole multiple of the modal one is not a gap --
+        # it means the cadence itself is wrong, and filling would hide that.
+        time = np.array(["2021-01-01T00", "2021-01-01T03", "2021-01-01T07"],
+                        dtype="datetime64[ns]")
+        ds = xr.Dataset({"water_u": (("time",), np.zeros(3, dtype="float32"))},
+                        coords={"time": time})
+        with pytest.raises(ValueError, match="not whole multiples"):
+            archive.regularise_time(ds)
+
+
+class TestPerProductChunking:
+    """A chunk is one HTTP GET, so it decides what the browser downloads.
+
+    HYCOM is 476 x 238 against ERA5's 77 x 77 -- 19x the cells per timestep --
+    so the same chunk length is 1.1 MB for wind and 29 MB for current. 29 MB to
+    show one frame is unusable, and that, not disk space, is the real
+    constraint. Shortening the current chunk fixes it at FULL spatial
+    resolution; halving the grid would have thrown away half the data to solve
+    the same problem worse.
+    """
+
+    def test_current_chunks_are_shorter_than_wind_chunks(self):
+        assert archive.TIME_CHUNK["current"] < archive.TIME_CHUNK["wind"]
+
+    def test_the_chunks_land_near_the_same_download_size(self):
+        wind = archive.TIME_CHUNK["wind"] * 77 * 77 * 2 * 4
+        current = archive.TIME_CHUNK["current"] * 476 * 238 * 2 * 4
+        # Within an order of magnitude of each other, where the naive shared
+        # chunk was 26x apart.
+        assert current / wind < 10
+
+    def test_an_unknown_product_falls_back_rather_than_raising(self):
+        assert archive.TIME_CHUNK.get("swell", archive.DEFAULT_TIME_CHUNK) == 48
+
+    def test_the_tier_records_the_chunk_it_used(self, archive_dir, tmp_path):
+        m = archive.export_archive(archive_dir, tmp_path / "w", "wind",
+                                   tiers={"hourly": 1}, level=1)
+        assert m["tiers"]["hourly"]["chunks"]["time"] == archive.TIME_CHUNK["wind"]
+
+    def test_full_spatial_resolution_is_preserved(self, archive_dir, tmp_path):
+        """Nothing is decimated in space -- the whole point of the revision."""
+        ds = archive.to_display_grid(archive.open_archive(archive_dir, "wind")[0])
+        info = archive.write_zarr_tier(ds, tmp_path / "w.zarr", 1, level=1)
+        assert info["chunks"]["lat"] == ds.sizes["lat"]
+        assert info["chunks"]["lon"] == ds.sizes["lon"]

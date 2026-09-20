@@ -77,9 +77,26 @@ from zarr.codecs import ZstdCodec
 from sar.utils.data_io import open_forcing
 from sar.utils.geo import to_display_longitude
 
-# One chunk = 48 timesteps x the whole box = 1.11 MB of float32. See the module
-# docstring; this is the number the whole layout turns on.
-TIME_CHUNK = 48
+# Timesteps per chunk, PER PRODUCT. A chunk is one HTTP GET, so this number is
+# really "how much does the browser download to show one moment".
+#
+# It is per product because the two grids are nowhere near the same size. ERA5
+# is 77 x 77 over the box; HYCOM is 476 x 238 -- NINETEEN TIMES the cells per
+# timestep. The same 48-step chunk is therefore:
+#
+#     wind     48 steps x 77 x 77     ->  1.1 MB over the wire
+#     current  48 steps x 476 x 238   -> 29.0 MB over the wire
+#
+# 29 MB to display a single frame is unusable, and that -- not disk space -- is
+# the real constraint on the current archive. Eight timesteps brings it to
+# 4.8 MB, comparable to wind, at FULL spatial resolution.
+#
+# An earlier version halved the current grid instead. That was the wrong lever:
+# it threw away half the data to fix a problem that chunking fixes without
+# losing anything. 8 steps at 3-hourly is a 24 h chunk, which is also a natural
+# unit to scrub through.
+TIME_CHUNK = {"wind": 48, "current": 8}
+DEFAULT_TIME_CHUNK = 48
 
 # Measured, not picked: 1.58x against 1.26x at level 3, and the 2.03 GB tier
 # still writes in 1.7 minutes. Decode cost in the browser is level-independent.
@@ -115,6 +132,7 @@ def open_archive(data: Path, product: str = "wind") -> tuple[xr.Dataset, list[st
     derived Parquet; the reason is the same.
     """
     spec = PRODUCTS[product]
+    chunk = TIME_CHUNK.get(product, DEFAULT_TIME_CHUNK)
     files = sorted((data / "raw").glob(f"{spec['prefix']}*.nc"))
     if not files:
         raise FileNotFoundError(f"no {spec['prefix']}*.nc in {data / 'raw'}")
@@ -126,10 +144,29 @@ def open_archive(data: Path, product: str = "wind") -> tuple[xr.Dataset, list[st
         if missing:
             ds.close()
             raise KeyError(f"{f.name} has no {missing} -- is it a {product} file?")
-        parts.append(ds[list(spec["vars"])])
+        # CHUNK EACH FILE BEFORE IT IS CONCATENATED. This one line is the
+        # difference between the current export running and being SIGKILLed.
+        #
+        # Measured on the cluster, 60 files, peak RSS at each stage:
+        #
+        #     after 60 x open_forcing     0.22 GB
+        #     after xr.concat            26.09 GB   <-- here
+        #
+        # xr.concat on lazily-indexed numpy backends materialises everything it
+        # is given. Chunking afterwards cannot help, because the memory is
+        # already gone by then -- two attempts died that way before the stages
+        # were actually measured rather than reasoned about. With dask in place
+        # first, the concat is a graph and peak memory is a few chunks.
+        parts.append(ds[list(spec["vars"])].chunk(
+            {"time": chunk, "lat": -1, "lon": -1}))
         names.append(f.name)
 
     combined = xr.concat(parts, dim="time").sortby("time")
+
+    # Already dask, because each part was chunked before the concat. Re-stated
+    # here so a later edit that removes the per-part chunk still has a graph,
+    # and because a no-op rechunk costs nothing.
+    combined = combined.chunk({"time": chunk, "lat": -1, "lon": -1})
 
     times = combined["time"].values
     duplicated = np.zeros(times.size, dtype=bool)
@@ -159,6 +196,55 @@ def to_display_grid(ds: xr.Dataset) -> xr.Dataset:
     follows.
     """
     return ds.assign_coords(lon=to_display_longitude(ds["lon"].values)).sortby("lon")
+
+
+def regularise_time(ds: xr.Dataset) -> tuple[xr.Dataset, dict]:
+    """Reindex onto a gap-free axis at the modal cadence, inserting NaN.
+
+    HYCOM really is missing timesteps: measured against the live server, the
+    study window has **five** irregular steps -- four of 6 h and one of 12 h
+    against a 3-hourly cadence -- which D011 already records as 7 missing steps
+    in 14,608 (0.048 %).
+
+    There were three ways to publish that and only one is honest.
+
+    Interpolating across them invents current fields that were never modelled,
+    in a store whose whole purpose is to be the thing other results are checked
+    against. Publishing the squashed axis (`--allow-gaps`) keeps every real
+    value but makes the client read a `time` array to know what it is looking
+    at, and leaves a 12 h jump silently rendered as a 3 h step.
+
+    This does the third: put the missing timesteps back as NaN. The axis becomes
+    regular, so `start + k * step` is valid again and the client stays simple;
+    the absent hours are absent rather than interpolated; and every renderer
+    already treats NaN as "no data here" because the land mask taught them to.
+    Nothing is invented and nothing is hidden.
+
+    Only gaps that are exact multiples of the modal step can be filled this way.
+    Anything else means the cadence itself is wrong, and that is not a hole to
+    paper over -- it raises.
+    """
+    times = ds["time"].values
+    if times.size < 2:
+        return ds, {"inserted": 0, "original": int(times.size)}
+
+    steps = np.diff(times)
+    modal = np.median(steps).astype(steps.dtype)
+    ragged = [s for s in np.unique(steps) if s % modal != np.timedelta64(0, "ns")]
+    if ragged:
+        raise ValueError(
+            f"time steps {[str(r) for r in ragged]} are not whole multiples of the "
+            f"modal cadence {modal} -- the cadence is wrong, not merely gapped"
+        )
+
+    full = np.arange(times[0], times[-1] + modal, modal)
+    inserted = int(full.size - times.size)
+    if inserted == 0:
+        return ds, {"inserted": 0, "original": int(times.size)}
+
+    # reindex puts NaN in every variable at the inserted stamps.
+    out = ds.reindex(time=full)
+    return out, {"inserted": inserted, "original": int(times.size)}
 
 
 def _iso(t) -> str:
@@ -224,7 +310,7 @@ def time_axis_spec(times: np.ndarray, *, allow_gaps: bool = False) -> dict:
 
 
 def write_zarr_tier(ds: xr.Dataset, path: Path, stride: int,
-                    *, time_chunk: int = TIME_CHUNK, level: int = ZSTD_LEVEL,
+                    *, time_chunk: int = DEFAULT_TIME_CHUNK, level: int = ZSTD_LEVEL,
                     allow_gaps: bool = False) -> dict:
     """Write one downsampled tier as a Zarr v3 store. Returns its description.
 
@@ -249,6 +335,11 @@ def write_zarr_tier(ds: xr.Dataset, path: Path, stride: int,
 
     tier = tier.astype("float32")
     chunks = (min(time_chunk, tier.sizes["time"]), tier.sizes["lat"], tier.sizes["lon"])
+
+    # Re-chunk onto the store's own boundary. open_archive already chunked, but
+    # striding for a coarser tier leaves ragged chunks; aligning them with what
+    # is written means dask reads, converts and writes one chunk at a time.
+    tier = tier.chunk({"time": chunks[0], "lat": -1, "lon": -1})
     encoding = {
         v: {"chunks": chunks, "compressors": [ZstdCodec(level=level)]}
         for v in tier.data_vars
@@ -308,7 +399,7 @@ def verify_tier(path: Path, source: xr.Dataset, var: str) -> dict:
 
 def export_archive(data: Path, out: Path, product: str = "wind",
                    tiers: dict | None = None, *, level: int = ZSTD_LEVEL,
-                   allow_gaps: bool = False) -> dict:
+                   allow_gaps: bool = False, fill_gaps: bool = False) -> dict:
     """Publish every tier of one product, plus the manifest that indexes them."""
     if product not in PRODUCTS:
         raise ValueError(f"unknown product {product!r}; expected one of {list(PRODUCTS)}")
@@ -316,14 +407,24 @@ def export_archive(data: Path, out: Path, product: str = "wind",
     tiers = spec["tiers"] if tiers is None else tiers
 
     combined, sources = open_archive(data, product)
+
+    filled = {"inserted": 0, "original": int(combined.sizes["time"])}
+    if fill_gaps:
+        combined, filled = regularise_time(combined)
+        if filled["inserted"]:
+            print(f"filled    {filled['inserted']} missing timestep(s) with NaN "
+                  f"({filled['inserted'] / (filled['original'] + filled['inserted']):.3%} "
+                  f"of the axis) -- the source really is missing them")
+
     display = to_display_grid(combined)
 
     lat, lon = display["lat"].values, display["lon"].values
     written = {}
     for name, stride in tiers.items():
         path = out / f"{product}_{name}.zarr"
-        written[name] = write_zarr_tier(display, path, stride, level=level,
-                                        allow_gaps=allow_gaps)
+        written[name] = write_zarr_tier(
+            display, path, stride, level=level, allow_gaps=allow_gaps,
+            time_chunk=TIME_CHUNK.get(product, DEFAULT_TIME_CHUNK))
         written[name]["verified"] = verify_tier(path, display, spec["vars"][0])
 
     manifest = {
@@ -343,6 +444,10 @@ def export_archive(data: Path, out: Path, product: str = "wind",
             "source_files": sources,
             "source_frames": int(combined.sizes["time"]),
             "script": "sar.viz.archive",
+            # Said out loud in the manifest, so a reader of the published store
+            # knows some frames are NaN by construction rather than by accident.
+            "gaps_filled_with_nan": filled["inserted"],
+            "frames_from_source": filled["original"],
         },
     }
 
@@ -363,6 +468,9 @@ def main() -> None:
     p.add_argument("--tier", action="append",
                    help="publish only this tier; repeatable. Default: all of them.")
     p.add_argument("--level", type=int, default=ZSTD_LEVEL, help="zstd level")
+    p.add_argument("--fill-gaps", action="store_true",
+                   help="insert the source's missing timesteps as NaN so the axis is "
+                        "regular; nothing is interpolated")
     p.add_argument("--allow-gaps", action="store_true",
                    help="publish an irregular time axis; the client must then read the "
                         "store's time array rather than reconstructing it")
@@ -379,7 +487,8 @@ def main() -> None:
         tiers = None
 
     m = export_archive(Path(args.data), Path(args.out), args.product, tiers,
-                       level=args.level, allow_gaps=args.allow_gaps)
+                       level=args.level, allow_gaps=args.allow_gaps,
+                       fill_gaps=args.fill_gaps)
 
     print(f"published {args.product} from {len(m['provenance']['source_files'])} file(s), "
           f"{m['provenance']['source_frames']} source frames")

@@ -113,6 +113,13 @@ export function summarise(series) {
  */
 export function explain(windSpeed, towardsDeg, currentSpeed, sweepWidthM) {
   const km = leewayDistance(windSpeed, 24) / 1000;
+  // Two decimals, ALWAYS. This used to interpolate currentSpeed raw, which was
+  // fine while it was the constant 1.8 and produced
+  // "38 % of a 0.376257897392351 m/s current" the moment a measured value was
+  // passed in. A number with fifteen decimal places in a sentence reads as a
+  // bug even when the value is right, which on a projector is the only thing
+  // anyone will take away from the line.
+  const cs = Number.isFinite(currentSpeed) ? currentSpeed.toFixed(2) : '—';
   const frac = leewayFractionOfCurrent(windSpeed, currentSpeed);
   const pct = frac === null ? null : frac * 100;
   const dir = compass(towardsDeg);
@@ -125,14 +132,14 @@ export function explain(windSpeed, towardsDeg, currentSpeed, sweepWidthM) {
     caveat = 'No current figure to compare it against.';
   } else if (pct < 5) {
     caveat = `That is only ${pct.toFixed(0)} % of what a 
-      ${currentSpeed} m/s current does here, so the current would dominate `
+      ${cs} m/s current does here, so the current would dominate `
       + 'and the search datum follows the water, not the weather.';
   } else if (pct < 15) {
-    caveat = `That is ${pct.toFixed(0)} % of a ${currentSpeed} m/s current -- `
+    caveat = `That is ${pct.toFixed(0)} % of a ${cs} m/s current -- `
       + 'enough to matter, which is the regime that earns the leeway term its '
       + 'place in the model.';
   } else {
-    caveat = `That is ${pct.toFixed(0)} % of a ${currentSpeed} m/s current, so `
+    caveat = `That is ${pct.toFixed(0)} % of a ${cs} m/s current, so `
       + 'wind and water are comparable here and the two terms have to be added '
       + 'as vectors, not ranked.';
   }
@@ -145,4 +152,25 @@ export function explain(windSpeed, towardsDeg, currentSpeed, sweepWidthM) {
   }
 
   return { lead, caveat: caveat.replace(/\s+/g, ' ').trim() };
+}
+
+/**
+ * Speed bands for a surface current, where Beaufort sits for wind.
+ *
+ * Lives here rather than in legend.js because legend.js imports Leaflet, and
+ * the point panel needs this too -- routing it through the legend would drag a
+ * map library into a module that only does arithmetic, which is the coupling
+ * this project splits files to avoid. drift.js imports nothing.
+ *
+ * Beaufort is a WIND scale and means nothing for water. These are the bands a
+ * drift argument is actually made in: whether the current dominates the leeway
+ * term, and whether you are in the jet.
+ */
+export function currentBand(speedMs) {
+  if (!Number.isFinite(speedMs)) return '—';
+  if (speedMs < 0.25) return 'weak · leeway competes';
+  if (speedMs < 0.5) return 'moderate';
+  if (speedMs < 1.0) return 'strong';
+  if (speedMs < 1.6) return 'swift · jet edge';
+  return 'Gulf Stream core';
 }

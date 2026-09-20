@@ -21,7 +21,37 @@
  */
 
 /** One hue, light -> dark. See the module docstring for the validation. */
-export const SPEED_RAMP = ['#fde3d3', '#f9b98f', '#f28a54', '#eb6834', '#c04a1c', '#8c3410'];
+/*
+ * SATURATED ALL THE WAY DOWN, and that is the fix rather than a preference.
+ *
+ * Both ramps used to START NEAR WHITE -- #fde3d3 for wind, #d7f6ff for current
+ * -- and most of the domain is slow most of the time, so most arrows on the
+ * map were a pale grey smudge in both products and the wind/current split only
+ * existed at speeds that are rare. Hue has to carry the distinction where the
+ * data actually lives, which is the bottom third of the range.
+ *
+ * Still light-to-dark, so magnitude still reads as it did. What changed is
+ * that the light end is now a saturated amber rather than an off-white.
+ *
+ * GENERATED, NOT PICKED. Both ramps are a constant OKLab hue with lightness
+ * stepped evenly down and chroma held near the gamut edge -- amber at h = 62
+ * deg, cyan at h = 233 deg, L from 0.88 to 0.50. A first attempt at this was
+ * hand-picked hex and the style test caught it at 34 deg of hue spread against
+ * its 30 deg gate: "one hue, light to dark, not a rainbow" is exactly the
+ * property eyeballing a swatch cannot verify.
+ */
+export const SPEED_RAMP = ['#ffcd8d', '#ffaf62', '#ed9235', '#d27908', '#b0660c', '#8e5311'];
+
+/**
+ * The CURRENT's arrow ramp. One hue, light to dark, same rule as the wind's.
+ *
+ * Cyan against the current's magma raster, which is the same contrast argument
+ * that put orange arrows on a viridis raster: the arrows must not be mistaken
+ * for the field they sit on. It also puts the two products in opposite colour
+ * families at the mark level -- warm arrows are wind, cool arrows are water --
+ * which is the distinction that has to survive a projector at ten metres.
+ */
+export const CURRENT_RAMP = ['#9ae2ff', '#73c9f6', '#48b1e3', '#1e98cb', '#037fad', '#04668c'];
 
 /** Target on-screen spacing between arrows, px. Below this they overlap into mush. */
 // Sparser than it was. The arrows used to BE the field and had to cover it;
@@ -29,7 +59,10 @@ export const SPEED_RAMP = ['#fde3d3', '#f9b98f', '#f28a54', '#eb6834', '#c04a1c'
 // motion, so the arrows are an annotation over the top -- a readable value at
 // a real cell centre every so often. At 26 px they crowded the streaks into
 // mush.
-const TARGET_SPACING_PX = 38;
+// Raised with MAX_ARROW_PX below. These two move together or not at all: a
+// longer arrow at the old spacing overlaps its neighbour, which is the mush
+// this constant exists to prevent.
+const TARGET_SPACING_PX = 48;
 
 /**
  * Colour for a speed, as a step of the ramp.
@@ -83,4 +116,8 @@ export function arrowLength(speed, maxSpeed, maxPx) {
 export const MIN_ARROW_PX = 4;
 
 /** Longest drawn arrow, px. Beyond this neighbouring arrows cross. */
-export const MAX_ARROW_PX = 22;
+// Longer than it was. At 22 px the arrows read as texture rather than as
+// values you could take a bearing off, which is what they are there for --
+// the raster already carries the pattern and the particles carry the motion,
+// so the arrow's one job is to be legible at a real cell centre.
+export const MAX_ARROW_PX = 30;

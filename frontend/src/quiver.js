@@ -44,7 +44,8 @@
 
 import L from 'leaflet';
 
-import { MAX_ARROW_PX, arrowLength, decimation, speedColour } from './style.js';
+import { MAX_ARROW_PX, SPEED_RAMP, arrowLength, decimation, speedColour } from './style.js';
+import { isFrameReady } from './sources.js';
 
 /** Drawn under every arrow so it stays legible over any basemap tile. */
 const OUTLINE = 'rgba(15, 15, 15, 0.45)';
@@ -58,6 +59,12 @@ export const QuiverLayer = L.Layer.extend({
     this._field = field;
     this._frame = 0;
     this._maxSpeed = opts.maxSpeed ?? 20;
+    this._ramp = opts.ramp ?? SPEED_RAMP;
+    // Current arrows are drawn heavier than wind's. Colour alone is not enough
+    // at projector distance, and weight survives greyscale and colour-blindness
+    // where hue does not -- the same redundancy argument that already has speed
+    // encoded as both colour and length.
+    this._weight = opts.weight ?? 1;
   },
 
   onAdd(map) {
@@ -134,6 +141,12 @@ export const QuiverLayer = L.Layer.extend({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size.x, size.y);
 
+    // Cleared, then nothing -- the frame is not resident. Same reasoning as
+    // raster.js: this runs synchronously from onAdd before the first fetch,
+    // and an exception here escapes start(). Clearing first means a stale
+    // frame is removed rather than left behind under a new one.
+    if (!isFrameReady(this._field, this._frame)) return;
+
     const g = this._field.grid;
     const cellPx = this._cellSpacingPx();
     const step = decimation(cellPx);
@@ -173,7 +186,7 @@ export const QuiverLayer = L.Layer.extend({
         const dy = -(v / speed) * len;
 
         this._arrow(ctx, p.x - dx / 2, p.y - dy / 2, dx, dy,
-                    speedColour(speed, this._maxSpeed));
+                    speedColour(speed, this._maxSpeed, this._ramp));
       }
     }
   },
@@ -186,7 +199,7 @@ export const QuiverLayer = L.Layer.extend({
     const ang = Math.atan2(dy, dx);
     const spread = 0.45;
 
-    for (const [stroke, width] of [[OUTLINE, 2.8], [colour, 1.5]]) {
+    for (const [stroke, width] of [[OUTLINE, 2.8 * this._weight], [colour, 1.5 * this._weight]]) {
       ctx.strokeStyle = stroke;
       ctx.lineWidth = width;
       ctx.beginPath();

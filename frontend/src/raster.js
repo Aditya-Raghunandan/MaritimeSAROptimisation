@@ -31,7 +31,8 @@
 
 import L from 'leaflet';
 
-import { normaliseSpeed, viridis } from './colormap.js';
+import { VIRIDIS, normaliseSpeed, ramp } from './colormap.js';
+import { isFrameReady } from './sources.js';
 
 export const RasterLayer = L.Layer.extend({
   /**
@@ -46,7 +47,19 @@ export const RasterLayer = L.Layer.extend({
     // are read against, and at 0.72 it was competing with them rather than
     // sitting behind them -- especially over the satellite basemap, where the
     // sea already carries texture.
-    this._opacity = opts.opacity ?? 0.55;
+    /*
+      Lower than it was, because two of these can now be on at once.
+
+      At 0.55 each, wind over current is mud: neither field is readable and the
+      basemap is gone too. The painted raster is the BACKGROUND the streaks and
+      arrows are read against, so it can afford to be faint -- it carries the
+      pattern, not the value.
+    */
+    this._opacity = opts.opacity ?? 0.42;
+    // Per product. Wind is viridis; current is magma, whose near-black low end
+    // lets the two thirds of the box under 0.3 m/s recede so the Gulf Stream
+    // is the only bright thing on the map.
+    this._ramp = opts.ramp ?? VIRIDIS;
   },
 
   onAdd(map) {
@@ -105,6 +118,12 @@ export const RasterLayer = L.Layer.extend({
 
   /** Fill the grid-resolution buffer: one pixel per cell. */
   _paintSource() {
+    // Nothing is fetched when Leaflet calls onAdd -> _reset -> _draw -> here.
+    // Painting anyway would throw out of addTo(map) and unwire the rest of the
+    // page; painting zeros would be worse still, because a calm field is a
+    // plausible picture. Leave the buffer transparent and come back on the
+    // next setFrame, which redraw() issues as soon as the chunk lands.
+    if (!isFrameReady(this._field, this._frame)) return;
     const g = this._field.grid;
     const ctx = this._src.getContext('2d');
     const img = ctx.createImageData(g.nlon, g.nlat);
@@ -118,7 +137,7 @@ export const RasterLayer = L.Layer.extend({
       for (let i = 0; i < g.nlon; i += 1) {
         const [u, v] = this._field.vector(this._frame, row, i);
         const at = (j * g.nlon + i) * 4;
-        const c = viridis(normaliseSpeed(Math.hypot(u, v), this._maxSpeed));
+        const c = ramp(this._ramp, normaliseSpeed(Math.hypot(u, v), this._maxSpeed));
         if (!c) { img.data[at + 3] = 0; continue; }   // NaN -> transparent, not calm
         img.data[at] = c[0];
         img.data[at + 1] = c[1];

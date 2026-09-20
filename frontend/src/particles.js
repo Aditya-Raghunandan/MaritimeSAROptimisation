@@ -80,6 +80,22 @@ export const ParticleLayer = L.Layer.extend({
     this._trail = opts.trail ?? 9;
     this._maxAge = opts.maxAgeMs ?? 4200;
     this._alpha = opts.alpha ?? 0.75;
+    /*
+      Streak colour, per product. White for wind, cyan for current.
+
+      The current's streaks are also FEWER, LONGER-LIVED and LONGER-TRAILED,
+      and that is physically honest rather than decoration: a western-boundary
+      current is slower than the wind above it but far more persistent and
+      laminar, so a long coherent streak is what it actually looks like, while
+      wind is better drawn as many short fast ones. Two fields that behave
+      differently should move differently on the map.
+    */
+    this._rgb = opts.rgb ?? [255, 255, 255];
+    // Stroke weight multiplier. Colour was not enough on its own: two clouds
+    // of equally thin streaks read as one field in two tints. Wind is drawn as
+    // thin fast wisps and current as thick slow ribbons, which is also what
+    // the two actually are.
+    this._width = opts.width ?? 1;
     this._particles = [];
     this._raf = null;
   },
@@ -254,8 +270,9 @@ export const ParticleLayer = L.Layer.extend({
       // segment is its own stroke because each has its own alpha.
       for (let n = 1; n < p.past.length; n += 1) {
         const t = n / (p.past.length - 1);
-        ctx.strokeStyle = `rgba(255, 255, 255, ${(this._alpha * t * t).toFixed(3)})`;
-        ctx.lineWidth = 0.6 + 0.8 * t;
+        ctx.strokeStyle = `rgba(${this._rgb[0]}, ${this._rgb[1]}, ${this._rgb[2]}, `
+          + `${(this._alpha * t * t).toFixed(3)})`;
+        ctx.lineWidth = (0.6 + 0.8 * t) * this._width;
         ctx.beginPath();
         ctx.moveTo(p.past[n - 1][0], p.past[n - 1][1]);
         ctx.lineTo(p.past[n][0], p.past[n][1]);
