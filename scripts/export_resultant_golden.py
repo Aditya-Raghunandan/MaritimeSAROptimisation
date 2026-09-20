@@ -7,7 +7,7 @@ has no server to ask. Two implementations of the same formula drift apart silent
 map that is subtly wrong still looks entirely reasonable on screen.
 
 So Python is the reference. This script runs it over a small grid and records both the
-inputs and the answers. `frontend/src/interpolate.test.js` reads the same file, feeds the
+inputs and the answers. `frontend/tests/interpolate.test.js` reads the same file, feeds the
 JavaScript the identical inputs, and asserts the answers match. If either side is edited
 alone, that test fails and names the case.
 
@@ -253,7 +253,7 @@ def build(grid: dict, field: np.ndarray, land_cells: list, source: str) -> dict:
         "reference": "src/sar/model/interpolate.py",
         "source": source,
         "note": (
-            "Python is the reference implementation. frontend/src/interpolate.test.js "
+            "Python is the reference implementation. frontend/tests/interpolate.test.js "
             "asserts the browser port reproduces every case here. Regenerate with: "
             "python scripts/export_resultant_golden.py --from <a stored forcing file>"
         ),

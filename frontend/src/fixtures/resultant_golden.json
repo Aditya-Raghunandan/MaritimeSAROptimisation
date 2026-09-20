@@ -2,7 +2,7 @@
  "generated_by": "scripts/export_resultant_golden.py",
  "reference": "src/sar/model/interpolate.py",
  "source": "cut from current_2019-01-01_2019-01-03.txt",
- "note": "Python is the reference implementation. frontend/src/interpolate.test.js asserts the browser port reproduces every case here. Regenerate with: python scripts/export_resultant_golden.py --from <a stored forcing file>",
+ "note": "Python is the reference implementation. frontend/tests/interpolate.test.js asserts the browser port reproduces every case here. Regenerate with: python scripts/export_resultant_golden.py --from <a stored forcing file>",
  "tolerance": 1e-09,
  "grid": {
   "lat0": 19.24,

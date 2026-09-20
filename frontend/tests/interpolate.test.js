@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import golden from './fixtures/resultant_golden.json';
+import golden from '../src/fixtures/resultant_golden.json';
 import {
   MissingCornerError,
   OutOfCoverageError,
@@ -23,9 +23,9 @@ import {
   sampleField,
   speedDirection,
   timeBlend,
-} from './interpolate.js';
-import { Grid } from './layers.js';
-import { BufferSource } from './sources.js';
+} from '../src/interpolate.js';
+import { Grid } from '../src/layers.js';
+import { BufferSource } from '../src/sources.js';
 
 const TOL = golden.tolerance;
 const grid = new Grid(golden.grid);

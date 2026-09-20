@@ -626,7 +626,7 @@ cd frontend && npm test                        # replays every case through the 
 
 Python is the reference. The script cuts a small window out of a stored forcing file, runs
 the engine over it, and records the inputs and the answers: the weights, the uncertainty,
-the time blending and the failure modes. `frontend/src/interpolate.test.js` feeds the
+the time blending and the failure modes. `frontend/tests/interpolate.test.js` feeds the
 JavaScript the identical inputs and asserts the answers match. Change one side alone and
 that test fails, naming the case. Regenerate the fixture only when the Python is what
 changed, and read the diff before committing it.
