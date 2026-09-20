@@ -32,19 +32,40 @@
  * being partial.
  */
 
+import { sampleField } from './interpolate.js';
+
 /** D002 / Allen (2000), matching ALPHA in drift.js and ALPHA_MID in wind.py. */
 export const ALPHA = 0.02;
+
+/**
+ * Whether the current is sampled bilinearly rather than by nearest neighbour.
+ *
+ * OFF, deliberately. `interpolate.js` is the browser port of the engine's own
+ * `sar.model.interpolate`, and it is the better answer at a point: nearest neighbour
+ * moves a value by up to half a cell, about 4 km east-west on the current grid. But the
+ * DRAWN field is a different question from a queried point. Every arrow becomes four
+ * reads instead of one, and the argument written above about resampling still stands:
+ * smoothing the current onto the 28 km wind grid invents detail the picture cannot
+ * honestly carry.
+ *
+ * So the flag exists to be switched on once the archive is published and the cost has
+ * been measured on a real frame, not before. `sampleAt` below ignores it entirely and is
+ * always bilinear, because a number shown beside a clicked position is exactly the case
+ * where half a cell matters and the cost does not.
+ */
+export const BILINEAR_FIELD = false;
 
 export class ResultantSource {
   /**
    * @param {{source, grid}} wind     field source and its grid (the output grid)
    * @param {{source, grid}|null} current  field source and its grid, or null
-   * @param {{alpha?: number}} opts
+   * @param {{alpha?: number, bilinear?: boolean}} opts
    */
   constructor(wind, current, opts = {}) {
     this.wind = wind;
     this.current = current ?? null;
     this.alpha = opts.alpha ?? ALPHA;
+    this.bilinear = opts.bilinear ?? BILINEAR_FIELD;
     this.grid = wind.grid;
     this.frames = wind.source.frames;
   }
@@ -110,18 +131,95 @@ export class ResultantSource {
     let v = this.alpha * vw;
 
     if (this.current) {
-      const cell = this.current.grid.cellAt(this.grid.lat(j), this.grid.lon(i));
-      if (cell) {
-        const [uc, vc] = this.current.source.vector(this._currentFrame(frame), cell.j, cell.i);
-        // A land cell is NaN in HYCOM. Adding it would wipe out the leeway term
-        // and blank the arrow, which reads as "no wind" rather than "no sea".
-        if (Number.isFinite(uc) && Number.isFinite(vc)) {
-          u += uc;
-          v += vc;
-        }
+      const [uc, vc] = this._currentAt(frame, this.grid.lat(j), this.grid.lon(i));
+      // A land cell is NaN in HYCOM. Adding it would wipe out the leeway term
+      // and blank the arrow, which reads as "no wind" rather than "no sea".
+      if (Number.isFinite(uc) && Number.isFinite(vc)) {
+        u += uc;
+        v += vc;
       }
     }
     return [u, v];
+  }
+
+  /**
+   * The current at a position, by whichever method the flag selects.
+   *
+   * Returns [NaN, NaN] rather than throwing, because this is on the draw path: one
+   * coastal cell must not take the whole frame down. `sampleAt` handles the same cases
+   * with words instead.
+   */
+  _currentAt(frame, lat, lon) {
+    const k = this._currentFrame(frame);
+    if (this.bilinear) {
+      try {
+        const s = sampleField(this.current, k, lat, lon);
+        return [s.u, s.v];
+      } catch {
+        // Off the current grid, or within one cell of land. Either way there is no
+        // current to add here, and the leeway term still stands on its own.
+        return [NaN, NaN];
+      }
+    }
+    const cell = this.current.grid.cellAt(lat, lon);
+    if (!cell) return [NaN, NaN];
+    return this.current.source.vector(k, cell.j, cell.i);
+  }
+
+  /**
+   * The resultant at an exact position rather than at a cell: what a click should show.
+   *
+   * ALWAYS BILINEAR, whatever `bilinear` says, and this is the point of the whole port.
+   * Rounding a clicked position to the nearest grid point moves the answer by up to half
+   * a cell, and the number is being shown beside the very coordinates it disagrees with.
+   * `interpolate.js` computes it exactly as `sar.model.interpolate` does, and
+   * `fixtures/resultant_golden.json` is what holds the two to that.
+   *
+   * The current is reported separately from the leeway rather than only summed, so the
+   * caller can show which term dominates. `current` is null when the position has no
+   * usable current, with `currentReason` saying why in words; the leeway term is still
+   * returned, exactly as the leeway-only layer is still drawn.
+   */
+  sampleAt(frame, lat, lon) {
+    const [uw, vw] = this._windAt(frame, lat, lon);
+    const leeway = [this.alpha * uw, this.alpha * vw];
+
+    let current = null;
+    let currentReason = 'the surface current is not published yet';
+    let uncertainty = null;
+
+    if (this.current) {
+      try {
+        const s = sampleField(this.current, this._currentFrame(frame), lat, lon);
+        current = [s.u, s.v];
+        uncertainty = s.uncertainty;
+        currentReason = null;
+      } catch (err) {
+        currentReason = err.name === 'MissingCornerError'
+          ? 'within one cell of land, so the current cannot be interpolated here'
+          : 'outside the published current grid';
+      }
+    }
+
+    const u = leeway[0] + (current ? current[0] : 0);
+    const v = leeway[1] + (current ? current[1] : 0);
+    return {
+      lat, lon, frame, u, v, leeway, current, currentReason, uncertainty,
+      isPartial: current === null,
+      ...this.describe(),
+    };
+  }
+
+  /** The wind at a position, bilinear on its own grid, falling back to the cell. */
+  _windAt(frame, lat, lon) {
+    try {
+      const s = sampleField(this.wind, frame, lat, lon);
+      return [s.u, s.v];
+    } catch {
+      const cell = this.grid.cellAt(lat, lon);
+      if (!cell) return [NaN, NaN];
+      return this.wind.source.vector(frame, cell.j, cell.i);
+    }
   }
 }
 

@@ -9,7 +9,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { ALPHA, ResultantSource, resultantScale } from './resultant.js';
+import {
+  ALPHA, BILINEAR_FIELD, ResultantSource, resultantScale,
+} from './resultant.js';
 import { Grid } from './layers.js';
 
 const WIND_GRID = new Grid({ lat0: 17, dlat: 0.25, nlat: 77, lon0: -82, dlon: 0.25, nlon: 77 });
@@ -136,5 +138,123 @@ describe('resultantScale', () => {
 
   it('never returns zero, which would divide by nothing', () => {
     expect(resultantScale(0, false)).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The bilinear flag, and the point query behind it.
+ *
+ * `BILINEAR_FIELD` is off: the drawn field keeps nearest neighbour until the cost has
+ * been measured on a real frame. `sampleAt` ignores the flag and is always bilinear,
+ * because a number shown beside a clicked position is where half a cell matters.
+ */
+describe('the bilinear flag', () => {
+  // A current that varies cell by cell, so nearest neighbour and bilinear cannot agree
+  // by accident. Constant fields, which the helpers above use, hide the difference.
+  const varying = (grid) => ({
+    grid,
+    axis: axis(10800, 16),
+    source: {
+      frames: 16,
+      isResident: () => true,
+      ensure: async () => {},
+      vector: (f, j, i) => [0.1 * j + 0.2 * i, 0.05 * j - 0.1 * i],
+    },
+  });
+
+  // A position deliberately between grid lines, where rounding is at its worst.
+  const LAT = CUR_GRID.lat0 + 10.5 * CUR_GRID.dlat;
+  const LON = CUR_GRID.lon0 + 10.5 * CUR_GRID.dlon;
+
+  it('is off by default, so nothing drawn changes today', () => {
+    expect(BILINEAR_FIELD).toBe(false);
+    expect(new ResultantSource(wind(10, 0), current(1, 0)).bilinear).toBe(false);
+  });
+
+  it('is switched on per instance, not globally', () => {
+    const r = new ResultantSource(wind(10, 0), current(1, 0), { bilinear: true });
+    expect(r.bilinear).toBe(true);
+    expect(new ResultantSource(wind(10, 0), current(1, 0)).bilinear).toBe(false);
+  });
+
+  it('changes the drawn vector once it is on', () => {
+    const off = new ResultantSource(wind(0, 0), varying(CUR_GRID));
+    const on = new ResultantSource(wind(0, 0), varying(CUR_GRID), { bilinear: true });
+    const j = WIND_GRID.cellAt(LAT, LON).j;
+    const i = WIND_GRID.cellAt(LAT, LON).i;
+    expect(on.vector(0, j, i)).not.toEqual(off.vector(0, j, i));
+  });
+
+  it('never throws on the draw path, even at a land cell', () => {
+    const land = varying(CUR_GRID);
+    land.source.vector = () => [NaN, NaN];
+    const r = new ResultantSource(wind(10, 0), land, { bilinear: true });
+    // The leeway term survives: a coastal cell must not blank the arrow or the frame.
+    expect(r.vector(0, 0, 0)).toEqual([0.2, 0]);
+  });
+});
+
+describe('sampleAt, the point query', () => {
+  const varying = {
+    grid: CUR_GRID,
+    axis: axis(10800, 16),
+    source: {
+      frames: 16,
+      isResident: () => true,
+      ensure: async () => {},
+      vector: (f, j, i) => [0.1 * j + 0.2 * i, 0.05 * j - 0.1 * i],
+    },
+  };
+  const LAT = CUR_GRID.lat0 + 10.5 * CUR_GRID.dlat;
+  const LON = CUR_GRID.lon0 + 10.5 * CUR_GRID.dlon;
+
+  it('is bilinear even when the field flag is off', () => {
+    const off = new ResultantSource(wind(0, 0), varying);
+    const cell = CUR_GRID.cellAt(LAT, LON);
+    const nearest = varying.source.vector(0, cell.j, cell.i);
+    const got = off.sampleAt(0, LAT, LON);
+    expect(got.current[0]).not.toBeCloseTo(nearest[0], 6);
+  });
+
+  it('reports the current and the leeway separately, and their sum', () => {
+    const r = new ResultantSource(wind(10, 0), varying);
+    const got = r.sampleAt(0, LAT, LON);
+    expect(got.leeway[0]).toBeCloseTo(0.2, 12);
+    expect(got.u).toBeCloseTo(got.leeway[0] + got.current[0], 12);
+    expect(got.v).toBeCloseTo(got.leeway[1] + got.current[1], 12);
+  });
+
+  it('carries the uncertainty the engine computes', () => {
+    const got = new ResultantSource(wind(10, 0), varying).sampleAt(0, LAT, LON);
+    expect(got.uncertainty.nCorners).toBe(4);
+    expect(got.uncertainty.sigmaSpatialMs).toBeGreaterThan(0);
+  });
+
+  it('still answers with leeway alone when there is no current at all', () => {
+    const got = new ResultantSource(wind(10, 0), null).sampleAt(0, LAT, LON);
+    expect(got.current).toBeNull();
+    expect(got.isPartial).toBe(true);
+    expect(got.currentReason).toMatch(/not published/);
+    expect(got.u).toBeCloseTo(0.2, 12);
+  });
+
+  it('says in words why a coastal point has no current, rather than throwing', () => {
+    const land = { ...varying, source: { ...varying.source, vector: () => [NaN, NaN] } };
+    const got = new ResultantSource(wind(10, 0), land).sampleAt(0, LAT, LON);
+    expect(got.current).toBeNull();
+    expect(got.currentReason).toMatch(/land/);
+    expect(got.u).toBeCloseTo(0.2, 12);     // the leeway term still stands
+  });
+
+  it('says so when the point is off the current grid', () => {
+    const got = new ResultantSource(wind(10, 0), varying).sampleAt(0, 16.0, -81.0);
+    expect(got.current).toBeNull();
+    expect(got.currentReason).toMatch(/outside/);
+  });
+
+  it('keeps the caveat wording, so a caller cannot show a number without it', () => {
+    const got = new ResultantSource(wind(10, 0), varying).sampleAt(0, LAT, LON);
+    expect(got.missing).toContain('stochastic η');
+    expect(got.caveat).toBeTruthy();
   });
 });
