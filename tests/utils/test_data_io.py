@@ -20,6 +20,7 @@ from sar.utils.data_io import (
     load_drifters,
     open_box_means,
     open_forcing,
+    open_forcing_table,
     select_window,
 )
 
@@ -336,3 +337,134 @@ class TestOpenBoxMeans:
     def test_empty_directory_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="no wind_box_mean"):
             open_box_means(tmp_path)
+
+
+def tidy_current_table(n_lat: int = 6, n_lon: int = 5, n_time: int = 3,
+                       land: tuple = (2, 3)) -> pd.DataFrame:
+    """One row per (time, lat, lon), shaped like scripts/fetch_current_range.py writes.
+
+    Coordinates are rounded through float32 exactly as HYCOM stores them, so the axes
+    arrive with the ragged gaps the real archive has rather than clean ones.
+    """
+    lat = np.float32(17.0 + 0.04 * np.arange(n_lat)).astype(float)
+    lon = np.float32(278.0 + 0.08 * np.arange(n_lon)).astype(float)
+    time = pd.date_range("2019-01-01", periods=n_time, freq="3h")
+
+    rows = []
+    for t_i, t in enumerate(time):
+        for j, la in enumerate(lat):
+            for i, lo in enumerate(lon):
+                is_land = (j, i) == land
+                rows.append({
+                    "time": t.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "lat": la,
+                    "lon": lo,
+                    "water_u": np.nan if is_land else 0.1 * j + 0.2 * i + 0.01 * t_i,
+                    "water_v": np.nan if is_land else -0.05 * j + 0.3 * i,
+                })
+    return pd.DataFrame(rows)
+
+
+def write_table(df: pd.DataFrame, path):
+    """Write it the way the fetch script does: to_string, whitespace-aligned, no index."""
+    df.to_string(path, index=False)
+    return path
+
+
+class TestOpenForcingTable:
+    """Reading the tidy table the current fetcher actually writes.
+
+    Its default output is .txt, so this is the format the only real current data in the
+    repo is in, and until this existed nothing downstream of the fetcher could use it.
+    """
+
+    def test_pivots_a_table_back_onto_its_grid(self, tmp_path):
+        df = tidy_current_table()
+        ds = open_forcing_table(write_table(df, tmp_path / "current_x.txt"))
+        assert dict(ds.sizes) == {"time": 3, "lat": 6, "lon": 5}
+        assert set(ds.data_vars) == {"water_u", "water_v"}
+
+    def test_the_values_land_on_the_right_cells(self, tmp_path):
+        df = tidy_current_table()
+        ds = open_forcing_table(write_table(df, tmp_path / "current_x.txt"))
+        # Row (j=1, i=3) at the second timestep: 0.1*1 + 0.2*3 + 0.01*1.
+        assert ds["water_u"].isel(time=1, lat=1, lon=3).item() == pytest.approx(0.71)
+
+    def test_land_stays_nan_rather_than_becoming_zero(self, tmp_path):
+        """A land cell read back as 0.0 is a current of zero, which is a real answer."""
+        df = tidy_current_table(land=(2, 3))
+        ds = open_forcing_table(write_table(df, tmp_path / "current_x.txt"))
+        assert np.isnan(ds["water_u"].isel(time=0, lat=2, lon=3).item())
+        assert np.isfinite(ds["water_u"].isel(time=0, lat=2, lon=2).item())
+
+    def test_a_record_absent_from_the_table_becomes_nan(self, tmp_path):
+        df = tidy_current_table()
+        df = df.drop(index=df.index[7]).reset_index(drop=True)
+        ds = open_forcing_table(write_table(df, tmp_path / "current_x.txt"))
+        assert int(np.isnan(ds["water_u"].values).sum()) >= 1
+
+    def test_the_float32_axes_of_the_real_archive_are_accepted(self, tmp_path):
+        """The check that used to reject the real file: ragged gaps, regular grid."""
+        df = tidy_current_table(n_lon=40)
+        ds = open_forcing_table(write_table(df, tmp_path / "current_x.txt"))
+        gaps = np.diff(ds.lon.values)
+        assert not np.allclose(gaps, gaps[0], rtol=0, atol=1e-9)
+        assert ds.sizes["lon"] == 40
+
+    def test_a_scatter_of_points_is_refused_rather_than_pivoted(self, tmp_path):
+        df = tidy_current_table()
+        df.loc[df.index[-1], "lon"] = 285.137       # not on the grid
+        with pytest.raises(ValueError, match="not regularly spaced"):
+            open_forcing_table(write_table(df, tmp_path / "current_x.txt"))
+
+    def test_duplicate_records_are_refused(self, tmp_path):
+        df = tidy_current_table()
+        df = pd.concat([df, df.iloc[[0]]], ignore_index=True)
+        with pytest.raises(ValueError, match="duplicate"):
+            open_forcing_table(write_table(df, tmp_path / "current_x.txt"))
+
+    def test_a_missing_index_column_says_which(self, tmp_path):
+        df = tidy_current_table().drop(columns=["lon"])
+        with pytest.raises(ValueError, match="lon"):
+            open_forcing_table(write_table(df, tmp_path / "current_x.txt"))
+
+    def test_a_table_with_no_value_columns_is_refused(self, tmp_path):
+        df = tidy_current_table()[["time", "lat", "lon"]]
+        with pytest.raises(ValueError, match="no value columns"):
+            open_forcing_table(write_table(df, tmp_path / "current_x.txt"))
+
+    def test_csv_and_parquet_give_the_same_grid_as_txt(self, tmp_path):
+        df = tidy_current_table()
+        txt = open_forcing_table(write_table(df, tmp_path / "c.txt"))
+        df.to_csv(tmp_path / "c.csv", index=False)
+        csv = open_forcing_table(tmp_path / "c.csv")
+        pytest.importorskip("pyarrow")
+        df.to_parquet(tmp_path / "c.parquet", index=False)
+        pq = open_forcing_table(tmp_path / "c.parquet")
+        for other in (csv, pq):
+            assert dict(other.sizes) == dict(txt.sizes)
+            np.testing.assert_allclose(other["water_u"].values, txt["water_u"].values)
+
+
+class TestOpenForcingDispatch:
+    """open_forcing is the one entry point, so it has to choose the reader itself."""
+
+    def test_a_txt_table_goes_through_the_table_reader(self, tmp_path):
+        path = write_table(tidy_current_table(), tmp_path / "current_x.txt")
+        ds = open_forcing(path)
+        assert dict(ds.sizes) == {"time": 3, "lat": 6, "lon": 5}
+
+    def test_a_table_arrives_already_in_the_d020_convention(self, tmp_path):
+        path = write_table(tidy_current_table(), tmp_path / "current_x.txt")
+        ds = open_forcing(path)
+        assert ds.attrs["sar_arrival_convention"] == ARRIVAL_D020
+        assert (np.diff(ds.lat.values) > 0).all()
+        assert (ds.lon.values >= 0).all() and (ds.lon.values < 360).all()
+
+    def test_it_records_the_row_count_it_read(self, tmp_path):
+        path = write_table(tidy_current_table(), tmp_path / "current_x.txt")
+        assert open_forcing(path).attrs["sar_table_rows"] == 6 * 5 * 3
+
+    def test_a_missing_table_still_says_so_before_parsing(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="no forcing file"):
+            open_forcing(tmp_path / "absent.txt")
