@@ -76,3 +76,74 @@ jobs:
         # A passing test suite over a site that does not build is not a green
         # build. This is the step that would have caught a broken import.
         run: npm run build
+
+  browser-tests:
+    name: Browser (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+
+    # NON-BLOCKING, ON PURPOSE, AND THIS IS MEANT TO BE REMOVED.
+    #
+    # A required check gates BOTH of us, and this suite was written by one of
+    # us. Until it has run over enough pull requests to show it is not flaky,
+    # a failure here should be read and not obeyed -- being blocked by a
+    # browser suite you did not write, on a failure mode you have no reason to
+    # know, is how a check gets routed around rather than fixed.
+    #
+    # Delete this line once it has been stable for a few PRs AND both of us
+    # have agreed, per docs/good_pr_etiquette.md. Leaving it forever is the
+    # failure mode in the other direction: a check nobody has to pass is a
+    # check nobody reads.
+    continue-on-error: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache the browser
+        # ~400 MB that never changes between runs for a pinned Playwright. The
+        # key carries the version, so a version bump misses the cache once and
+        # then keeps the new browser -- which is what makes the exact pin in
+        # package.json worth having rather than a caret range.
+        id: browser-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-1.59.1
+
+      - name: Install Chromium
+        # `--with-deps` installs the system libraries a headless browser needs
+        # on a bare runner; the browser binary itself comes from the cache
+        # above when it hits.
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser tests
+        # Builds and previews the site itself, via `webServer` in
+        # playwright.config.js. Entirely offline: every archive request is
+        # answered from tests/e2e/fixtures/, and the build points at an
+        # unroutable host so that anything unintercepted fails loudly.
+        run: npm run test:e2e
+
+      - name: Keep the failure screenshots
+        # Only on failure, and only for a week. The whole point of this suite
+        # is failures that are visible rather than described, so when one
+        # happens the picture should outlive the log.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failures
+          path: frontend/test-results/
+          retention-days: 7

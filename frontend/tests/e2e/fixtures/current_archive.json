@@ -1,0 +1,65 @@
+{
+  "generated": "2026-09-21T15:24:25+00:00",
+  "product": "current",
+  "label": "surface current",
+  "variables": [
+    "water_u",
+    "water_v"
+  ],
+  "units": "m/s",
+  "longitude_convention": "-180..180 (display; D020 stores 0-360)",
+  "bbox": [
+    26.0,
+    -79.0,
+    26.99999999999998,
+    -77.9600000000002
+  ],
+  "grid": {
+    "lat0": 26.0,
+    "dlat": 0.03999999999999915,
+    "nlat": 26,
+    "lon0": -79.0,
+    "dlon": 0.07999999999998408,
+    "nlon": 14
+  },
+  "tiers": {
+    "3-hourly": {
+      "path": "current_3-hourly.zarr",
+      "frames": 8,
+      "step_seconds": 10800,
+      "regular": true,
+      "gaps": null,
+      "start": "2021-01-05T00:00:00Z",
+      "end": "2021-01-05T21:00:00Z",
+      "chunks": {
+        "time": 8,
+        "lat": 26,
+        "lon": 14
+      },
+      "chunk_bytes_uncompressed": 11648,
+      "bytes": 10078,
+      "compression": "zstd-19",
+      "compression_ratio": 2.312,
+      "files": 11,
+      "verified": {
+        "at": {
+          "time": "2021-01-05T12:00:00Z",
+          "lat": 26.319999999999993,
+          "lon": -78.68000000000006
+        },
+        "published": 0.2288154810667038,
+        "source": 0.22881547918467557,
+        "match": true
+      }
+    }
+  },
+  "provenance": {
+    "source_files": [
+      "hycom_demo_2021-01-05-2021-01-06.nc"
+    ],
+    "source_frames": 8,
+    "script": "sar.viz.archive",
+    "gaps_filled_with_nan": 0,
+    "frames_from_source": 8
+  }
+}

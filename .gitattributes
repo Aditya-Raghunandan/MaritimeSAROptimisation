@@ -11,8 +11,18 @@
 # Source files: LF is specified explicitly for the same reason.
 *.py text eol=lf
 *.js text eol=lf
+*.mjs text eol=lf
 *.jsx text eol=lf
 *.ts text eol=lf
 *.tsx text eol=lf
 *.json text eol=lf
 *.md text eol=lf
+
+# The E2E fixture's Zarr chunks are zstd-compressed bytes in extensionless
+# files (`c/0`, `c/0/0/0`). `text=auto` above decides text-versus-binary by
+# looking for NUL bytes, which is a heuristic, and a twenty-byte coordinate
+# chunk is exactly the size at which a heuristic can be unlucky. A chunk
+# rewritten with CRLF is a corrupt chunk, and it would fail only in CI, only
+# on a decode, with an error naming neither line endings nor this file. Say
+# it outright instead.
+frontend/tests/e2e/fixtures/**/c/** binary
