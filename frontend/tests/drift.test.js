@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  ALPHA, bearingFrom, bearingTowards, compass, currentBand, leewayDistance, leewayFractionOfCurrent, leewaySpeed, speed, summarise,
+  ALPHA, bearingFrom, bearingTowards, compass, currentBand, driftBand, leewayDistance, leewayFractionOfCurrent, leewaySpeed, speed, summarise, sweepWidthMinutes,
 } from '../src/drift.js';
 
 describe('ALPHA', () => {
@@ -125,5 +125,49 @@ describe('currentBand', () => {
   it('does not crash on a land cell', () => {
     expect(currentBand(NaN)).toBe('—');
     expect(currentBand(undefined)).toBe('—');
+  });
+});
+
+/*
+  The sweep-width comparison is the argument the whole project rests on: an
+  effective visual sweep width for a person in the water is about 185 m, and the
+  Gulf Stream runs 1-2.5 m/s, so a target crosses the full detectable width of a
+  search track in a minute or two. These helpers put that in the panel, which is
+  why they are phrased in minutes rather than in metres per second.
+*/
+describe('sweepWidthMinutes', () => {
+  it('is the time to cross one sweep width', () => {
+    // 185 m at 1 m/s is 185 s, which is 3.08 minutes.
+    expect(sweepWidthMinutes(1)).toBeCloseTo(185 / 60, 6);
+    // The Gulf Stream core: the number that motivates the project.
+    expect(sweepWidthMinutes(1.8)).toBeLessThan(2);
+  });
+
+  it('is null where the question has no answer', () => {
+    expect(sweepWidthMinutes(0)).toBeNull();
+    expect(sweepWidthMinutes(-1)).toBeNull();
+    expect(sweepWidthMinutes(NaN)).toBeNull();
+  });
+
+  it('takes a different sweep width when one is given', () => {
+    expect(sweepWidthMinutes(1, 370)).toBeCloseTo(2 * sweepWidthMinutes(1), 6);
+  });
+});
+
+describe('driftBand', () => {
+  it('cuts its bands where the search consequence changes', () => {
+    expect(driftBand(0.02)).toMatch(/stationary/);
+    expect(driftBand(0.5)).toMatch(/moderate/);
+    expect(driftBand(2.0)).toMatch(/jet speed/);
+  });
+
+  it('names the sweep width once the target is actually moving', () => {
+    // A number is not an argument. "Out of the swept lane in four minutes" is.
+    expect(driftBand(0.8)).toMatch(/sweep width every/);
+    expect(driftBand(0.02)).not.toMatch(/sweep width/);
+  });
+
+  it('has an answer for a value that is not a number', () => {
+    expect(driftBand(NaN)).toBe('—');
   });
 });
