@@ -53,6 +53,24 @@ export const SPEED_RAMP = ['#ffcd8d', '#ffaf62', '#ed9235', '#d27908', '#b0660c'
  */
 export const CURRENT_RAMP = ['#9ae2ff', '#73c9f6', '#48b1e3', '#1e98cb', '#037fad', '#04668c'];
 
+/**
+ * The RESULTANT's arrow ramp -- where a person in the water actually goes.
+ *
+ * A third hue, and it has to be a third hue: this layer is neither of its
+ * parents and must not be mistaken for either. Green at h = 148 deg sits 86 deg
+ * from the wind's amber and 85 deg from the current's cyan, which is about as
+ * far from both as one hue can get while staying inside the gamut at these
+ * lightnesses. That it lands BETWEEN them is a happy accident rather than the
+ * reason, but it is the right accident: the resultant is the two combined.
+ *
+ * Generated on the same rule as the other two -- constant OKLab hue, lightness
+ * stepped 0.88 down to 0.50, chroma at the gamut edge -- and it measures 0.15
+ * deg of hue spread against the style test's 30 deg gate. The first hand-picked
+ * attempt at the amber and cyan ramps failed that gate at 34 deg, which is why
+ * none of the three is picked by eye.
+ */
+export const DRIFT_RAMP = ['#44ff77', '#05e55e', '#04c951', '#03ad45', '#039239', '#02782e'];
+
 /** Target on-screen spacing between arrows, px. Below this they overlap into mush. */
 // Sparser than it was. The arrows used to BE the field and had to cover it;
 // now the painted raster carries the pattern and the particles carry the

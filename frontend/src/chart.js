@@ -27,8 +27,8 @@ import 'uplot/dist/uPlot.min.css';
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
 import { beaufort, describe, detectionOutlook } from './beaufort.js';
 import {
-  ALPHA, bearingFrom, bearingTowards, compass, currentBand, explain, leewayDistance,
-  leewayFractionOfCurrent, leewaySpeed, summarise,
+  ALPHA, bearingFrom, bearingTowards, compass, currentBand, driftBand, explain,
+  leewayDistance, leewayFractionOfCurrent, leewaySpeed, summarise, sweepWidthMinutes,
 } from './drift.js';
 
 const CHART_HEIGHT = 120;
@@ -86,6 +86,102 @@ export class PointPanel {
     return [['wind', this.chartEl], ['ocean', this.oceanChartEl]].filter(([, el]) => el);
   }
 
+  /**
+   * The headline: what a person in the water at this exact point would do.
+   *
+   * `sample` comes from `ResultantSource.sampleAt`, which is the bilinear path
+   * held to the Python engine by `resultant_golden.json`, evaluated at the
+   * CLICKED position rather than at a grid point. Nothing is recomputed here --
+   * an earlier version of this panel added current and leeway itself, which
+   * meant the number beside the coordinates and the arrows on the map were two
+   * separate implementations of one formula, free to drift apart silently.
+   *
+   * A null sample is a real answer, not a blank: it means the wind frame is not
+   * resident yet, and saying so is better than showing a zero.
+   */
+  showDrift(sample) {
+    const set = (id, text) => {
+      const el = this.root.querySelector(id);
+      if (el) el.textContent = text;
+    };
+    const unit = (id, value, u) => {
+      const el = this.root.querySelector(id);
+      if (el) el.innerHTML = `${value}<span class="unit">${u}</span>`;
+    };
+
+    if (!sample || !Number.isFinite(sample.u) || !Number.isFinite(sample.v)) {
+      set('#dr-lead', 'Not loaded for this moment yet — the frame is still being fetched.');
+      for (const id of ['#dr-dir', '#dr-compass', '#dr-speed', '#dr-band',
+                        '#dr-1h', '#dr-6h', '#dr-terms', '#dr-area', '#dr-how']) set(id, '—');
+      return;
+    }
+
+    const v = Math.hypot(sample.u, sample.v);
+    const towards = bearingTowards(sample.u, sample.v);
+    const minutes = sweepWidthMinutes(v);
+
+    set('#dr-dir', `${towards.toFixed(0)}°`);
+    set('#dr-compass', `towards ${compass(towards)}`);
+    unit('#dr-speed', v.toFixed(2), 'm/s');
+    set('#dr-band', driftBand(v));
+    set('#dr-1h', formatDistance(v * 3600));
+    set('#dr-6h', `${formatDistance(v * 6 * 3600)} in 6 h`);
+
+    /*
+      The sentence people actually read, and it says the consequence rather than
+      the quantity. The sweep-width comparison is the argument the whole project
+      rests on: one minute of uncorrected drift carries a target across most of
+      the detectable width of a search track.
+    */
+    const lead = sample.isPartial
+      ? `Leeway alone would carry them ${formatDistance(v * 3600)} ${compass(towards)} in an hour`
+        + ` — and ${sample.currentReason}, so this is not yet where a drifter would go.`
+      : `They would drift ${compass(towards)} at ${v.toFixed(2)} m/s`
+        + ` — ${formatDistance(v * 3600)} in the first hour`
+        + (minutes !== null && minutes < 60
+          ? `, crossing a ${SWEEP_WIDTH_M} m sweep width every ${
+            minutes < 10 ? minutes.toFixed(1) : Math.round(minutes)} minutes.`
+          : '.');
+    set('#dr-lead', lead);
+
+    // Which term is doing the work. This is the leeway argument in one line,
+    // and it is why the model has three terms rather than one.
+    const lee = Math.hypot(sample.leeway[0], sample.leeway[1]);
+    if (sample.current) {
+      const cur = Math.hypot(sample.current[0], sample.current[1]);
+      const ratio = lee > 0 ? cur / lee : Infinity;
+      set('#dr-terms', `current ${cur.toFixed(2)} + leeway ${lee.toFixed(2)} m/s`
+        + (Number.isFinite(ratio) ? ` · ${ratio.toFixed(1)} : 1` : ''));
+    } else {
+      set('#dr-terms', `leeway ${lee.toFixed(2)} m/s only (α = ${(ALPHA * 100).toFixed(0)} %)`);
+    }
+
+    /*
+      Say how the number was obtained, because "bilinear between four cells" and
+      "the value at the nearest cell centre" are different claims and only one
+      of them is being made here. The spread is the corner disagreement, which
+      is the honest uncertainty of the interpolation itself.
+    */
+    const unc = sample.uncertainty;
+    /*
+      A datum displaced this far, with no spread term, still has to be searched
+      as an AREA rather than a point. Lower bound, and it is a lower bound
+      precisely because eta is missing: a circle of radius one hour of drift.
+      This moved up here from the ocean column with the resultant it is computed
+      from -- it is a consequence of the drift, not a property of the water.
+    */
+    const radiusKm = (v * 3600) / 1000;
+    const areaKm2 = Math.PI * radiusKm * radiusKm;
+    set('#dr-area', `≥ ${areaKm2 < 10 ? areaKm2.toFixed(1) : Math.round(areaKm2)} km²`
+      + ` · ${((v * 86400) / 1000).toFixed(0)} km downstream`);
+
+    set('#dr-how', unc
+      ? `bilinear between ${unc.nCorners} cells · ±${unc.sigmaTotalMs.toFixed(3)} m/s`
+        + (unc.directionSpreadDeg !== null
+          ? ` · ${unc.directionSpreadDeg.toFixed(0)}° spread across them` : '')
+      : 'nearest cell centre');
+  }
+
   /** Never returns 0: a zero-width plot is the bug described at the top. */
   _width(el) {
     const target = el ?? this.chartEl;
@@ -111,6 +207,8 @@ export class PointPanel {
 
     this.root.querySelector('#point-where').textContent = formatLatLon(p.lat, p.lon);
     this.root.querySelector('#point-when').textContent = p.when;
+
+    this.showDrift(p.drift);
 
     const speed = Math.hypot(p.u, p.v);
     const from = bearingFrom(p.u, p.v);
@@ -179,27 +277,25 @@ export class PointPanel {
         set('#o-lead', cur === null
           ? 'Switch on a current layer and click again to see what the water does here.'
           : 'No current value at this cell — HYCOM has land or no data here.');
-        for (const id of ['#o-6h', '#o-24h', '#o-ratio', '#o-resultant', '#o-area']) set(id, '—');
+        for (const id of ['#o-6h', '#o-24h', '#o-ratio']) set(id, '—');
       } else {
         const cs = Math.hypot(cur.u, cur.v);
         const cTowards = bearingTowards(cur.u, cur.v);
 
-        // The resultant is the first two terms of D002, computed the same way
-        // ResultantSource computes them, so the panel and the arrow on the map
-        // cannot disagree about this cell.
-        const ru = cur.u + ALPHA * p.u;
-        const rv = cur.v + ALPHA * p.v;
-        const rs = Math.hypot(ru, rv);
-        const rTowards = bearingTowards(ru, rv);
+        /*
+          The resultant is NOT recomputed here any more.
 
-        const km24 = (rs * 86400) / 1000;
-        // A datum displaced this far, with no spread term, still has to be
-        // searched as an AREA rather than a point -- this is the lower bound
-        // on that area, and it is a lower bound precisely because eta is
-        // missing. Circle of radius = one hour of resultant travel.
-        const radiusKm = (rs * 3600) / 1000;
-        const areaKm2 = Math.PI * radiusKm * radiusKm;
+          It used to be, from this cell's nearest-neighbour current and wind,
+          and the drift block at the top of the panel now answers the same
+          question from `sampleAt` at the EXACT clicked position. The two
+          disagreed by 28 degrees on the first point tried -- both defensible,
+          since they are a wind half-cell apart, which is about 14 km -- and a
+          panel that gives two answers to one question with no way to tell them
+          apart is worse than either answer alone.
 
+          So the headline block owns it, on the path the golden fixture holds to
+          the Python engine, and the second implementation is gone.
+        */
         unit('#o-speed', cs.toFixed(2), 'm/s');
         set('#o-band', currentBand(cs));
         set('#o-dir', `${cTowards.toFixed(0)}° ${compass(cTowards)}`);
@@ -210,8 +306,6 @@ export class PointPanel {
 
         const lee2 = leewaySpeed(speed);
         set('#o-ratio', lee2 > 0 ? `${(cs / lee2).toFixed(1)} : 1` : '—');
-        set('#o-resultant', `${rs.toFixed(2)} m/s towards ${rTowards.toFixed(0)}° ${compass(rTowards)}`);
-        set('#o-area', `≥ ${areaKm2 < 10 ? areaKm2.toFixed(1) : Math.round(areaKm2)} km² · ${km24.toFixed(0)} km downstream`);
 
         // The sentence, because a column of numbers is not an argument.
         const dominant = cs > lee2 * 2 ? 'the water'

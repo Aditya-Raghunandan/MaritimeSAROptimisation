@@ -10,10 +10,10 @@
   to code that was only checking its own expectations. A green suite written by
   whoever also wrote the bug is not an independent witness. A picture is.
 
-  WHAT IT SHOOTS. The five view presets and the point panel, at a fixed frame,
-  into fixed filenames.
+  WHAT IT SHOOTS. The five view presets, the expanded layer list and the point
+  panel, at a fixed frame, into fixed filenames.
 
-  STORAGE. Fixed filenames, overwritten every run: six files, about 2 MB, no
+  STORAGE. Fixed filenames, overwritten every run: seven files, about 3 MB, no
   matter how many times it is run. There are no timestamps and no run ids, on
   purpose -- an accumulating directory of near-identical screenshots is how a
   tool like this stops being used. Output defaults to the system temp
@@ -191,13 +191,46 @@ async function main() {
       console.log(`  ${name}.png`);
     }
 
-    // The point panel, over the drift view, because that is the combination
-    // the resultant is actually read in.
+    /*
+      The layer list, expanded. It is collapsed by default and is therefore the
+      part of the UI least often looked at, which is exactly why it drifted into
+      naming renderings rather than questions. A control nobody photographs is a
+      control nobody reviews.
+    */
     await page.click('button[data-preset="drift"]');
     await settle(page);
+    await page.hover('.leaflet-control-layers');
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: join(out, '07-layers.png') });
+    console.log('  07-layers.png');
+
+    /*
+      Move the pointer off it before anything else. The control expands on
+      hover and, expanded, it covers the preset bar in the same corner -- the
+      next click landed on the layer list instead of the button and the shoot
+      failed. Worth keeping as a note about the UI, not only about the tool:
+      two controls share that corner and the top one wins while it is open.
+    */
+    await page.mouse.move(VIEWPORT.width / 2, VIEWPORT.height / 2);
+    await page.waitForTimeout(400);
+
+    // The point panel, still on the drift view, because that is the
+    // combination the resultant is actually read in.
     const box = await page.locator('#map').boundingBox();
     await page.mouse.click(box.x + box.width * CLICK.fx, box.y + box.height * CLICK.fy);
     await settle(page);
+    /*
+      The drift block fills in after a fetch when the clicked moment needs a
+      chunk the visible layer did not already hold, so wait for the READ-OUT
+      rather than for a duration. A fixed sleep here photographed the panel
+      mid-fetch and made a working feature look broken -- which is the same
+      mistake, in the tool, that the tool exists to catch in the page.
+    */
+    await page.waitForFunction(
+      () => document.querySelector('#dr-speed')?.textContent?.trim() !== '—',
+      null, { timeout: 20_000 },
+    ).catch(() => console.log('  (drift read-out did not fill in time)'));
+
     const where = (await page.textContent('#point-where'))?.trim();
     console.log(`  clicked ${where}`);
     await page.screenshot({ path: join(out, '06-panel.png') });

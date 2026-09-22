@@ -18,8 +18,10 @@
 import L from 'leaflet';
 
 import { beaufort } from './beaufort.js';
-import { currentBand } from './drift.js';
-import { CURRENT_RAMP, MAX_ARROW_PX, SPEED_RAMP, arrowLength, speedColour } from './style.js';
+import { currentBand, driftBand } from './drift.js';
+import {
+  CURRENT_RAMP, DRIFT_RAMP, MAX_ARROW_PX, SPEED_RAMP, arrowLength, speedColour,
+} from './style.js';
 import { MAGMA, VIRIDIS, normaliseSpeed, rampCss } from './colormap.js';
 
 /**
@@ -47,6 +49,11 @@ export const WindLegend = L.Control.extend({
     this._ramp = opts.ramp ?? VIRIDIS;
     this._arrowRamp = opts.arrowRamp ?? SPEED_RAMP;
     this._weight = opts.weight ?? 1;
+    // A bar keys a PAINTED field. The resultant is drawn only as arrows and
+    // streaks, so showing one would explain something that is not on the map.
+    this._showBar = opts.showBar ?? true;
+    this._foot = opts.foot
+      ?? 'bar: painted speed · arrows: length and colour, at real cell centres';
     this._describe = opts.describe ?? ((v) => {
       const b = beaufort(v);
       return `F${b.force} ${b.name.toLowerCase()}`;
@@ -69,15 +76,17 @@ export const WindLegend = L.Control.extend({
     // map now, so keying the arrows alone would leave most of the picture
     // unexplained. Built from the same normaliseSpeed + viridis the raster
     // uses, so it cannot describe a different scale from the one on screen.
-    const barWrap = L.DomUtil.create('div', 'legend-bar-wrap', body);
-    const stops = [];
-    for (let k = 0; k <= 10; k += 1) {
-      stops.push(`${rampCss(this._ramp, normaliseSpeed((k / 10) * this._maxSpeed, this._maxSpeed))} ${k * 10}%`);
+    if (this._showBar) {
+      const barWrap = L.DomUtil.create('div', 'legend-bar-wrap', body);
+      const stops = [];
+      for (let k = 0; k <= 10; k += 1) {
+        stops.push(`${rampCss(this._ramp, normaliseSpeed((k / 10) * this._maxSpeed, this._maxSpeed))} ${k * 10}%`);
+      }
+      barWrap.innerHTML =
+        `<div class="legend-bar" style="background:linear-gradient(to right,${stops.join(',')})"></div>`
+        + `<div class="legend-bar-ends"><span>0</span>`
+        + `<span>${Math.round(this._maxSpeed)} m/s</span></div>`;
     }
-    barWrap.innerHTML =
-      `<div class="legend-bar" style="background:linear-gradient(to right,${stops.join(',')})"></div>`
-      + `<div class="legend-bar-ends"><span>0</span>`
-      + `<span>${Math.round(this._maxSpeed)} m/s</span></div>`;
 
     for (const s of samplesFor(this._maxSpeed)) {
       const row = L.DomUtil.create('div', 'legend-row', body);
@@ -88,7 +97,7 @@ export const WindLegend = L.Control.extend({
       this._arrow(row.querySelector('canvas'), s);
     }
     const foot = L.DomUtil.create('div', 'legend-foot', body);
-    foot.textContent = 'bar: painted speed · arrows: length and colour, at real cell centres';
+    foot.textContent = this._foot;
 
     const toggle = head.querySelector('.legend-toggle');
     toggle.addEventListener('click', () => {
@@ -130,6 +139,34 @@ export const WindLegend = L.Control.extend({
 
 export function windLegend(opts) {
   return new WindLegend(opts);
+}
+
+/**
+ * The legend for the RESULTANT: green arrows, drift bands, its own scale.
+ *
+ * It exists because the alternative was actively misleading rather than merely
+ * missing. The Drift view draws resultant arrows scaled by `resultantScale`,
+ * which tops out near 2.5 m/s, and the only key on screen was the wind's,
+ * keyed to 25 m/s. Anyone reading arrow length off it was wrong by a factor of
+ * ten, in the one view this project exists to produce.
+ *
+ * No colour bar, and that is deliberate: the resultant is drawn as arrows and
+ * streaks over whatever raster is underneath, so it never paints a field of its
+ * own. A bar would key a thing that is not on the map. `showBar: false` is
+ * honoured by the control for exactly this case.
+ */
+export function resultantLegend(opts = {}) {
+  return new WindLegend({
+    title: 'Drift — where a person goes',
+    arrowRamp: DRIFT_RAMP,
+    weight: 1.7,
+    describe: driftBand,
+    maxSpeed: 2.5,
+    showBar: false,
+    foot: 'current + leeway, at wind cell centres · η is per-particle and cannot be drawn',
+    position: 'bottomright',
+    ...opts,
+  });
 }
 
 /** The legend for the surface current: magma bar, cyan arrows, water bands. */
