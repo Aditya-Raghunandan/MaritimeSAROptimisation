@@ -13,11 +13,11 @@ import { Clock } from './clock.js';
 import { buildLayer } from './layers.js';
 import { ZarrSource, pickTier, residentSpanOf } from './sources.js';
 import { quiverLayer } from './quiver.js';
-import { currentLegend, windLegend } from './legend.js';
+import { currentLegend, resultantLegend, windLegend } from './legend.js';
 import { ResultantSource, resultantScale } from './resultant.js';
 import { rasterLayer } from './raster.js';
 import { MAGMA } from './colormap.js';
-import { CURRENT_RAMP } from './style.js';
+import { CURRENT_RAMP, DRIFT_RAMP } from './style.js';
 import { particleLayer } from './particles.js';
 import { domainLabel, domainMask } from './domain.js';
 import { RangeRings, Ruler, addScaleBar, formatDistance } from './measure.js';
@@ -458,7 +458,59 @@ async function start() {
   };
   const overlays = {};
   const field = layers.find((l) => l.type === 'field');
-  if (field) windLegend({ maxSpeed: field.valueRange[1] }).addTo(map);
+
+  /** The current raster's normal weight, when it is the subject of the view. */
+  const CURRENT_RASTER_OPACITY = 0.55;
+
+  /*
+    LAYER NAMES THAT SAY WHAT THE LAYER IS.
+
+    The control listed "10 m wind — speed", "— flow" and "— arrows", three times
+    over, and those words name the RENDERING rather than the question it
+    answers. Somebody who has not read the source cannot tell what "flow" is, or
+    why they would want it rather than "arrows", so the list read as three
+    arbitrary switches per product and people left it alone. Leaflet writes the
+    name straight into the label, so a second line costs only this helper.
+  */
+  const entry = (name, hint) => `<span class="lc-n">${name}</span><span class="lc-h">${hint}</span>`;
+
+  /*
+    SWITCHING A LAYER ON MUST ALSO BRING IT TO THE CURRENT MOMENT.
+
+    The current's chunk is fetched only inside `redraw()`, and `redraw()` ran
+    only when the CLOCK changed -- deliberately, because the 3-hourly tier is
+    4.3 GB and nothing should download it for a layer that is switched off. But
+    that left the other half unhandled: turning a layer ON is also a moment at
+    which its data may be missing, and nothing triggered the fetch.
+
+    So a current layer switched on mid-session painted whatever frame it last
+    held -- frame 0 from the start-up warm-up -- and went on painting it until
+    somebody moved the slider. The map showed 1 January under a clock reading
+    13 January, with nothing on screen to say so. The point panel found this the
+    day it started reporting the resultant: a stale frame is invisible in a
+    field of colour and obvious in a number.
+  */
+  map.on('overlayadd overlayremove', () => { redraw(); });
+
+  /*
+    A LEGEND IS SHOWN ONLY WHILE THE THING IT DESCRIBES IS ON THE MAP.
+
+    The current's key already worked this way and the wind's did not -- it was
+    added once and never removed -- so the Clean preset, whose layer list is
+    literally empty, still displayed a wind key, and the Drift view displayed
+    the WIND key over resultant arrows scaled to 2.5 m/s against its 25 m/s.
+    Anyone reading arrow length off it was wrong by a factor of ten, in the one
+    view this project exists to produce.
+  */
+  const bindLegend = (legend, layersOf) => {
+    const sync = () => {
+      const anyOn = layersOf().some((l) => l && map.hasLayer(l));
+      if (anyOn && !legend._map) legend.addTo(map);
+      else if (!anyOn && legend._map) map.removeControl(legend);
+    };
+    map.on('overlayadd overlayremove', sync);
+    return sync;
+  };
 
   /*
     THE FIRST FRAME BEFORE THE FIRST PAINT, and this await is load-bearing.
@@ -537,9 +589,11 @@ async function start() {
     particles.addTo(map);
     quiver.addTo(map);
 
-    overlays[`${field.label} — speed`] = raster;
-    overlays[`${field.label} — flow`] = particles;
-    overlays[`${field.label} — arrows`] = quiver;
+    overlays[entry(`${field.label} — colour`, 'how strong, painted everywhere')] = raster;
+    overlays[entry(`${field.label} — streaks`, 'which way it is blowing, animated')] = particles;
+    overlays[entry(`${field.label} — arrows`, 'the value at each real cell centre')] = quiver;
+
+    bindLegend(windLegend({ maxSpeed: field.valueRange[1] }), () => [raster, particles, quiver]);
   }
 
   /*
@@ -578,7 +632,8 @@ async function start() {
     const cMax = current.layer.valueRange[1];
     // The current's raster carries a touch more weight than the wind's: most
     // of it is near-black by construction, so what actually paints is the jet.
-    currentRaster = rasterLayer(current.layer, { maxSpeed: cMax, ramp: MAGMA, opacity: 0.55 });
+    currentRaster = rasterLayer(current.layer,
+      { maxSpeed: cMax, ramp: MAGMA, opacity: CURRENT_RASTER_OPACITY });
     // Thick, slow, long-lived ribbons -- roughly half as many as the wind's,
     // twice the stroke weight, three times the trail and four times the life.
     // A boundary current is slower than the wind above it and far more
@@ -599,18 +654,12 @@ async function start() {
     // Its own key, shown only while a current layer is on. Two legends stacked
     // permanently would take a quarter of the map to explain a layer that is
     // off by default.
-    const cLegend = currentLegend({ maxSpeed: cMax });
-    const currentLayers = () => [currentRaster, currentQuiver, currentParticles];
-    const syncCurrentLegend = () => {
-      const anyOn = currentLayers().some((l) => l && map.hasLayer(l));
-      if (anyOn && !cLegend._map) cLegend.addTo(map);
-      else if (!anyOn && cLegend._map) map.removeControl(cLegend);
-    };
-    map.on('overlayadd overlayremove', syncCurrentLegend);
+    bindLegend(currentLegend({ maxSpeed: cMax }),
+      () => [currentRaster, currentQuiver, currentParticles]);
 
-    overlays[`${current.layer.label} — speed`] = currentRaster;
-    overlays[`${current.layer.label} — flow`] = currentParticles;
-    overlays[`${current.layer.label} — arrows`] = currentQuiver;
+    overlays[entry(`${current.layer.label} — colour`, 'how fast, painted; land left blank')] = currentRaster;
+    overlays[entry(`${current.layer.label} — streaks`, 'which way the water sets, animated')] = currentParticles;
+    overlays[entry(`${current.layer.label} — arrows`, 'the value at each real cell centre')] = currentQuiver;
 
     // Same rule as the wind field: make the first frame resident before any
     // renderer can be added, so switching the layer on never paints a frame
@@ -624,8 +673,8 @@ async function start() {
 
   // The remaining three types have no data yet. They are listed as disabled so
   // the map says what is coming rather than pretending it is complete.
-  overlays['Place names'] = LABELS;
-  overlays['Dim outside the domain'] = mask;
+  overlays[entry('Place names', 'coastlines and towns, over the basemap')] = LABELS;
+  overlays[entry('Dim outside the domain', 'shade everything beyond 17-36 N, 82-63 W')] = mask;
 
   /*
     The resultant drift field: what a person in the water would actually
@@ -638,6 +687,11 @@ async function start() {
     checkbox reserving the name would have proved nothing.
   */
   let resultant = null;
+  let resultantFlow = null;
+  // Hoisted: the point panel needs it too. `sampleAt` is the bilinear,
+  // golden-tested path and is what the click read-out should answer from,
+  // rather than a second copy of the same arithmetic in chart.js.
+  let resultantSource = null;
   if (field) {
     const source = new ResultantSource(
       { source: field.source, grid: field.grid, axis },
@@ -647,29 +701,73 @@ async function start() {
       // stops saying the current is missing without anyone editing the wording.
       current ? { source: current.layer.source, grid: current.layer.grid, axis: current.axis } : null,
     );
+    resultantSource = source;
     const meta = source.describe();
     const scale = resultantScale(field.valueRange[1], !source.isPartial);
+
+    /*
+      ITS OWN COLOUR, AND IT HAS TO BE A THIRD ONE. This layer is neither of its
+      parents, and drawn in either one's colour it reads as that parent with the
+      other quietly added. Green at 148 deg of OKLab hue sits about 85 deg from
+      both the wind's amber and the current's cyan. Heavier again than the
+      current's arrows: on the Drift view this is the subject, not the context.
+    */
     resultant = quiverLayer(
       { grid: field.grid, vector: (f, j, i) => source.vector(f, j, i), source },
-      { maxSpeed: scale },
+      { maxSpeed: scale, ramp: DRIFT_RAMP, weight: 1.7 },
     );
     resultant._resultantMeta = meta;
-    overlays[meta.label] = resultant;
+
+    /*
+      STREAKS FOR THE RESULTANT TOO, because arrows answer "what is the value
+      here" and motion answers "where does this go" -- and the second is the
+      question the layer exists for. Tuned between its two parents: longer-lived
+      and thicker than the wind's wisps, because the resultant is dominated by
+      the current and inherits its persistence; fewer and shorter than the
+      current's ribbons, so switching Current to Drift reads as a change rather
+      than as the same picture in another colour.
+    */
+    resultantFlow = particleLayer(
+      { grid: field.grid, vector: (f, j, i) => source.vector(f, j, i), source },
+      {
+        maxSpeed: scale,
+        rgb: [90, 245, 135],
+        count: 460,
+        trail: 18,
+        maxAgeMs: 9000,
+        alpha: 0.85,
+        width: 1.4,
+      },
+    );
+
+    overlays[entry(`${meta.label} — arrows`, 'current + leeway: where a person goes')] = resultant;
+    overlays[entry(`${meta.label} — streaks`, 'the path they would be carried along')] = resultantFlow;
+
+    // Its own key at last. Until now the Drift view showed the WIND legend,
+    // keyed to 25 m/s over arrows that top out near 2.5 -- wrong by a factor of
+    // ten, in the view that is the point of the project.
+    bindLegend(resultantLegend({ maxSpeed: scale }), () => [resultant, resultantFlow]);
 
     // Keep it on the same clock as everything else even while hidden, so
     // switching it on shows the current moment rather than frame zero.
-    clock.onChange(() => { if (map.hasLayer(resultant)) resultant.setFrame(clock.frameOf(axis)); });
+    clock.onChange(() => {
+      for (const l of [resultant, resultantFlow]) {
+        if (l && map.hasLayer(l)) l.setFrame(clock.frameOf(axis));
+      }
+    });
 
     map.on('overlayadd', (e) => {
-      if (e.layer !== resultant) return;
-      resultant.setFrame(clock.frameOf(axis));
+      if (e.layer !== resultant && e.layer !== resultantFlow) return;
+      e.layer.setFrame(clock.frameOf(axis));
       setStatus(`${meta.label} — ${meta.caveat}`);
     });
-    map.on('overlayremove', (e) => { if (e.layer === resultant) setStatus(''); });
+    map.on('overlayremove', (e) => {
+      if (e.layer === resultant || e.layer === resultantFlow) setStatus('');
+    });
   }
 
-  for (const pending of ['Drift particles', 'Probability map', 'Search tracks']) {
-    overlays[`${pending} (awaiting the engine)`] = L.layerGroup();
+  for (const pending of ['Probability map', 'Search tracks']) {
+    overlays[entry(pending, 'awaiting the engine')] = L.layerGroup();
   }
   L.control.layers(BASEMAPS, overlays, { collapsed: true }).addTo(map);
 
@@ -695,19 +793,19 @@ async function start() {
     {
       id: 'wind',
       label: 'Wind',
-      hint: 'what the atmosphere is doing',
+      hint: 'what the air is doing',
       layers: () => [raster, particles, quiver],
     },
     {
       id: 'current',
       label: 'Current',
-      hint: 'the Gulf Stream, on its own',
+      hint: 'what the water is doing',
       layers: () => [currentRaster, currentParticles, currentQuiver],
     },
     {
       id: 'both',
-      label: 'Both',
-      hint: 'wind streaks over the current field',
+      label: 'Wind + water',
+      hint: 'the two together',
       // Not every renderer of each: two rasters is mud and two sets of arrows
       // is a lattice. The current carries the colour, the wind carries the
       // motion, and that reads as one picture rather than two competing ones.
@@ -716,17 +814,17 @@ async function start() {
     {
       id: 'drift',
       label: 'Drift',
-      hint: 'where a person would actually go',
+      hint: 'where a person would go',
       // The answer the project exists to give. Current underneath for context,
       // resultant arrows on top; no wind marks, because the wind is already
       // inside the resultant as the leeway term and drawing it twice invites
       // the reader to add it twice.
-      layers: () => [currentRaster, resultant],
+      layers: () => [currentRaster, resultantFlow, resultant],
     },
     {
       id: 'clean',
-      label: 'Clean',
-      hint: 'basemap only',
+      label: 'Map only',
+      hint: 'no data layers',
       layers: () => [],
     },
   ];
@@ -734,7 +832,7 @@ async function start() {
   const ALL_FIELD_LAYERS = () => [
     raster, particles, quiver,
     currentRaster, currentParticles, currentQuiver,
-    resultant,
+    resultant, resultantFlow,
   ].filter(Boolean);
 
   function applyPreset(preset) {
@@ -744,6 +842,18 @@ async function start() {
       if (want.has(layer) && !on) map.addLayer(layer);
       else if (!want.has(layer) && on) map.removeLayer(layer);
     }
+    /*
+      In the Drift view the current raster is CONTEXT, not the subject, and at
+      its normal weight it wins: the resultant's arrows and streaks are thin
+      marks over a bright jet and the eye goes to the colour. Dropping it makes
+      the green legible without removing the thing it is drifting on. Set here
+      rather than baked in, because the same raster IS the subject in the
+      Current and Wind + water views and must keep its weight there.
+    */
+    if (currentRaster) {
+      currentRaster.setOpacity(preset.id === 'drift' ? 0.26 : CURRENT_RASTER_OPACITY);
+    }
+
     for (const btn of presetBar.querySelectorAll('button')) {
       btn.classList.toggle('on', btn.dataset.preset === preset.id);
     }
@@ -756,8 +866,14 @@ async function start() {
     const btn = L.DomUtil.create('button', '', presetBar);
     btn.type = 'button';
     btn.dataset.preset = preset.id;
-    btn.textContent = preset.label;
-    btn.title = preset.hint;
+    /*
+      THE HINT GOES ON THE BUTTON, not in a tooltip. Each preset already carried
+      a line saying what it shows and it was reachable only by hovering -- no
+      help on the touchscreen these were built for, and none to anyone scanning
+      the bar deciding which to press. Five nouns do not say what any will do.
+    */
+    btn.innerHTML = `<span class="preset-n">${preset.label}</span>`
+      + `<span class="preset-h">${preset.hint}</span>`;
     btn.addEventListener('click', () => applyPreset(preset));
   }
 
@@ -766,6 +882,23 @@ async function start() {
     onAdd() { return presetBar; },
   });
   new PresetControl().addTo(map);
+
+  /*
+    THE PRESET BAR TAKES THE TOP OF ITS CORNER.
+
+    Both controls live top-right and Leaflet stacks that corner in the order
+    controls are added, so the layer list -- added first -- sat above the
+    presets and pushed them down whenever it expanded. Once the list carried two
+    lines per entry that was far enough to shove the preset bar into the middle
+    of the map, over the legend.
+
+    Reordered here, after both exist, rather than by moving the code: both
+    `PRESETS` and `PresetControl` are `const`, so building the bar earlier would
+    reference them above their declarations -- a ReferenceError that would
+    unwire everything below it in `start()`, which is precisely what the
+    temporal dead zone bug did to this file once already.
+  */
+  presetBar.parentNode.insertBefore(presetBar, presetBar.parentNode.firstChild);
 
   /*
     Touching a checkbox directly means no preset describes what is on screen
@@ -994,6 +1127,7 @@ async function start() {
   // Without this, chunks landing out of order repaint an older frame over a
   // newer one and the map runs backwards under the slider.
   let drawToken = 0;
+  let driftToken = 0;
 
   async function redraw() {
     const mine = ++drawToken;
@@ -1030,7 +1164,7 @@ async function start() {
     */
     if (current) {
       const shown = [currentRaster, currentQuiver, currentParticles].filter((l) => l && map.hasLayer(l));
-      const resultantOn = resultant && map.hasLayer(resultant);
+      const resultantOn = [resultant, resultantFlow].some((l) => l && map.hasLayer(l));
       if (shown.length || resultantOn) {
         const cFrame = clock.frameOf(current.axis);
         if (!current.layer.isResident(cFrame)) {
@@ -1124,7 +1258,34 @@ async function start() {
       frames: span.to - span.from,
     };
 
+    /*
+      SYNCHRONOUS IF THE DATA IS ALREADY HERE, FETCHED IF IT IS NOT.
+
+      `sampleAt` reads the current at the frame the RESULTANT maps this moment
+      to, which is not always the chunk the visible layer happens to hold, so it
+      can legitimately throw `not resident` on a page where the arrows are drawn
+      and the ocean column is populated. That is what it did the first time this
+      panel ran, and the honest reading is that a click may need data the map
+      did not.
+
+      So: try it now, show the panel immediately either way, and if it was not
+      resident, fetch and fill the block in when it lands. Blocking the panel on
+      a round trip would make every click feel broken; leaving it blank lies.
+      `ensure` is ResultantSource's own, so it fetches the frames it will
+      actually read rather than the ones this file would have guessed at.
+    */
+    const mine = ++driftToken;
+    let drift = null;
+    if (resultantSource && resultantSource.isResident(frame)) {
+      try {
+        drift = resultantSource.sampleAt(frame, latlng.lat, latlng.lng);
+      } catch {
+        drift = null;
+      }
+    }
+
     panel.show({
+      drift,
       lat: field.grid.lat(cell.j),
       lon: field.grid.lon(cell.i),
       u,
@@ -1146,6 +1307,17 @@ async function start() {
       currentCursor,
     });
     setStatus('');
+
+    // Not resident: fetch, then fill the block in -- but only if this click is
+    // still the one on screen, so an older answer cannot land on a newer point.
+    if (resultantSource && !drift) {
+      resultantSource.ensure(frame)
+        .then(() => {
+          if (mine !== driftToken) return;
+          panel.showDrift(resultantSource.sampleAt(frame, latlng.lat, latlng.lng));
+        })
+        .catch(() => {});
+    }
   }
 
   const ruler = new Ruler(map, {

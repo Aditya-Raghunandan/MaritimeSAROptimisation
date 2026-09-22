@@ -25,6 +25,7 @@
         --line:      #3a3a37;
         --accent:    #3987e5;
         --warm:      #eb6834;   /* the wind ramp's anchor hue */
+        --drift:     #04c951;   /* DRIFT_RAMP[2] -- the resultant's own hue */
         --pending:   #6f6f66;
       }
       * { box-sizing: border-box; }
@@ -184,12 +185,64 @@
         border-radius: 0;
         background: rgba(26, 26, 25, .94);
         color: var(--ink-2);
-        padding: 0 13px;
-        height: 34px;
+        padding: 5px 13px 6px;
+        min-height: 34px;
         font-size: 12.5px;
         font-weight: 500;
         letter-spacing: .1px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1px;
+        text-align: left;
       }
+      .preset-n { font-size: 12.5px; font-weight: 600; line-height: 1.1; }
+      .preset-h { font-size: 10px; font-weight: 400; color: var(--ink-3); line-height: 1.1; }
+      .preset-bar button:hover .preset-h { color: var(--ink-2); }
+      .preset-bar button.on .preset-h { color: rgba(255, 255, 255, .8); }
+
+      /*
+        Layer names carry a second line saying what the layer IS. The control is
+        a list of switches and the switch names alone ("flow", "arrows") name
+        the rendering rather than the question it answers.
+      */
+      .lc-n { display: block; line-height: 1.25; }
+      .lc-h { display: block; font-size: 10px; color: var(--ink-3); line-height: 1.2; }
+
+      /*
+        Leaflet wraps each entry as label > div > (input + span). The span is
+        inline, so a two-line name wrapped it under the checkbox instead of
+        beside it; making that div a flex row puts the box back where a
+        checkbox belongs and lets the text block sit next to it.
+      */
+      .leaflet-control-layers label > span,
+      .leaflet-control-layers label > div {
+        display: flex;
+        align-items: flex-start;
+        gap: 7px;
+      }
+      .leaflet-control-layers label input { margin-top: 3px; flex: none; }
+      .leaflet-control-layers label { margin-bottom: 5px; }
+
+      /*
+        Two lines per entry made the list tall enough to run under the legends
+        in the opposite corner. Cap it and let it scroll: the alternative is a
+        control that covers the key explaining the layer it is switching on.
+      */
+      .leaflet-control-layers-expanded {
+        max-height: 52vh;
+        overflow-y: auto;
+      }
+
+      /*
+        The top-right corner holds the two things you press -- the presets and
+        the layer list. The bottom-right holds the legends, which you only read.
+        Leaflet gives both corners the same stacking level, and because the
+        bottom corner comes later in the document it won: an opened layer list
+        was drawn UNDER the keys it was about to change. Controls that take a
+        click sit above controls that do not.
+      */
+      .leaflet-top.leaflet-right { z-index: 1001; }
       .preset-bar button:hover { background: var(--surface-2); color: var(--ink); }
       .preset-bar button.on { background: var(--accent); color: #fff; }
 
@@ -303,6 +356,35 @@
       .tile-value.warm { color: var(--warm); }
       .tile-value.cool { color: #48b1e3; }
       .tiles-2 { grid-template-columns: repeat(2, 1fr); margin: 0 -12px 9px; border-top: 1px solid var(--line); }
+      .tiles-3 { grid-template-columns: repeat(3, 1fr); }
+
+      /*
+        The drift block. It leads the panel, so it is the one section allowed to
+        look different from the rest: a left rule in the drift green, the same
+        hue as its arrows and streaks on the map, so the eye connects the number
+        to the marks it came from without a caption saying so.
+      */
+      .drift-now {
+        border-bottom: 1px solid var(--line);
+        border-left: 3px solid var(--drift);
+        background: linear-gradient(90deg, rgba(4, 201, 81, .07), transparent 60%);
+      }
+      .drift-head {
+        padding: 9px 12px 0;
+        color: var(--drift);
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .6px;
+      }
+      .drift-lead {
+        margin: 4px 12px 9px;
+        color: var(--ink);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      .drift-now .row { padding-left: 12px; padding-right: 12px; }
+      .tile-value.drift { color: var(--drift); }
 
       /*
         Two columns, wind then ocean. The divider is a border rather than a gap
@@ -525,6 +607,47 @@
           <button id="point-close" title="Close (Esc)" aria-label="Close">&times;</button>
         </div>
 
+        <!--
+          THE ANSWER FIRST.
+
+          This panel used to open with the wind, and report the resultant as one
+          row of twelve near the bottom of the ocean column -- the one number the
+          whole project exists to produce, filed under "the numbers behind it".
+          A reader had to already know what a resultant was to go looking for it.
+
+          So it leads, it is phrased as a person rather than as a vector, and it
+          is computed by `ResultantSource.sampleAt` -- the bilinear path held to
+          the Python engine by resultant_golden.json -- at the EXACT clicked
+          position rather than at the wind cell centre. Half a cell here is about
+          14 km, and the number sits beside the very coordinates it would
+          otherwise disagree with.
+        -->
+        <section id="drift-now" class="drift-now">
+          <div class="drift-head">If someone were in the water here</div>
+          <p class="drift-lead" id="dr-lead">&mdash;</p>
+          <div class="tiles tiles-3">
+            <div class="tile">
+              <div class="tile-label">They would go</div>
+              <div class="tile-value drift" id="dr-dir">&mdash;</div>
+              <div class="tile-sub" id="dr-compass">&mdash;</div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">At</div>
+              <div class="tile-value drift" id="dr-speed">&mdash;<span class="unit">m/s</span></div>
+              <div class="tile-sub" id="dr-band">&mdash;</div>
+            </div>
+            <div class="tile">
+              <div class="tile-label">Carried in 1 h</div>
+              <div class="tile-value" id="dr-1h">&mdash;</div>
+              <div class="tile-sub" id="dr-6h">&mdash;</div>
+            </div>
+          </div>
+          <div class="row"><span class="k">Made of</span><span class="v" id="dr-terms">&mdash;</span></div>
+          <div class="row"><span class="k">Search area after 24 h</span><span class="v" id="dr-area">&mdash;</span></div>
+          <div class="row"><span class="k">Sampled</span><span class="v" id="dr-how">&mdash;</span></div>
+          <div class="row pending"><span class="k">Stochastic spread &eta;</span><span class="v">awaiting the engine &mdash; two drifters here will not follow the same path</span></div>
+        </section>
+
         <div class="tiles">
           <div class="tile">
             <div class="tile-label">Wind now</div>
@@ -583,8 +706,6 @@
             <div class="row"><span class="k">Carried in 6 h</span><span class="v" id="o-6h">&mdash;</span></div>
             <div class="row"><span class="k">Carried in 24 h</span><span class="v" id="o-24h">&mdash;</span></div>
             <div class="row"><span class="k">Current : leeway</span><span class="v" id="o-ratio">&mdash;</span></div>
-            <div class="row"><span class="k">Resultant (current + leeway)</span><span class="v" id="o-resultant">&mdash;</span></div>
-            <div class="row"><span class="k">Search area after 24 h</span><span class="v" id="o-area">&mdash;</span></div>
             <div class="row pending"><span class="k">Stochastic spread &eta;</span><span class="v">awaiting the engine</span></div>
           </div>
         </details>

@@ -9,7 +9,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { CURRENT_RAMP, SPEED_RAMP, decimation, speedColour } from '../src/style.js';
+import {
+  CURRENT_RAMP, DRIFT_RAMP, SPEED_RAMP, decimation, speedColour,
+} from '../src/style.js';
 import { Grid } from '../src/layers.js';
 
 describe('speedColour', () => {
@@ -178,5 +180,46 @@ describe('CURRENT_RAMP', () => {
       const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
       expect(Math.min(r, g, b)).toBeLessThan(230);
     }
+  });
+});
+
+/*
+  The resultant's ramp. Same rule as the other two, plus the one property that
+  is the whole reason it exists: it must not be mistakable for either parent.
+  The resultant is neither wind nor current, and drawn in either one's colour it
+  reads as that parent with the other quietly added in.
+*/
+describe('DRIFT_RAMP', () => {
+  const toLab = (hex) => {
+    const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    const [r, g, b] = [1, 3, 5].map((i) => lin(parseInt(hex.slice(i, i + 2), 16) / 255));
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    const A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+    const B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+    return {
+      L: 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+      h: ((Math.atan2(B, A) * 180) / Math.PI + 360) % 360,
+    };
+  };
+  const meanHue = (ramp) => {
+    const hs = ramp.map((c) => toLab(c).h);
+    return hs.reduce((a, b) => a + b, 0) / hs.length;
+  };
+
+  it('is one hue, light to dark, like the other two', () => {
+    const lab = DRIFT_RAMP.map(toLab);
+    for (let k = 1; k < lab.length; k += 1) expect(lab[k].L).toBeLessThan(lab[k - 1].L);
+    const hues = lab.map((x) => x.h);
+    expect(Math.max(...hues) - Math.min(...hues)).toBeLessThan(30);
+  });
+
+  it('is far from BOTH the wind and the current hues', () => {
+    // Two products could be told apart by warm against cool. Three cannot, so
+    // this one has to be a genuine third family rather than a shade of either.
+    const sep = (a, b) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
+    expect(sep(meanHue(DRIFT_RAMP), meanHue(SPEED_RAMP))).toBeGreaterThan(60);
+    expect(sep(meanHue(DRIFT_RAMP), meanHue(CURRENT_RAMP))).toBeGreaterThan(60);
   });
 });

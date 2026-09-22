@@ -129,6 +129,18 @@ export const RasterLayer = L.Layer.extend({
     this._draw();
   },
 
+  /**
+   * Change how strongly the field paints, after construction.
+   *
+   * A view can demote this layer from subject to context -- the Drift view does
+   * exactly that, so the resultant's thin green marks are not competing with a
+   * bright jet underneath them. Touches only the canvas, never the data.
+   */
+  setOpacity(opacity) {
+    this._opacity = opacity;
+    if (this._canvas) this._canvas.style.opacity = String(opacity);
+  },
+
   setMaxSpeed(maxSpeed) {
     this._maxSpeed = maxSpeed;
     this._paintSource();
