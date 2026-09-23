@@ -15,6 +15,42 @@ const END = new Date('2021-01-03T00:00:00Z');
 const hourly = { start: START, stepSeconds: 3600, frames: 48 };
 const threeHourly = { start: START, stepSeconds: 10800, frames: 16 };
 
+describe('Clock.jumpTo', () => {
+  const Y0 = new Date('2019-01-01T00:00:00Z');
+  const Y5 = new Date('2024-01-01T00:00:00Z');
+
+  it('moves the window with the moment, so a later tier switch keeps it', () => {
+    // A day's window on 1 Jan 2019, then a jump to March 2021 and a switch to a
+    // daily stride -- what clicking a buoy does. setTime + setStep landed on 2019.
+    const c = new Clock(Y0, Y5, 3600);
+    c.setWindowSpan(86400);
+    c.jumpTo(new Date('2021-03-01T16:00:00Z'), null);
+    c.setStep(86400);
+    expect(c.t.toISOString()).toBe('2021-03-01T16:00:00.000Z');
+  });
+
+  it('the old order really did lose the moment, which is why jumpTo exists', () => {
+    const c = new Clock(Y0, Y5, 3600);
+    c.setWindowSpan(86400);
+    c.setTime(new Date('2021-03-01T16:00:00Z'));
+    c.setStep(86400);
+    expect(c.t.getUTCFullYear()).toBe(2019);
+  });
+
+  it('aligns the new window around the moment', () => {
+    const c = new Clock(Y0, Y5, 3600);
+    c.jumpTo(new Date('2021-03-01T16:00:00Z'), 86400);
+    expect(c.winStart.toISOString()).toBe('2021-03-01T00:00:00.000Z');
+    expect(c.winEnd.toISOString()).toBe('2021-03-02T00:00:00.000Z');
+  });
+
+  it('clamps a moment outside the archive into it', () => {
+    const c = new Clock(Y0, Y5, 3600);
+    c.jumpTo(new Date('2030-01-01T00:00:00Z'), null);
+    expect(c.t < Y5).toBe(true);
+  });
+});
+
 describe('Clock', () => {
   it('counts steps with the end exclusive', () => {
     // 48 hours at one hour each: 48 positions, 00:00 on the 1st to 23:00 on the 2nd.
