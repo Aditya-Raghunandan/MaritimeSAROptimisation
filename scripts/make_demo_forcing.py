@@ -33,7 +33,12 @@ import numpy as np
 import xarray as xr
 
 START = "2021-01-05"
-END = "2021-01-06"
+END = "2021-01-06"   # the default one-day span; --days moves it
+
+
+def _end(days: int) -> str:
+    """The exclusive end date for a run of `days` days from START."""
+    return str(np.datetime64(START) + np.timedelta64(days, "D"))
 
 # A small corner of the study box (D014 is 17-36 N, 82-63 W, stored as 278-297), big
 # enough to hold several cells of both grids and small enough to write in a moment.
@@ -76,9 +81,9 @@ def _mask_land(u, v, lat, lon):
     return u, v
 
 
-def write_current(out: Path) -> Path:
+def write_current(out: Path, days: int = 1) -> Path:
     """The HYCOM-shaped file: 3-hourly, 0.08 deg longitude by 0.04 deg latitude."""
-    lat, lon, time = _axes(0.04, 0.08, 24, 3)
+    lat, lon, time = _axes(0.04, 0.08, 24 * days, 3)
     u, v = _field(lat, lon, time, scale=0.9, turn=0.6)
     u, v = _mask_land(u, v, lat, lon)
     ds = xr.Dataset(
@@ -89,14 +94,14 @@ def write_current(out: Path) -> Path:
         coords={"time": time, "lat": lat, "lon": lon},
         attrs={"title": "INVENTED demo current, not HYCOM", "source": "scripts/make_demo_forcing.py"},
     )
-    path = out / "raw" / f"hycom_demo_{START}-{END}.nc"
+    path = out / "raw" / f"hycom_demo_{START}-{_end(days)}.nc"
     ds.to_netcdf(path)
     return path
 
 
-def write_wind(out: Path) -> Path:
+def write_wind(out: Path, days: int = 1) -> Path:
     """The ERA5-shaped file: hourly, 0.25 deg in both axes, no land mask (wind has none)."""
-    lat, lon, time = _axes(0.25, 0.25, 24, 1)
+    lat, lon, time = _axes(0.25, 0.25, 24 * days, 1)
     u, v = _field(lat, lon, time, scale=7.0, turn=0.4)
     ds = xr.Dataset(
         {
@@ -106,7 +111,7 @@ def write_wind(out: Path) -> Path:
         coords={"time": time, "lat": lat, "lon": lon},
         attrs={"title": "INVENTED demo wind, not ERA5", "source": "scripts/make_demo_forcing.py"},
     )
-    path = out / "raw" / f"era5_demo_{START}-{END}.nc"
+    path = out / "raw" / f"era5_demo_{START}-{_end(days)}.nc"
     ds.to_netcdf(path)
     return path
 
@@ -116,11 +121,17 @@ def main() -> None:
         description="Write small INVENTED forcing files so the interpolate CLI can be run"
     )
     p.add_argument("--out", default="data", help="archive root; writes <out>/raw/")
+    # One day by default, which is what the CLI examples and the golden fixture use.
+    # The browser suite asks for more: past 14 days the site opens on a coarser tier and
+    # switches, which is the path that froze the drift arrows on 23 Sep.
+    p.add_argument("--days", type=int, default=1, help="length of the run in days (default 1)")
     args = p.parse_args()
+    if args.days < 1:
+        p.error("--days must be at least 1")
 
     out = Path(args.out)
     (out / "raw").mkdir(parents=True, exist_ok=True)
-    current, wind = write_current(out), write_wind(out)
+    current, wind = write_current(out, args.days), write_wind(out, args.days)
 
     for path in (current, wind):
         print(f"wrote {path} ({path.stat().st_size / 1024:.0f} KB)")

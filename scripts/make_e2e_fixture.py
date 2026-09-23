@@ -40,9 +40,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO / "frontend" / "tests" / "e2e" / "fixtures"
 
-# Only the finest tier of each product. The frontend picks a tier by visible span and the
-# suite never changes span, so publishing the coarse tiers would add files nothing reads.
-TIERS = {"wind": "hourly", "current": "3-hourly"}
+# EVERY tier the real archive publishes, over DAYS days. This used to be the finest tier
+# of each over one day, on the reasoning that the suite never changes span. But the page
+# changes it itself: past 14 days it opens on a coarser tier and switches to hourly for the
+# default one-day view. That switch is what left the drift arrows reading a stale store and
+# freezing at hour 49 on the live site (23 Sep), and a one-day, one-tier fixture could not
+# reach it. Sixteen days is the shortest span that makes the page open coarse.
+TIERS = {"wind": ["hourly", "6-hourly", "daily"], "current": ["3-hourly", "daily"]}
+DAYS = 16
 
 
 def run(args: list[str], what: str) -> None:
@@ -65,13 +70,14 @@ def build(out: Path) -> None:
         raw = Path(tmp)
         print(f"1/3  demo forcing -> {raw}")
         run([sys.executable, str(REPO / "scripts" / "make_demo_forcing.py"),
-             "--out", str(raw)], "make_demo_forcing.py")
+             "--out", str(raw), "--days", str(DAYS)], "make_demo_forcing.py")
 
-        for i, (product, tier) in enumerate(TIERS.items(), start=2):
-            print(f"{i}/3  export {product} ({tier} tier) -> {out}")
+        for i, (product, tiers) in enumerate(TIERS.items(), start=2):
+            print(f"{i}/3  export {product} ({', '.join(tiers)}) -> {out}")
+            tier_args = [arg for tier in tiers for arg in ("--tier", tier)]
             run([sys.executable, "-m", "sar.viz.archive",
                  "--data", str(raw), "--out", str(out),
-                 "--product", product, "--tier", tier], f"sar.viz.archive --product {product}")
+                 "--product", product, *tier_args], f"sar.viz.archive --product {product}")
 
     report(out)
 
@@ -82,8 +88,8 @@ def report(out: Path) -> None:
     print(f"\n{len(files)} files, {total / 1024:.0f} kB in {out}")
     if total > 2_000_000:
         # A fixture is committed, so its size is permanent. Two megabytes is already
-        # generous for a handful of frames over a 1 degree box; past that something has
-        # gone wrong -- a coarse tier crept in, or the demo grid grew.
+        # generous for sixteen days over a 1 degree box; past that something has gone
+        # wrong -- the run grew, or the demo grid did.
         raise SystemExit(f"fixture is {total / 1e6:.1f} MB, which is too big to commit")
 
 

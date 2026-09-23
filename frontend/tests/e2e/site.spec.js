@@ -265,3 +265,47 @@ test('clicking on land says it is land, and gives no drift', async ({ page }) =>
   expect(await page.textContent('#dr-lead')).toMatch(/land in the current model/);
   expect(await page.textContent('#dr-1h')).toBe('—');
 });
+
+/*
+  The drift arrows must keep up with playback past the first chunk. A sixteen-day
+  archive makes the page open on its 6-hourly tier and switch to hourly for the
+  default day. The drift layer had copied the store it was built with and kept
+  reading it with hourly frame numbers, so it painted the wrong day and froze at
+  hour 48 -- the first chunk nobody was fetching -- while the clock ran on. Seen on
+  the live archive at hour 49, 23 Sep. The fixture is sixteen days long so the suite
+  reaches this at all.
+*/
+test('the drift arrows keep moving with the clock past hour 48', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="drift"]');
+  await page.waitForTimeout(800);
+
+  const fingerprint = () => page.evaluate(() => {
+    const c = document.querySelector('canvas.leaflet-quiver-layer');
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let h = 0;
+    for (let i = 3; i < d.length; i += 4 * 37) {
+      if (d[i] > 8) h = (h * 31 + d[i - 3] + d[i - 2] * 7 + i) % 1e9;
+    }
+    return h;
+  });
+
+  await page.click('#play');
+  // Past hour 48 of the archive, which opens at 2021-01-05: the stamp reads the 7th.
+  await page.waitForFunction(
+    () => /2021-01-(0[7-9]|1\d)/.test(document.querySelector('#stamp')?.textContent ?? ''),
+    null, { timeout: 30_000 },
+  );
+  const prints = new Set();
+  const stamps = new Set();
+  for (let k = 0; k < 8; k += 1) {
+    prints.add(await fingerprint());
+    stamps.add(await page.textContent('#stamp'));
+    await page.waitForTimeout(250);
+  }
+  await page.click('#play');
+
+  expect(stamps.size).toBeGreaterThan(2);   // the clock was moving
+  expect(prints.size).toBeGreaterThan(2);   // and the arrows moved with it
+});

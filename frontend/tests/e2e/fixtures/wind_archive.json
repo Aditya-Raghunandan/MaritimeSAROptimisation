@@ -1,5 +1,5 @@
 {
-  "generated": "2026-09-21T15:24:23+00:00",
+  "generated": "2026-09-23T20:26:37+00:00",
   "product": "wind",
   "label": "10 m wind",
   "variables": [
@@ -25,41 +25,99 @@
   "tiers": {
     "hourly": {
       "path": "wind_hourly.zarr",
-      "frames": 24,
+      "frames": 384,
       "step_seconds": 3600,
       "regular": true,
       "gaps": null,
       "start": "2021-01-05T00:00:00Z",
-      "end": "2021-01-05T23:00:00Z",
+      "end": "2021-01-20T23:00:00Z",
       "chunks": {
-        "time": 24,
+        "time": 48,
         "lat": 5,
         "lon": 5
       },
-      "chunk_bytes_uncompressed": 2400,
-      "bytes": 7882,
+      "chunk_bytes_uncompressed": 4800,
+      "bytes": 62507,
       "compression": "zstd-19",
-      "compression_ratio": 0.609,
-      "files": 11,
+      "compression_ratio": 1.229,
+      "files": 25,
       "verified": {
         "at": {
-          "time": "2021-01-05T12:00:00Z",
+          "time": "2021-01-13T00:00:00Z",
           "lat": 26.25,
           "lon": -78.75
         },
-        "published": 6.979775428771973,
-        "source": 6.979775560728978,
+        "published": 7.064528942108154,
+        "source": 7.06452885617532,
+        "match": true
+      }
+    },
+    "6-hourly": {
+      "path": "wind_6-hourly.zarr",
+      "frames": 64,
+      "step_seconds": 21600,
+      "regular": true,
+      "gaps": null,
+      "start": "2021-01-05T00:00:00Z",
+      "end": "2021-01-20T18:00:00Z",
+      "chunks": {
+        "time": 48,
+        "lat": 5,
+        "lon": 5
+      },
+      "chunk_bytes_uncompressed": 4800,
+      "bytes": 14055,
+      "compression": "zstd-19",
+      "compression_ratio": 0.911,
+      "files": 13,
+      "verified": {
+        "at": {
+          "time": "2021-01-13T00:00:00Z",
+          "lat": 26.25,
+          "lon": -78.75
+        },
+        "published": 7.064528942108154,
+        "source": 7.06452885617532,
+        "match": true
+      }
+    },
+    "daily": {
+      "path": "wind_daily.zarr",
+      "frames": 16,
+      "step_seconds": 86400,
+      "regular": true,
+      "gaps": null,
+      "start": "2021-01-05T00:00:00Z",
+      "end": "2021-01-20T00:00:00Z",
+      "chunks": {
+        "time": 16,
+        "lat": 5,
+        "lon": 5
+      },
+      "chunk_bytes_uncompressed": 1600,
+      "bytes": 6718,
+      "compression": "zstd-19",
+      "compression_ratio": 0.476,
+      "files": 11,
+      "verified": {
+        "at": {
+          "time": "2021-01-13T00:00:00Z",
+          "lat": 26.25,
+          "lon": -78.75
+        },
+        "published": 7.064528942108154,
+        "source": 7.06452885617532,
         "match": true
       }
     }
   },
   "provenance": {
     "source_files": [
-      "era5_demo_2021-01-05-2021-01-06.nc"
+      "era5_demo_2021-01-05-2021-01-21.nc"
     ],
-    "source_frames": 24,
+    "source_frames": 384,
     "script": "sar.viz.archive",
     "gaps_filled_with_nan": 0,
-    "frames_from_source": 24
+    "frames_from_source": 384
   }
 }
