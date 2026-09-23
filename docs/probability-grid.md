@@ -28,7 +28,26 @@ agent cell mean the same distance in every episode.
 deciding `box_km` — but it gives a different size per scenario, which the RL environment
 must not have.
 
-**`cell_m` is required and has no default.** That is the decision, not an oversight.
+**`cell_m` is required and has no default.** That is the decision, not an oversight — and the
+defensible answer is a *window*, not a number.
+
+## How to pick `cell_m`
+
+Not from the sweep width. W is how wide a strip the searcher clears; a cell here is how
+finely the *target's position distribution* is described. Coverage lives on the particles
+([ADR002](ADR002.md) §4), so the reward is exact at any cell size and the two are decoupled.
+What actually bounds it, over a 100 km box:
+
+| | |
+|---|---|
+| **Floor, ~200 m** | sampling noise is 1/√k per cell, so it scales as 1/cell: **15.5 %** at 250 m and **39 %** at 100 m, both at N = 10⁶ |
+| **Memory** | scales as 1/cell². uint16 counts are lossless here and half the bytes of float32: **45 MB/scenario at 250 m, 11 MB at 500 m** |
+| **The browser** | a published chunk is 48 frames — measured at 1.11 MB / 45 ms for the forcing store, against **14.6 MB at 250 m** and **3.7 MB at 500 m**. This is why the archive is 500 m |
+| **Ceiling, ~400 m** | a cell comparable to the whole distribution gives a blob, not a shape. **Rests on an ensemble spread nobody has measured yet** |
+
+So: **500 m for anything published**, because of the chunk budget; **250 m is fine for the
+episode map**, which is binned on demand in memory from particles the environment already
+holds and is never written to disk.
 
 ## The cycle
 

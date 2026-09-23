@@ -14,8 +14,31 @@ native grid". Three things are wrong with that, and ADR002 is the decision:
   2. All four of #7's acceptance criteria pass against a square grid that does not exist.
      The defect would surface later as a north-south bias in the binned output, and would
      be indistinguishable from a physical result.
-  3. The probability map should not be on the forcing grid at all. An 8 km cell is ~43x
-     the sweep width, which is the length scale the map exists to resolve.
+  3. The probability map should not be on the forcing grid at all. An 8 km cell is about
+     four times the whole width of a tight ensemble at arrival, so the map would be a
+     handful of cells across at the moment it carries the most information.
+
+WHAT SETS THE CELL SIZE, since it is the question this module makes people ask. NOT the
+sweep width. W is how wide a strip the searcher clears; a cell here is how finely the
+target's POSITION DISTRIBUTION is described. Those are different quantities, and they are
+decoupled by ADR002 section 4, which puts coverage on the particles rather than on a grid
+mask -- so the reward is exact at any cell size. What actually bounds it, over a 100 km box:
+
+    below ~200 m   sampling noise. 1/sqrt(k) per cell, so noise scales as 1/cell:
+                   15.5 % at 250 m and 39 % at 100 m, both at N = 1e6
+    memory         scales as 1/cell^2. Counts are uint16, lossless here (peak cell count
+                   2,487 at 250 m for a tight ensemble, against a 65,535 ceiling) and half
+                   the bytes of float32: 45 MB per scenario at 250 m, 11 MB at 500 m
+    the browser    a published chunk is 48 frames. Measured at 1.11 MB and 45 ms for the
+                   forcing store; 14.6 MB at 250 m and 3.7 MB at 500 m. THIS is why the
+                   archive is 500 m and the episode map, which is binned on demand and
+                   never written to disk, can be finer
+    above ~400 m   a cell comparable to the whole distribution gives a blob, not a shape.
+                   The bound rests on an ensemble spread that has NOT been measured yet
+
+So `cell_m` is a required argument: the defensible statement is a window of roughly
+200-500 m, not a single number, and the experiments pick inside it.
+
 
 So the three acceptance criteria that are about ARITHMETIC are met exactly, and the
 fourth -- the default -- is deliberately refused: `cell_m` is required and has no default.
@@ -177,9 +200,9 @@ class ProbabilityGrid:
     ) -> "ProbabilityGrid":
         """Fit a box to a particle cloud, with cells square in metres at its centre.
 
-        `cell_m` is REQUIRED. ADR002: the best cell size is not known, it is of order the
-        sweep width, and it is something the experiments decide -- so it is a parameter
-        and never a constant.
+        `cell_m` is REQUIRED. The defensible statement is a WINDOW of roughly 200-500 m,
+        not a single number -- see the module docstring for what sets each end -- so it is
+        a parameter the experiments pick inside, and never a constant.
 
         FIT TO THE SPREAD, NEVER TO THE TRAVEL. Pass the cloud AT THE SEARCHER'S ARRIVAL
         TIME, not the whole run. At 1.8 m/s a target travels 467 km in 72 h, so a box
