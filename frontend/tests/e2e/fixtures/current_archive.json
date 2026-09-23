@@ -1,5 +1,5 @@
 {
-  "generated": "2026-09-21T15:24:25+00:00",
+  "generated": "2026-09-23T20:26:39+00:00",
   "product": "current",
   "label": "surface current",
   "variables": [
@@ -25,41 +25,70 @@
   "tiers": {
     "3-hourly": {
       "path": "current_3-hourly.zarr",
-      "frames": 8,
+      "frames": 128,
       "step_seconds": 10800,
       "regular": true,
       "gaps": null,
       "start": "2021-01-05T00:00:00Z",
-      "end": "2021-01-05T21:00:00Z",
+      "end": "2021-01-20T21:00:00Z",
       "chunks": {
         "time": 8,
         "lat": 26,
         "lon": 14
       },
       "chunk_bytes_uncompressed": 11648,
-      "bytes": 10078,
+      "bytes": 94917,
       "compression": "zstd-19",
-      "compression_ratio": 2.312,
-      "files": 11,
+      "compression_ratio": 3.927,
+      "files": 41,
       "verified": {
         "at": {
-          "time": "2021-01-05T12:00:00Z",
+          "time": "2021-01-13T00:00:00Z",
           "lat": 26.319999999999993,
           "lon": -78.68000000000006
         },
-        "published": 0.2288154810667038,
-        "source": 0.22881547918467557,
+        "published": 0.3532862663269043,
+        "source": 0.35328627893334236,
+        "match": true
+      }
+    },
+    "daily": {
+      "path": "current_daily.zarr",
+      "frames": 16,
+      "step_seconds": 86400,
+      "regular": true,
+      "gaps": null,
+      "start": "2021-01-05T00:00:00Z",
+      "end": "2021-01-20T00:00:00Z",
+      "chunks": {
+        "time": 8,
+        "lat": 26,
+        "lon": 14
+      },
+      "chunk_bytes_uncompressed": 11648,
+      "bytes": 15765,
+      "compression": "zstd-19",
+      "compression_ratio": 2.955,
+      "files": 13,
+      "verified": {
+        "at": {
+          "time": "2021-01-13T00:00:00Z",
+          "lat": 26.319999999999993,
+          "lon": -78.68000000000006
+        },
+        "published": 0.3532862663269043,
+        "source": 0.35328627893334236,
         "match": true
       }
     }
   },
   "provenance": {
     "source_files": [
-      "hycom_demo_2021-01-05-2021-01-06.nc"
+      "hycom_demo_2021-01-05-2021-01-21.nc"
     ],
-    "source_frames": 8,
+    "source_frames": 128,
     "script": "sar.viz.archive",
     "gaps_filled_with_nan": 0,
-    "frames_from_source": 8
+    "frames_from_source": 128
   }
 }

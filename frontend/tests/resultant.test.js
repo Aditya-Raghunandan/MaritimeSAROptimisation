@@ -96,6 +96,54 @@ describe('with a current, which is where we are going', () => {
   })
 })
 
+/**
+ * A span change swaps each field onto another tier: a different store object. The
+ * resultant must read whichever one is in use, or it paints one tier's data with the
+ * other tier's frame numbers. That froze the live drift arrows at hour 49 (23 Sep).
+ */
+describe('following a tier switch', () => {
+  // A field whose source can be swapped, the way main.js swaps `field.source`.
+  function swappable (first) {
+    const holder = { now: first }
+    return { holder, field: { get source () { return holder.now }, grid: WIND_GRID, axis: axis(3600, 48) } }
+  }
+
+  it('reads the wind source in use now, not the one it was built with', () => {
+    const { holder, field } = swappable(src(() => [10, 0]))
+    const r = new ResultantSource(field, null)
+    expect(r.vector(0, 0, 0)).toEqual([0.2, 0])
+    holder.now = src(() => [20, 0])          // the span changed
+    expect(r.vector(0, 0, 0)).toEqual([0.4, 0])
+  })
+
+  it('reports the frame count of the tier in use now', () => {
+    const { holder, field } = swappable(src(() => [10, 0], 43824))
+    const r = new ResultantSource(field, null)
+    expect(r.frames).toBe(43824)
+    holder.now = src(() => [10, 0], 1826)
+    expect(r.frames).toBe(1826)
+  })
+
+  it('asks the new tier whether a frame is resident, not the old one', () => {
+    const stale = { ...src(() => [10, 0]), isResident: () => true }
+    const fresh = { ...src(() => [10, 0]), isResident: () => false }
+    const { holder, field } = swappable(stale)
+    const r = new ResultantSource(field, null)
+    holder.now = fresh
+    // Answering from the stale store is what painted the wrong day: it said yes.
+    expect(r.isResident(0)).toBe(false)
+  })
+
+  it('follows a swapped current too', () => {
+    const cur = { now: src(() => [1, 0], 16) }
+    const current = { get source () { return cur.now }, grid: CUR_GRID, axis: axis(10800, 16) }
+    const r = new ResultantSource(wind(0, 0), current)
+    expect(r.vector(0, 0, 0)).toEqual([1, 0])
+    cur.now = src(() => [2, 0], 16)
+    expect(r.vector(0, 0, 0)).toEqual([2, 0])
+  })
+})
+
 describe('the two grids', () => {
   it('output is on the wind grid, the coarser of the two', () => {
     const r = new ResultantSource(wind(10, 0), current(1, 0))

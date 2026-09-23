@@ -60,6 +60,13 @@ export class ResultantSource {
    * @param {{source, grid}} wind     field source and its grid (the output grid)
    * @param {{source, grid}|null} current  field source and its grid, or null
    * @param {{alpha?: number, bilinear?: boolean}} opts
+   *
+   * `wind.source` and `current.source` are READ AT EVERY CALL, never copied. Changing
+   * the span swaps each field onto a different published tier -- a different store,
+   * a different object -- and mutates the shared axis in place. A copy taken here kept
+   * reading the tier the page opened on (daily) with frame numbers from the tier it
+   * switched to (hourly), so the drift arrows painted the wrong day and then froze at
+   * the first chunk nobody was fetching: 2019-01-03 01:00, hour 49, on the live data.
    */
   constructor(wind, current, opts = {}) {
     this.wind = wind;
@@ -67,7 +74,11 @@ export class ResultantSource {
     this.alpha = opts.alpha ?? ALPHA;
     this.bilinear = opts.bilinear ?? BILINEAR_FIELD;
     this.grid = wind.grid;
-    this.frames = wind.source.frames;
+  }
+
+  /** Frames in the wind tier in use now, which a span change can alter. */
+  get frames() {
+    return this.wind.source.frames;
   }
 
   /** True while any term of D002 is missing from what is drawn. */
