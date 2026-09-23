@@ -111,9 +111,13 @@ export function summarise(series) {
  * three, so the sentence says whose contribution it is describing every time,
  * rather than relying on a footnote nobody reads.
  *
+ * `overLand` says the clicked point has no sea. The wind is still real there, so the
+ * sentence still describes it, but as what it would do offshore, and the comparison
+ * with "the current here" is dropped because there is no current here.
+ *
  * @returns {{lead: string, caveat: string}}
  */
-export function explain(windSpeed, towardsDeg, currentSpeed, sweepWidthM) {
+export function explain(windSpeed, towardsDeg, currentSpeed, sweepWidthM, { overLand = false } = {}) {
   const km = leewayDistance(windSpeed, 24) / 1000;
   // Two decimals, ALWAYS. This used to interpolate currentSpeed raw, which was
   // fine while it was the constant 1.8 and produced
@@ -126,8 +130,16 @@ export function explain(windSpeed, towardsDeg, currentSpeed, sweepWidthM) {
   const pct = frac === null ? null : frac * 100;
   const dir = compass(towardsDeg);
 
-  const lead = `Wind alone would carry a drifter about `
-    + `${km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`} ${dir} in a day.`;
+  const distance = km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
+
+  if (overLand) {
+    return {
+      lead: `Over open water, this wind would carry a drifter about ${distance} ${dir} in a day.`,
+      caveat: 'There is no sea at this point, so nothing here drifts.',
+    };
+  }
+
+  const lead = `Wind alone would carry a drifter about ${distance} ${dir} in a day.`;
 
   let caveat;
   if (pct === null) {

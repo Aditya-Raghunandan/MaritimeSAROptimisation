@@ -109,10 +109,27 @@ export class PointPanel {
       if (el) el.innerHTML = `${value}<span class="unit">${u}</span>`;
     };
 
+    const blanks = ['#dr-dir', '#dr-compass', '#dr-speed', '#dr-band',
+                    '#dr-1h', '#dr-6h', '#dr-terms', '#dr-area', '#dr-how'];
+
+    /*
+      LAND IS AN ANSWER, NOT A MISSING VALUE. This used to fall through to the
+      leeway-only sentence, so a click on North Carolina read "If someone were in
+      the water here ... leeway alone would carry them 208 m NNE in an hour". The
+      heading changes too, because it is the first thing anyone reads.
+    */
+    set('#dr-head', sample && sample.onLand ? 'On land' : 'If someone were in the water here');
+    if (sample && sample.onLand) {
+      set('#dr-lead', 'This point is land in the current model, so nobody drifts from here. '
+        + 'HYCOM draws its coastline on a grid of about 4.5 × 8 km, so a point right at '
+        + 'the shore can count as land.');
+      for (const id of blanks) set(id, '—');
+      return;
+    }
+
     if (!sample || !Number.isFinite(sample.u) || !Number.isFinite(sample.v)) {
       set('#dr-lead', 'Not loaded for this moment yet — the frame is still being fetched.');
-      for (const id of ['#dr-dir', '#dr-compass', '#dr-speed', '#dr-band',
-                        '#dr-1h', '#dr-6h', '#dr-terms', '#dr-area', '#dr-how']) set(id, '—');
+      for (const id of blanks) set(id, '—');
       return;
     }
 
@@ -223,7 +240,8 @@ export class PointPanel {
 
     const b = beaufort(speed);
     const outlook = detectionOutlook(speed);
-    const story = explain(speed, towards, p.currentSpeed, SWEEP_WIDTH_M);
+    const story = explain(speed, towards, p.currentSpeed, SWEEP_WIDTH_M,
+      { overLand: Boolean(p.drift && p.drift.onLand) });
 
     unit('#t-speed', speed.toFixed(1), 'm/s');
     set('#t-force', describe(speed));
