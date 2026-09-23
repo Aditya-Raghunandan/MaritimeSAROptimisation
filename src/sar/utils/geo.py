@@ -29,6 +29,11 @@ import xarray as xr
 STORE_LON_RANGE = (0.0, 360.0)
 CANONICAL_DIMS = ("lat", "lon")
 
+# Metres per degree of latitude on a sphere of the WGS84 mean radius. Constant with
+# latitude to within 0.6 % over this project's box, which is far below every other error
+# in the system; the longitude equivalent is NOT constant and is the function below.
+M_PER_DEG_LAT = 111_320.0
+
 # ERA5 and HYCOM disagree on what to call the same axis.
 _RENAMES = {"latitude": "lat", "longitude": "lon", "Latitude": "lat", "Longitude": "lon"}
 
@@ -41,6 +46,28 @@ def to_store_longitude(lon):
 def to_display_longitude(lon):
     """0-360 -> -180..180, for axis labels, KML and the frontend. Display only."""
     return ((np.asarray(lon) + 180.0) % 360.0) - 180.0
+
+
+def metres_per_degree_lon(lat):
+    """Metres in one degree of longitude AT THIS LATITUDE. Scalar or array.
+
+    A degree of longitude is 111.32 km at the equator and shrinks as cos(latitude):
+    99.6 km at 26.5 N, 90.1 km at 36 N. It exists as a function, and takes latitude as
+    an argument, for one reason: SO THAT IT CANNOT BE FROZEN.
+
+    Converting an eastward velocity in m/s into a longitude rate means dividing by this
+    number. Evaluate it once -- at the datum, say -- and reuse it while a particle drifts
+    north, and every eastward step is wrong: 3.3 % by 30 N, 10.6 % by 36 N, 18.2 % across
+    the full 17-36 N domain. Nothing raises and the trajectory still looks like physics.
+    See ADR002 section 7; it is the third defect of this family in one month, after the
+    raster painted 44 km north (latitude assumed linear on a Mercator screen) and a cell
+    width quoted at the domain edge rather than the box centre.
+
+    Callers therefore pass the particle's CURRENT latitude on every step, never a stored
+    value. `sar.model.grid` calls it once per grid because a grid's cell size is fixed by
+    definition; an integrator must call it per particle per step.
+    """
+    return M_PER_DEG_LAT * np.cos(np.radians(np.asarray(lat, dtype=float)))
 
 
 def normalise_grid(ds: xr.Dataset) -> xr.Dataset:

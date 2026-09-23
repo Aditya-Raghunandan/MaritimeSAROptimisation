@@ -30,6 +30,7 @@ They may cite an ADR or a vault decision for *why*, and should not restate the r
 | [current-fetch.md](current-fetch.md) | `sar.fetch.current` — HYCOM surface current retrieval (issue #4) |
 | [viz-export.md](viz-export.md) | `sar.viz` — the published archive the website reads |
 | [resultant-vector.md](resultant-vector.md) | `sar.model.interpolate` — current and wind at any position and time (issue #10) |
+| [probability-grid.md](probability-grid.md) | `sar.model.grid` — particle positions to cells, and back (issue #7) |
 | [linear_time_interpolation.md](linear_time_interpolation.md) | `sar.utils.interpolation` — why the drift model needs it |
 | [e2e-testing.md](e2e-testing.md) | `npm run test:e2e` and `npm run shots` — browser tests, and looking at the page (issue #21) |
 | [issue-template.md](issue-template.md) | the structure every new issue follows, and what "done" means |
