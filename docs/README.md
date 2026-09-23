@@ -29,6 +29,7 @@ They may cite an ADR or a vault decision for *why*, and should not restate the r
 | [data_pipeline_architecture.md](data_pipeline_architecture.md) | the acquisition, storage, publication and visualisation system as built — start here |
 | [current-fetch.md](current-fetch.md) | `sar.fetch.current` — HYCOM surface current retrieval (issue #4) |
 | [drifter-fetch.md](drifter-fetch.md) | `sar.fetch.drifters` and `load_drifters` — GDP drifter tracks, quality fields and buoy metadata, both products (issue #55) |
+| [validation-split.md](validation-split.md) | `sar.validate.split` — which drifter tracks are dev, sealed or the 2023 holdout, and why (issue #51) |
 | [viz-export.md](viz-export.md) | `sar.viz` — the published archive the website reads |
 | [resultant-vector.md](resultant-vector.md) | `sar.model.interpolate` — current and wind at any position and time (issue #10) |
 | [probability-grid.md](probability-grid.md) | `sar.model.grid` — particle positions to cells, and back (issue #7) |

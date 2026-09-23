@@ -23,8 +23,15 @@ import { domainLabel, domainMask } from './domain.js';
 import { RangeRings, Ruler, addScaleBar, formatDistance } from './measure.js';
 import { PointPanel } from './chart.js';
 import { TYPICAL_CURRENT_MS } from './geo.js';
+import { DrifterLayer, TrackCache } from './drifterLayer.js';
+import { DrifterPanel } from './drifterPanel.js';
+import { day, inWindow, lifetimeBar, prepareIndex, spanCovering } from './drifters.js';
 
 const DATA = import.meta.env.VITE_DATA_BASE ?? 'data';
+// The drifter track export (#50). Its own variable so it can be served from
+// somewhere else while it is built -- locally, before it is published -- and it
+// defaults to the archive, which is where it will live.
+const DRIFTER_BASE = import.meta.env.VITE_DRIFTER_BASE ?? DATA;
 
 /*
   THE CONTROL PICKS A SPAN. THE TIER FOLLOWS.
@@ -362,7 +369,26 @@ function setProvenance(tierName, tier) {
     + `${(tier.bytes / 1e6).toFixed(0)} MB published`;
 }
 
+/**
+ * The drifter index (#50), prepared, or null when it is not published. Null
+ * rather than throwing, for the reason the current is optional: a missing
+ * overlay must not stop the map opening, and the site went live before this
+ * file existed.
+ */
+async function loadDrifterIndex(base) {
+  try {
+    const res = await fetch(`${base}/drifter_index.json`);
+    if (!res.ok) return null;
+    return prepareIndex(await res.json());
+  } catch {
+    return null;
+  }
+}
+
 async function start() {
+  // Asked for now, awaited when the overlays are built, so it downloads while
+  // the wind and current archives are opening rather than after them.
+  const drifterIndexJob = loadDrifterIndex(DRIFTER_BASE);
   // The published Zarr archive is preferred; the flat 48 h bundle is the
   // fallback, and is still the right thing for a single scenario and for
   // working offline.
@@ -773,6 +799,33 @@ async function start() {
     });
   }
 
+  /*
+    THE DRIFTERS (#50): the real buoys the engine is tested against. Finding
+    follows the span, watching follows the clock (drifters.js). Offered only
+    when the index is published, so the site opens the same without it.
+  */
+  let drifterLayer = null;
+  let drifterPanel = null;
+  let selectedDrifter = null;
+  const drifterEntries = await drifterIndexJob;
+  if (drifterEntries && drifterEntries.length) {
+    const cache = new TrackCache(DRIFTER_BASE);
+    const onHover = (id) => { drifterLayer.highlight(id); drifterPanel.highlight(id); };
+    // `timeTravel` is declared with the span control, further down.
+    const onSelect = (buoy) => timeTravel(buoy);
+    drifterLayer = new DrifterLayer(drifterEntries, cache, { onSelect, onHover });
+    drifterPanel = new DrifterPanel(drifterEntries, { onSelect, onHover });
+    drifterLayer.on('alive', (e) => drifterPanel.setAlive(e.count));
+    drifterLayer.on('trackerror', (e) => setStatus(`could not load buoy ${e.id}'s track`));
+    overlays[entry('Drifters — real buoys', 'the test data: pick one, press play')] = drifterLayer;
+    // The list is part of the layer: it shows exactly when the layer does.
+    map.on('overlayadd overlayremove', () => {
+      const on = map.hasLayer(drifterLayer);
+      if (on && !drifterPanel._map) drifterPanel.addTo(map);
+      else if (!on && drifterPanel._map) map.removeControl(drifterPanel);
+    });
+  }
+
   for (const pending of ['Probability map', 'Search tracks']) {
     overlays[entry(pending, 'awaiting the engine')] = L.layerGroup();
   }
@@ -828,6 +881,14 @@ async function start() {
       // the reader to add it twice.
       layers: () => [currentRaster, resultantFlow, resultant],
     },
+    ...(drifterLayer ? [{
+      id: 'drifters',
+      label: 'Drifters',
+      hint: 'real buoys we test against',
+      // The current underneath, dimmed, with its streaks: the question this view
+      // answers is whether a buoy rode the water it was in.
+      layers: () => [currentRaster, currentParticles, drifterLayer],
+    }] : []),
     {
       id: 'clean',
       label: 'Map only',
@@ -840,6 +901,7 @@ async function start() {
     raster, particles, quiver,
     currentRaster, currentParticles, currentQuiver,
     resultant, resultantFlow,
+    drifterLayer,
   ].filter(Boolean);
 
   function applyPreset(preset) {
@@ -858,7 +920,8 @@ async function start() {
       Current and Wind + water views and must keep its weight there.
     */
     if (currentRaster) {
-      currentRaster.setOpacity(preset.id === 'drift' ? 0.26 : CURRENT_RASTER_OPACITY);
+      currentRaster.setOpacity(preset.id === 'drift' || preset.id === 'drifters'
+        ? 0.26 : CURRENT_RASTER_OPACITY);
     }
 
     for (const btn of presetBar.querySelectorAll('button')) {
@@ -1076,6 +1139,58 @@ async function start() {
     if (finest > 3600) {
       console.info(`finest published stride is ${describeStep(finest)}`);
     }
+  }
+
+  /*
+    CLICK A BUOY TO TIME-TRAVEL (#50). The clock jumps to its first fix and the
+    span snaps to the smallest one whose aligned window holds its whole record,
+    so its lifetime fits on the slider. Play then draws its path as it moves.
+  */
+  const lifetimeEl = document.getElementById('lifetime');
+  let drifterWindow = [NaN, NaN];
+  function syncDrifters() {
+    if (!drifterLayer) return;
+    const ws = clock.winStart.getTime();
+    const we = clock.winEnd.getTime();
+    // The dots follow the WINDOW, so they are redrawn only when it moves, not on
+    // every tick of play.
+    if (ws !== drifterWindow[0] || we !== drifterWindow[1]) {
+      drifterWindow = [ws, we];
+      drifterLayer.setWindow(ws, we);
+      drifterPanel.setVisible(inWindow(drifterEntries, ws, we));
+    }
+    drifterLayer.setTime(clock.t.getTime());
+    if (lifetimeEl) {
+      const bar = selectedDrifter
+        && lifetimeBar(selectedDrifter.startMs, selectedDrifter.endMs, ws, we);
+      lifetimeEl.hidden = !bar;
+      if (bar) {
+        lifetimeEl.style.left = `${bar.left * 100}%`;
+        lifetimeEl.style.width = `${bar.width * 100}%`;
+        lifetimeEl.title = `Buoy ${selectedDrifter.id}: `
+          + `${day(selectedDrifter.startMs)} → ${day(selectedDrifter.endMs)}`;
+      }
+    }
+  }
+  clock.onChange(syncDrifters);
+
+  async function timeTravel(buoy) {
+    selectedDrifter = buoy;
+    drifterLayer.select(buoy.id);
+    drifterPanel.select(buoy.id);
+    const span = spanCovering(buoy.startMs, buoy.endMs, SPANS.map((s) => s.seconds));
+    // The moment and its window move together, or the tier switch inside
+    // `applySpan` clamps the moment back into the old window (Clock.jumpTo).
+    clock.jumpTo(new Date(buoy.startMs), span);
+    if (spanSelect) spanSelect.value = String(span ?? '');
+    try {
+      await applySpan(span, { quiet: true });
+    } catch (err) {
+      setStatus(`could not switch span: ${err.message}`);
+      return;
+    }
+    syncDrifters();
+    setStatus(`Buoy ${buoy.id}: first seen ${day(buoy.startMs)}. Press play to follow it.`);
   }
 
   /*

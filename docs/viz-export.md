@@ -177,6 +177,38 @@ import xarray as xr
 ds = xr.open_zarr(f"{B}/wind_daily.zarr", consolidated=False)
 ```
 
+## Drifter tracks for the map — one file per buoy (`sar.viz.drifters --tracks`)
+
+The site's drifter layer (issue #50) cannot read Parquet, and it never needs every
+buoy at once: it shows one buoy's path and the few buoys in the water at the current
+moment. So the tracks are exported as JSON, **one small file per buoy**, beside a
+single index:
+
+```
+python -m sar.viz.drifters --tracks --data C:/maritime-data --out C:/maritime-data/published
+```
+
+It reads both GDP products and their buoy tables (see [drifter-fetch.md](drifter-fetch.md))
+and the validation split (`derived/validation_split.csv`, [validation-split.md](validation-split.md)),
+so run `python -m sar.validate.split` first.
+
+| File | What it holds | Measured 2026-09-23 |
+|---|---|---|
+| `drifter_index.json` | one row per buoy: first and last fix, where it was first seen, drogue summary (`drogued` / `undrogued` / `mixed` / `uncertain`), its validation splits and a `sealed` flag | 326 buoys, **89 kB** |
+| `drifter_tracks/<ID>.json` | that buoy's every fix, as columns: whole hours since `t0`, lat and lon to 4 dp (11 m), segment number, and 0/1 flags for undrogued and "more than 3 h from a real fix" | **26.9 MB** in all; median **36 kB**, largest **520 kB** |
+
+The index loads once. A track file is fetched only when its buoy is picked or is in
+the water at the current moment, so a click costs one small download and the path
+keeps its full hourly resolution. The export takes about 5 s.
+
+**Sealed buoys stay visible.** Looking at a raw track is fine. What vault D025 rules out
+is comparing the *engine* against a sealed track before the frozen evaluation run, so the
+map badges sealed buoys rather than hiding them.
+
+**Where the site looks for it.** `VITE_DRIFTER_BASE`, which defaults to
+`VITE_DATA_BASE`, so once the files are published beside the archive nothing needs setting.
+Until then, the layer is simply not offered: a missing index is not an error.
+
 ---
 
 ## Conventions, which are the same everywhere
