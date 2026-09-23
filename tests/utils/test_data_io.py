@@ -17,6 +17,11 @@ import xarray as xr
 from sar.utils.data_io import (
     ARRIVAL_D020,
     ARRIVAL_PRE_D020,
+    HOURLY_QC_END,
+    apply_buoy_metadata,
+    combine_products,
+    infer_product,
+    load_buoys,
     load_drifters,
     open_box_means,
     open_forcing,
@@ -468,3 +473,204 @@ class TestOpenForcingDispatch:
     def test_a_missing_table_still_says_so_before_parsing(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="no forcing file"):
             open_forcing(tmp_path / "absent.txt")
+
+
+# ---------------------------------------------------------------------------
+# Issue #55: quality fields, buoy metadata and the 6-hourly product.
+# ---------------------------------------------------------------------------
+
+def gapped_frame() -> pd.DataFrame:
+    """One buoy, hourly, with the server's `gap` in seconds: one point 5 h from a fix."""
+    t = pd.date_range("2021-06-01", periods=4, freq="h", tz="UTC")
+    return pd.DataFrame({
+        "ID": "G", "time": t,
+        "latitude": 30.0, "longitude": -70.0, "sst": 298.15,
+        "drogue_lost_date": pd.NaT,
+        "gap": [3600.0, 3600.0, 18000.0, 3600.0],
+    })
+
+
+def buoy_table(**rows) -> pd.DataFrame:
+    """A buoy table shaped like the server's, one row per keyword: ID=(location, depth, deploy)."""
+    records = []
+    for bid, (location, depth, deploy) in rows.items():
+        records.append({"ID": bid, "location_type": location, "DrogueCenterDepth": depth,
+                        "deploy_date": deploy})
+    return pd.DataFrame(records)
+
+
+class TestLoadDriftersQuality:
+    def test_fix_gap_is_read_in_hours(self, tmp_path):
+        p = tmp_path / "gdp_hourly_x.csv"
+        gapped_frame().to_csv(p, index=False)
+        df = load_drifters(p)
+        assert df.fix_gap_h.tolist() == [1.0, 1.0, 5.0, 1.0]
+
+    def test_points_far_from_a_fix_are_flagged_not_dropped(self, tmp_path):
+        """Dropping them would cut 168 real tracks; a scorer skips them as truth instead."""
+        p = tmp_path / "gdp_hourly_x.csv"
+        gapped_frame().to_csv(p, index=False)
+        df = load_drifters(p)
+        assert len(df) == 4
+        assert (df.fix_gap_h > 3).sum() == 1
+        assert df.segment_id.nunique() == 1
+
+    def test_fix_gap_is_nan_where_the_product_does_not_serve_it(self, tmp_path):
+        p = tmp_path / "gdp.csv"
+        drifter_frame().to_csv(p, index=False)
+        assert load_drifters(p).fix_gap_h.isna().all()
+
+    def test_times_come_back_in_utc(self, tmp_path):
+        p = tmp_path / "gdp.csv"
+        drifter_frame().to_csv(p, index=False)       # written naive
+        assert str(load_drifters(p).time.dt.tz) == "UTC"
+
+    def test_the_product_is_read_from_the_file_name(self, tmp_path):
+        assert infer_product(tmp_path / "gdp_6hour_17-36N_82-63W_x.csv") == "6-hourly"
+        assert infer_product(tmp_path / "gdp_hourly_17-36N_82-63W_x.csv") == "hourly"
+
+    def test_six_hourly_fixes_six_hours_apart_are_one_segment(self, tmp_path):
+        """The hourly 3 h rule would split every one of them."""
+        t = pd.date_range("2023-01-01", periods=10, freq="6h", tz="UTC")
+        raw = pd.DataFrame({"ID": "S", "time": t, "latitude": 28.0, "longitude": -75.0,
+                            "drogue_lost_date": pd.NaT})
+        p = tmp_path / "gdp_6hour_x.csv"
+        raw.to_csv(p, index=False)
+        df = load_drifters(p)
+        assert (df["product"] == "6-hourly").all()
+        assert df.segment_id.nunique() == 1
+
+    def test_a_missing_six_hourly_fix_does_split(self, tmp_path):
+        t = list(pd.date_range("2023-01-01", periods=4, freq="6h", tz="UTC"))
+        t += list(pd.date_range("2023-01-02 12:00", periods=4, freq="6h", tz="UTC"))  # 18 h jump
+        raw = pd.DataFrame({"ID": "S", "time": t, "latitude": 28.0, "longitude": -75.0,
+                            "drogue_lost_date": pd.NaT})
+        p = tmp_path / "gdp_6hour_x.csv"
+        raw.to_csv(p, index=False)
+        assert load_drifters(p).segment_id.nunique() == 2
+
+    def test_six_hourly_sst_is_already_celsius(self, tmp_path):
+        """Kelvin hourly, degrees C 6-hourly. Treating both as Kelvin masked every 2023 value."""
+        t = pd.date_range("2023-01-01", periods=3, freq="6h", tz="UTC")
+        raw = pd.DataFrame({"ID": "S", "time": t, "latitude": 28.0, "longitude": -75.0,
+                            "sst": [26.4, 25.0, -999999.0], "drogue_lost_date": pd.NaT})
+        p = tmp_path / "gdp_6hour_x.csv"
+        raw.to_csv(p, index=False)
+        df = load_drifters(p)
+        assert df.sst_c.iloc[0] == pytest.approx(26.4)
+        assert df.sst_c.isna().sum() == 1              # the fill value, and only it
+
+    def test_an_unknown_product_is_refused(self, tmp_path):
+        p = tmp_path / "gdp.csv"
+        drifter_frame().to_csv(p, index=False)
+        with pytest.raises(ValueError, match="unknown product"):
+            load_drifters(p, product="daily")
+
+
+class TestLoadBuoys:
+    def test_parses_the_servers_depth_strings(self):
+        b = load_buoys(buoy_table(A=("GPS", "15 m", "2021-01-01"), B=("GPS", "0 m", "2021-01-01"),
+                                  C=("GPS", " m", None)))
+        depth = dict(zip(b.ID, b.drogue_depth_m))
+        assert depth["A"] == 15.0 and depth["B"] == 0.0 and np.isnan(depth["C"])
+
+    def test_dates_come_back_in_utc(self):
+        b = load_buoys(buoy_table(A=("GPS", "15 m", "2021-01-01")))
+        assert str(b.deploy_date.dt.tz) == "UTC"
+
+    def test_a_buoy_listed_twice_is_an_error(self):
+        dup = pd.concat([buoy_table(A=("GPS", "15 m", "2021-01-01"))] * 2)
+        with pytest.raises(ValueError, match="more than once"):
+            load_buoys(dup)
+
+    def test_a_table_without_ids_is_an_error(self):
+        with pytest.raises(ValueError, match="no ID column"):
+            load_buoys(pd.DataFrame({"DrogueCenterDepth": ["15 m"]}))
+
+
+class TestApplyBuoyMetadata:
+    @staticmethod
+    def fixes(bid: str, lost=None, n: int = 4) -> pd.DataFrame:
+        """Fixes for one buoy from 2021-06-01, marked undrogued by the loss-date rule only."""
+        t = pd.date_range("2021-06-01", periods=n, freq="h", tz="UTC")
+        lost_ts = pd.Timestamp(lost, tz="UTC") if lost else pd.NaT
+        undrogued = (t >= lost_ts) if lost else np.zeros(n, dtype=bool)
+        return pd.DataFrame({"ID": bid, "time": t, "drogue_lost_date": lost_ts,
+                             "undrogued": undrogued})
+
+    def test_argos_buoys_are_dropped(self):
+        df = pd.concat([self.fixes("gps"), self.fixes("argos")])
+        out = apply_buoy_metadata(df, load_buoys(buoy_table(
+            gps=("GPS", "15 m", "2021-01-01"), argos=("Argos", "15 m", "2021-01-01"))))
+        assert set(out.ID) == {"gps"}
+
+    def test_a_buoy_with_no_location_type_is_kept(self):
+        """The 6-hourly product does not serve the field; unknown is not Argos."""
+        table = buoy_table(six=(np.nan, "15 m", "2023-01-01"))
+        out = apply_buoy_metadata(self.fixes("six"), load_buoys(table))
+        assert set(out.ID) == {"six"}
+
+    def test_no_drogue_means_undrogued_at_every_fix(self):
+        out = apply_buoy_metadata(self.fixes("v", lost="2021-01-01"),
+                                  load_buoys(buoy_table(v=("GPS", "0 m", "2021-01-01"))))
+        assert out.undrogued.all()
+        assert not out.tier_uncertain.any()
+
+    def test_no_drogue_with_a_later_loss_date_is_tier_uncertain(self):
+        """7 real buoys: 0 m drogue, loss date 1-9 days after deployment."""
+        out = apply_buoy_metadata(self.fixes("v", lost="2021-06-01 02:00"),
+                                  load_buoys(buoy_table(v=("GPS", "0 m", "2021-05-25"))))
+        assert out.tier_uncertain.all()
+
+    def test_no_drogue_and_no_deployment_date_is_tier_uncertain(self):
+        """2 real buoys have no deployment date at all."""
+        out = apply_buoy_metadata(self.fixes("v", lost="2021-06-01"),
+                                  load_buoys(buoy_table(v=("GPS", "0 m", None))))
+        assert out.tier_uncertain.all()
+
+    def test_the_1970_code_is_uncertain_not_undrogued_since_1970(self):
+        df = self.fixes("u", lost="1970-01-01")
+        assert df.undrogued.all()                    # what the loss-date rule alone says
+        out = apply_buoy_metadata(df, load_buoys(buoy_table(u=("GPS", "15 m", "2021-01-01"))))
+        assert not out.undrogued.any()
+        assert out.tier_uncertain.all()
+
+    def test_a_drogued_buoy_keeps_its_loss_date_rule(self):
+        out = apply_buoy_metadata(self.fixes("d", lost="2021-06-01 02:00"),
+                                  load_buoys(buoy_table(d=("GPS", "15 m", "2021-01-01"))))
+        assert out.undrogued.tolist() == [False, False, True, True]
+        assert not out.tier_uncertain.any()
+
+    def test_a_buoy_missing_from_the_table_is_warned_about(self):
+        with pytest.warns(UserWarning, match="no row in the buoy table"):
+            apply_buoy_metadata(self.fixes("ghost"),
+                                load_buoys(buoy_table(other=("GPS", "15 m", "2021-01-01"))))
+
+    def test_a_row_that_is_all_blank_is_not_mistaken_for_a_missing_buoy(self):
+        """One real SVPB has a row whose depth and dates are blank. It is not missing."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            apply_buoy_metadata(self.fixes("blank"),
+                                load_buoys(buoy_table(blank=("GPS", " m", None))))
+
+
+class TestCombineProducts:
+    @staticmethod
+    def frame(start: str, n: int, freq: str, product: str, seg0: int = 0) -> pd.DataFrame:
+        t = pd.date_range(start, periods=n, freq=freq, tz="UTC")
+        return pd.DataFrame({"ID": "B", "time": t, "product": product,
+                             "segment_id": seg0})
+
+    def test_six_hourly_starts_a_week_after_the_hourly_end(self):
+        hourly = self.frame("2022-10-30", 24, "h", "hourly")
+        six = self.frame("2022-10-25", 80, "6h", "6-hourly")   # overlaps, then runs past
+        out = combine_products(hourly, six)
+        later = out[out["product"] == "6-hourly"]
+        assert later.time.min() >= HOURLY_QC_END + pd.Timedelta("7D")
+        assert (out["product"] == "hourly").sum() == 24
+
+    def test_segment_ids_do_not_collide_across_products(self):
+        hourly = self.frame("2022-10-01", 5, "h", "hourly", seg0=4)
+        six = self.frame("2022-12-01", 5, "6h", "6-hourly", seg0=0)
+        out = combine_products(hourly, six)
+        assert out.loc[out["product"] == "6-hourly", "segment_id"].min() > 4
