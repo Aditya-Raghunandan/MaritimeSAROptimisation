@@ -276,7 +276,8 @@ The $\cos\varphi$ is not optional. Without it, east-west movement at 26.5 N woul
 understated by 11 %, and the error would change by 18 % between the south and north edges
 of the box (sec 36 / sec 17 = 1.18, the same figure `frontend/src/geo.js` quotes for map
 distances). The integrator has to apply that factor at the particle's own latitude on
-every step.
+every step. It does, in `sar.model.position`; `docs/position-update.md` derives the step
+and measures what the approximation costs.
 
 Rotation of the Earth is not missing either. The Coriolis effect, the geostrophic balance
 and the rest of the ocean dynamics are already inside HYCOM's velocities, which is why

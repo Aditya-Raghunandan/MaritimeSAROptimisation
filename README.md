@@ -13,8 +13,9 @@ performs the modelling; the frontend visualises the resulting probability map.
 ```
 src/sar/            Importable Python package; imported as `sar.fetch`, etc.
   fetch/            HYCOM, ERA5 and GDP drifter retrieval
-  model/            Drift equation, leeway parameterisation and Monte Carlo sampling
-  pipeline/         Normalisation of raw data to Parquet and Zarr
+  model/            Drift equation, leeway parameterisation, forcing interpolation
+                    and the position update
+  pipeline/         The drift engine: forcing backends and the tracking loop
   utils/            geo (coordinate conventions), data_io (the read half),
                     interpolation, shutdown
   viz/              fields (matplotlib renderers), export (one window as a flat
@@ -58,6 +59,8 @@ each part of it is shaped the way it is, is in
 | [`docs/current-fetch.md`](docs/current-fetch.md) | HYCOM retrieval, the D020 raw tier, and the OPeNDAP request-size ceiling |
 | [`docs/viz-export.md`](docs/viz-export.md) | what the website reads: Zarr layout, Parquet trajectories, conventions |
 | [`docs/linear_time_interpolation.md`](docs/linear_time_interpolation.md) | time interpolation and the `ForcingProvider` interface |
+| [`docs/resultant-vector.md`](docs/resultant-vector.md) | bilinear interpolation of current and wind, and the uncertainty it carries |
+| [`docs/position-update.md`](docs/position-update.md) | the position step, the tracking pipeline, and the error budget behind both |
 | [`docs/issue-template.md`](docs/issue-template.md) | the Context / Scope / Acceptance criteria shape issues take here |
 | [`docs/ADR001.md`](docs/ADR001.md) | architecture decision record |
 
