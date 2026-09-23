@@ -166,12 +166,159 @@ def publish(data: Path, out: Path, source: Path | None = None) -> dict:
     return manifest
 
 
+# ---------------------------------------------------------------------------
+# The track export the site's drifter layer reads (issue #50).
+#
+#   drifter_index.json          one row per buoy: small, loaded once
+#   drifter_tracks/<ID>.json    one buoy's every fix, fetched when it is needed
+#
+# SPLIT BY BUOY, NOT ONE FILE, because the site shows one buoy's path at a time
+# and a few buoys' positions at once. All of them together are tens of MB; one
+# is tens of kB, so a click costs one small fetch and the path keeps its full
+# hourly resolution rather than being thinned to fit one download.
+# ---------------------------------------------------------------------------
+
+INDEX_NAME = "drifter_index.json"
+TRACK_DIR = "drifter_tracks"
+
+# 4 decimal places of a degree is 11 m, far finer than a GDP position is good for
+# (~100 m), and it keeps the files small.
+COORD_DP = 4
+
+# A fix further than this from a real GPS fix is the fitting method's guess, and
+# is drawn dashed (#55: 1.49 % of hourly points).
+FAR_FROM_FIX_H = 3.0
+
+
+def _iso(ts: pd.Timestamp) -> str:
+    """UTC ISO 8601 with a Z, which every browser's Date parses the same way."""
+    return pd.Timestamp(ts).tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _tier_summary(g: pd.DataFrame) -> str:
+    """One word for a buoy's drogue record: drogued, undrogued, mixed or uncertain."""
+    if g["tier_uncertain"].any():
+        return "uncertain"
+    und = g["undrogued"]
+    if und.all():
+        return "undrogued"
+    return "mixed" if und.any() else "drogued"
+
+
+def track_record(g: pd.DataFrame) -> dict:
+    """One buoy's fixes as compact columns, in time order.
+
+    `h` is whole hours since `t0` (every fix is on the hour); `seg` renumbers the
+    buoy's in-box segments from 0, so the site never draws a line across a gap;
+    `und` and `far` are 0/1 per fix. Longitude is the display convention.
+    """
+    g = g.sort_values("time")
+    t0 = g["time"].iloc[0]
+    hours = ((g["time"] - t0).dt.total_seconds() / 3600.0).round().astype(int)
+    seg = g["segment_id"].rank(method="dense").astype(int) - 1
+    far = (g["fix_gap_h"] > FAR_FROM_FIX_H) if "fix_gap_h" in g.columns else pd.Series(False, index=g.index)
+    return {
+        "id": str(g["ID"].iloc[0]),
+        "t0": _iso(t0),
+        "h": hours.tolist(),
+        "lat": g["lat"].round(COORD_DP).tolist(),
+        "lon": np.round(to_display_longitude(g["lon"].to_numpy()), COORD_DP).tolist(),
+        "seg": seg.tolist(),
+        "und": g["undrogued"].astype(int).tolist(),
+        "far": far.fillna(False).astype(int).tolist(),
+    }
+
+
+def buoy_index(df: pd.DataFrame, units: pd.DataFrame | None = None) -> list[dict]:
+    """One entry per buoy, sorted by first fix: what the dots, list and search need.
+
+    `splits` lists the validation splits the buoy's units fall in (#51), empty if
+    none of its runs is long enough to be a unit. `sealed` is true if any unit is
+    sealed or in the 2023 holdout: the raw track may be looked at, but the engine
+    must not be compared against it before the frozen evaluation run (D025).
+    """
+    splits: dict[str, list[str]] = {}
+    if units is not None and len(units):
+        for bid, s in units.groupby(units["ID"].astype(str))["split"]:
+            splits[bid] = sorted(set(s))
+    rows = []
+    for bid, g in df.groupby(df["ID"].astype(str), sort=False):
+        g = g.sort_values("time")
+        first = g.iloc[0]
+        lost = g.loc[g["undrogued"], "time"]
+        s = splits.get(bid, [])
+        rows.append({
+            "id": bid,
+            "start": _iso(first["time"]),
+            "end": _iso(g["time"].iloc[-1]),
+            "lat0": round(float(first["lat"]), COORD_DP),
+            "lon0": round(float(to_display_longitude(np.array([first["lon"]]))[0]), COORD_DP),
+            "fixes": int(len(g)),
+            "products": sorted(set(g["product"])) if "product" in g.columns else ["hourly"],
+            "tier": _tier_summary(g),
+            "drogue_lost": _iso(lost.iloc[0]) if len(lost) and not lost.index.equals(g.index) else None,
+            "splits": s,
+            "sealed": bool({"sealed", "holdout-2023"} & set(s)),
+            "file": f"{TRACK_DIR}/{bid}.json",
+        })
+    return sorted(rows, key=lambda r: (r["start"], r["id"]))
+
+
+def publish_tracks(df: pd.DataFrame, units: pd.DataFrame | None, out: Path) -> dict:
+    """Write the index and every buoy's track file under `out`; return what was written."""
+    tracks = out / TRACK_DIR
+    tracks.mkdir(parents=True, exist_ok=True)
+    index = buoy_index(df, units)
+    sizes = []
+    for bid, g in df.groupby(df["ID"].astype(str)):
+        path = tracks / f"{bid}.json"
+        path.write_text(json.dumps(track_record(g), separators=(",", ":")), encoding="utf-8")
+        sizes.append(path.stat().st_size)
+    manifest = {
+        "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "product": "drifter_tracks",
+        "label": "NOAA GDP drifters, one file per buoy",
+        "longitude_convention": "-180..180 (display; D020 stores 0-360)",
+        "buoys": index,
+        "counts": {"buoys": len(index), "fixes": int(len(df)),
+                   "sealed_buoys": sum(r["sealed"] for r in index)},
+        "provenance": {"script": "sar.viz.drifters --tracks",
+                       "split": "sar.validate.split (vault D025)"},
+    }
+    index_path = out / INDEX_NAME
+    index_path.write_text(json.dumps(manifest, separators=(",", ":")), encoding="utf-8")
+    summary = {
+        "buoys": len(index),
+        "index_bytes": index_path.stat().st_size,
+        "track_bytes_total": int(sum(sizes)),
+        "track_bytes_median": int(np.median(sizes)) if sizes else 0,
+        "track_bytes_max": int(max(sizes)) if sizes else 0,
+    }
+    print(f"wrote     {INDEX_NAME}  {summary['buoys']} buoys, {summary['index_bytes'] / 1e3:.0f} kB")
+    print(f"wrote     {TRACK_DIR}/  {summary['track_bytes_total'] / 1e6:.1f} MB in total; "
+          f"median {summary['track_bytes_median'] / 1e3:.0f} kB, "
+          f"largest {summary['track_bytes_max'] / 1e3:.0f} kB per buoy")
+    return summary
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description="Publish GDP drifters as Parquet for the site.")
-    p.add_argument("--data", required=True, help="archive root holding raw/gdp_hourly_*.csv")
+    p = argparse.ArgumentParser(description="Publish GDP drifters for the site.")
+    p.add_argument("--data", required=True, help="archive root holding raw/gdp_*.csv")
     p.add_argument("--out", required=True, help="where the published files go. No default.")
     p.add_argument("--source", help="which gdp_hourly_*.csv, if the archive holds several")
+    p.add_argument("--tracks", action="store_true",
+                   help="write the per-buoy track export (#50) instead of the Parquet: "
+                        "both products, with the validation split from derived/validation_split.csv")
     args = p.parse_args()
+    if args.tracks:
+        # Imported here so the Parquet path keeps working on a checkout without it.
+        from sar.validate.split import load_study_drifters
+
+        split_csv = Path(args.data) / "derived" / "validation_split.csv"
+        if not split_csv.exists():
+            raise SystemExit(f"no {split_csv}; run `python -m sar.validate.split --data {args.data}` first")
+        publish_tracks(load_study_drifters(args.data), pd.read_csv(split_csv), Path(args.out))
+        return
     publish(Path(args.data), Path(args.out),
             Path(args.source) if args.source else None)
 

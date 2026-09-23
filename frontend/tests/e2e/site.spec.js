@@ -309,3 +309,100 @@ test('the drift arrows keep moving with the clock past hour 48', async ({ page }
   expect(stamps.size).toBeGreaterThan(2);   // the clock was moving
   expect(prints.size).toBeGreaterThan(2);   // and the arrows moved with it
 });
+
+/*
+  THE DRIFTER LAYER (#50). Three invented buoys in the fixture, written by the real
+  exporter: E2E-A loses its drogue part-way, E2E-B is sealed, E2E-C starts on the
+  15th, outside the default one-day window, so only the search can reach it.
+*/
+test('the drifters preset shows the buoys in the window, and the list says how many', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="drifters"]');
+  await page.waitForTimeout(800);
+
+  // The default window is 2021-01-05; only E2E-A is seen that day.
+  expect(await page.locator('path.drifter-dot').count()).toBe(1);
+  expect(await page.textContent('.dp-status')).toMatch(/1 buoy in this window/);
+  expect(await page.locator('.dp-list li').count()).toBe(1);
+});
+
+test('hovering a dot says what the buoy is', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="drifters"]');
+  await page.waitForTimeout(800);
+
+  await page.locator('path.drifter-dot').first().hover();
+  await page.waitForTimeout(300);
+  const tip = await page.textContent('.drifter-tip');
+  expect(tip).toMatch(/Buoy E2E-A/);
+  expect(tip).toMatch(/loses its drogue/);
+});
+
+test('search reaches a buoy outside the window, and picking it time-travels', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="drifters"]');
+  await page.fill('.dp-search', 'E2E-C');
+  await page.waitForTimeout(300);
+  expect(await page.textContent('.dp-status')).toMatch(/1 buoy match/);
+
+  await page.click('.dp-list li >> nth=0');
+  await page.waitForFunction(() => /2021-01-15/.test(document.querySelector('#stamp')?.textContent ?? ''),
+    null, { timeout: 10_000 });
+  // Its 30 h record crosses a UTC day, so the span steps up to hold all of it.
+  expect(await page.$eval('#span', (el) => el.selectedOptions[0].textContent)).toMatch(/3 days/);
+  expect(await page.isVisible('#lifetime')).toBe(true);
+});
+
+test('a sealed buoy is badged in the list', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="drifters"]');
+  await page.fill('.dp-search', 'E2E-B');
+  await page.waitForTimeout(300);
+  expect(await page.locator('.dp-list li .dp-badge').count()).toBe(1);
+});
+
+test('playing draws the picked buoy\'s path, and it changes colour when the drogue goes', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="drifters"]');
+  await page.click('.dp-list li >> nth=0');                // E2E-A
+  await page.waitForTimeout(1500);
+  expect(await page.locator('path.drifter-trail').count()).toBe(0);   // nothing drawn yet
+
+  await page.click('#play');
+  // E2E-A loses its drogue at 06:00 on the 6th, a day into its record.
+  await page.waitForFunction(() => /2021-01-06 (0[7-9]|1\d|2\d)/.test(document.querySelector('#stamp')?.textContent ?? ''),
+    null, { timeout: 30_000 });
+  await page.click('#play');
+  await page.waitForTimeout(500);
+
+  const colours = await page.$$eval('path.drifter-trail', (els) => [...new Set(els.map((e) => e.getAttribute('stroke')))]);
+  expect(colours).toHaveLength(2);                          // drogued, then undrogued
+});
+
+/*
+  Picking a buoy whose record needs a coarser stride must still land on its first
+  fix. `setTime` left the window behind, and the tier switch then clamped the moment
+  back into the old window: a buoy first seen in March 2021, picked from a view of
+  1 Jan 2019, landed the clock on 1 Jan 2019. And the click must stay in the panel:
+  rebuilding the list mid-click let it through to the map ("Outside the data box.").
+*/
+test('picking a long-lived buoy lands on its first fix, and the click stays in the panel', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="drifters"]');
+  await page.fill('.dp-search', 'E2E-D');
+  await page.waitForTimeout(300);
+  await page.click('.dp-list li >> nth=0');
+  await page.waitForTimeout(2500);
+
+  expect(await page.textContent('#stamp')).toMatch(/2021-01-10 12:00/);
+  // Ten days needs more than a week, so the stride really did change.
+  expect(await page.$eval('#span', (el) => el.selectedOptions[0].textContent)).not.toMatch(/hour steps/);
+  expect(await page.textContent('#status')).not.toMatch(/Outside the data box/);
+  expect(await page.$eval('#point', (el) => el.classList.contains('visible'))).toBe(false);
+});

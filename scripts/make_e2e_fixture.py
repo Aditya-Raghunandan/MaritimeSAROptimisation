@@ -59,6 +59,45 @@ def run(args: list[str], what: str) -> None:
         raise SystemExit(f"{what} failed with exit code {proc.returncode}")
 
 
+def demo_drifters() -> tuple["pd.DataFrame", "pd.DataFrame"]:
+    """Three invented buoys in the demo box, shaped as `load_drifters` returns them.
+
+    Each exercises one thing the drifter layer must get right: A loses its drogue
+    part-way, so its trail changes colour; B is sealed and has a stretch far from a
+    real fix, so it is badged and partly dashed; C starts on the 15th, outside the
+    default one-day window, so only the search can find it; D runs ten days, so
+    picking it changes the wind tier as well as the span. The exporter is the real
+    one (`sar.viz.drifters.publish_tracks`), for the reason the forcing goes through
+    `sar.viz.archive`: a hand-written fixture would be a second opinion of the format.
+    """
+    import numpy as np
+    import pandas as pd
+
+    def buoy(bid, start, hours, lat, lon, seg, lost=None, far=()):
+        t = pd.date_range(start, periods=hours + 1, freq="h", tz="UTC")
+        gap = np.ones(len(t))
+        gap[list(far)] = 5.0
+        return pd.DataFrame({
+            "ID": bid, "time": t,
+            "lat": lat + np.linspace(0.0, 0.3, len(t)),
+            "lon": lon + np.linspace(0.0, 0.3, len(t)),      # 0-360, as loaded
+            "segment_id": seg,
+            "undrogued": (t >= pd.Timestamp(lost, tz="UTC")) if lost else False,
+            "tier_uncertain": False, "fix_gap_h": gap, "product": "hourly",
+        })
+
+    df = pd.concat([
+        buoy("E2E-A", "2021-01-05 06:00", 60, 26.3, 281.2, 0, lost="2021-01-06 06:00"),
+        buoy("E2E-B", "2021-01-08 00:00", 48, 26.5, 281.5, 1, far=(20, 21, 22)),
+        buoy("E2E-C", "2021-01-15 00:00", 30, 26.6, 281.3, 2),
+        # Ten days: long enough that picking it switches the wind to a coarser tier,
+        # which is the path that used to drag the clock back to the old window.
+        buoy("E2E-D", "2021-01-10 12:00", 240, 26.2, 281.6, 3),
+    ], ignore_index=True)
+    units = pd.DataFrame({"ID": ["E2E-A", "E2E-B"], "split": ["dev", "sealed"]})
+    return df, units
+
+
 def build(out: Path) -> None:
     if out.exists():
         # Rebuilt from scratch every time. Leaving stale stores behind is how a fixture
@@ -68,16 +107,22 @@ def build(out: Path) -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         raw = Path(tmp)
-        print(f"1/3  demo forcing -> {raw}")
+        print(f"1/4  demo forcing -> {raw}")
         run([sys.executable, str(REPO / "scripts" / "make_demo_forcing.py"),
              "--out", str(raw), "--days", str(DAYS)], "make_demo_forcing.py")
 
         for i, (product, tiers) in enumerate(TIERS.items(), start=2):
-            print(f"{i}/3  export {product} ({', '.join(tiers)}) -> {out}")
+            print(f"{i}/4  export {product} ({', '.join(tiers)}) -> {out}")
             tier_args = [arg for tier in tiers for arg in ("--tier", tier)]
             run([sys.executable, "-m", "sar.viz.archive",
                  "--data", str(raw), "--out", str(out),
                  "--product", product, *tier_args], f"sar.viz.archive --product {product}")
+
+    print(f"4/4  drifter tracks -> {out}")
+    from sar.viz.drifters import publish_tracks
+
+    drifters, units = demo_drifters()
+    publish_tracks(drifters, units, out)
 
     report(out)
 

@@ -144,6 +144,12 @@
         gap: 7px;
       }
       .controls { display: flex; align-items: center; gap: 10px; }
+      /* The slider and, over it, the selected drifter's lifetime (#50). */
+      .slider-wrap { position: relative; flex: 1; min-width: 120px; display: flex; align-items: center; }
+      #lifetime {
+        position: absolute; top: calc(50% + 5px); height: 3px; border-radius: 2px;
+        background: #ff5fa2; pointer-events: none;
+      }
       #time {
         flex: 1;
         accent-color: var(--accent);
@@ -571,6 +577,43 @@
       .u-legend .u-marker { border-color: var(--warm) !important; }
       .u-title { color: var(--ink-2); font-size: 11px; font-weight: 400; }
       .u-select { background: rgba(57, 135, 229, .18); }
+      /* The drifter list (#50). Top-right, under the layer control. */
+      .drifter-panel {
+        background: var(--surface-1); color: var(--ink); border: 1px solid var(--line);
+        border-radius: 8px; width: 320px; max-width: calc(100vw - 24px); font-size: 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, .35);
+      }
+      .dp-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+      .dp-title { font-weight: 600; font-size: 13px; }
+      .dp-sub { color: var(--ink-3); font-size: 11px; flex: 1; }
+      .dp-toggle { background: none; border: none; color: var(--ink-2); cursor: pointer; font-size: 15px; line-height: 1; }
+      .drifter-panel.collapsed .dp-body { display: none; }
+      .drifter-panel.collapsed .dp-head { border-bottom: none; }
+      .dp-body { padding: 8px 10px; }
+      .dp-search {
+        width: 100%; box-sizing: border-box; background: var(--surface-2); color: var(--ink);
+        border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit;
+      }
+      .dp-status { color: var(--ink-3); margin: 6px 0; font-size: 11px; }
+      /* Bounded by the screen too, so on a short window it does not run into the legends below. */
+      .dp-list { list-style: none; margin: 0; padding: 0; max-height: min(200px, 20vh); overflow-y: auto; }
+      .dp-list li { display: flex; align-items: center; gap: 6px; padding: 4px; border-radius: 4px; cursor: pointer; }
+      .dp-list li:hover, .dp-list li.hot { background: var(--surface-2); }
+      .dp-list li.selected { background: rgba(57, 135, 229, .28); }
+      .dp-id { font-variant-numeric: tabular-nums; }
+      .dp-dates { color: var(--ink-3); margin-left: auto; font-size: 11px; white-space: nowrap; }
+      .dp-tier { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+      .dp-drogued { background: #dfe7ef; }
+      .dp-undrogued { background: #ff5fa2; }
+      .dp-mixed { background: linear-gradient(90deg, #dfe7ef 50%, #ff5fa2 50%); }
+      .dp-uncertain { border: 1px dashed var(--ink-3); box-sizing: border-box; }
+      .dp-badge {
+        font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+        color: #121211; background: #ffd166; border-radius: 3px; padding: 0 4px;
+      }
+      .dp-key { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 11px; }
+      .dp-sw { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
+      .dp-dash { background: repeating-linear-gradient(90deg, var(--ink-2) 0 4px, transparent 4px 7px); }
     </style>
   </head>
   <body>
@@ -740,7 +783,10 @@
       <div class="controls">
         <button id="play" title="Play through the window (space)" aria-label="Play">&#9654;</button>
         <button id="win-back" class="win-step" title="Previous window" aria-label="Previous window">&#8249;</button>
-        <input id="time" type="range" min="0" max="0" value="0" step="1" />
+        <div class="slider-wrap">
+          <input id="time" type="range" min="0" max="0" value="0" step="1" />
+          <div id="lifetime" hidden></div>
+        </div>
         <button id="win-fwd" class="win-step" title="Next window" aria-label="Next window">&#8250;</button>
         <span id="window-label" title="The span the slider covers">&mdash;</span>
         <label class="tier-control" for="span">

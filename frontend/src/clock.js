@@ -159,6 +159,22 @@ export class Clock {
     for (const fn of this._listeners) fn(this.t);
   }
 
+  /**
+   * Go to a moment anywhere in the archive, and bring a window of `spanSeconds` with
+   * it, in one move.
+   *
+   * `setTime` alone leaves the window where it was, so a moment outside it is the
+   * next thing anything clamps: a tier switch calls `setStep`, which pulls `t` back
+   * into the OLD window before the new one is set. Clicking a buoy first seen in
+   * March 2021 from a view of 1 January 2019 landed the clock on 1 January 2019.
+   * Found 23 Sep.
+   */
+  jumpTo(when, spanSeconds) {
+    const t = Math.min(Math.max(when.getTime(), this.start.getTime()), this.end.getTime() - 1);
+    this.t = new Date(t);
+    return this.setWindowSpan(spanSeconds);
+  }
+
   onChange(fn) {
     this._listeners.add(fn);
     return () => this._listeners.delete(fn);
