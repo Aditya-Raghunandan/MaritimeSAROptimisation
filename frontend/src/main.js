@@ -748,17 +748,12 @@ async function start() {
     // ten, in the view that is the point of the project.
     bindLegend(resultantLegend({ maxSpeed: scale }), () => [resultant, resultantFlow]);
 
-    // Keep it on the same clock as everything else even while hidden, so
-    // switching it on shows the current moment rather than frame zero.
-    clock.onChange(() => {
-      for (const l of [resultant, resultantFlow]) {
-        if (l && map.hasLayer(l)) l.setFrame(clock.frameOf(axis));
-      }
-    });
-
+    // No frame is set here. `redraw()` sets it, and only once both the wind and
+    // the current for that moment are resident -- see the end of `redraw()`.
+    // Switching the layer on already triggers a redraw (the overlayadd handler
+    // above), which is what brings it to the current moment.
     map.on('overlayadd', (e) => {
       if (e.layer !== resultant && e.layer !== resultantFlow) return;
-      e.layer.setFrame(clock.frameOf(axis));
       setStatus(`${meta.label} — ${meta.caveat}`);
     });
     map.on('overlayremove', (e) => {
@@ -1134,6 +1129,32 @@ async function start() {
     const frame = clock.frameOf(axis);
     document.getElementById('stamp').textContent = clock.label();
 
+    /*
+      The current is on its own axis, so it gets its own frame from the shared
+      moment rather than reusing the wind's index. Wind is hourly and current
+      3-hourly; reusing the index would run the current at a third speed and
+      three times behind, and it would look entirely plausible while doing it.
+
+      Only fetched when a layer that needs it is on the map. The 3-hourly tier
+      is 4.3 GB, and nobody should download a chunk of it to render a layer that
+      is switched off.
+
+      AND ITS FETCH STARTS NOW, alongside the wind's, not after it. One chunk is
+      about 2.7 s from Hugging Face (measured 23 Sep: ~1.4 s of that before the
+      first byte), and awaiting the two one after the other made every jump a
+      ~5 s wait. An error is caught into a value here and reported below, so a
+      rejected fetch cannot go unhandled while the wind is still loading.
+    */
+    const shown = current
+      ? [currentRaster, currentQuiver, currentParticles].filter((l) => l && map.hasLayer(l))
+      : [];
+    const drift = [resultant, resultantFlow].filter((l) => l && map.hasLayer(l));
+    const needCurrent = Boolean(current && (shown.length || drift.length));
+    const cFrame = current ? clock.frameOf(current.axis) : null;
+    const currentJob = needCurrent && !current.layer.isResident(cFrame)
+      ? current.layer.ensure(cFrame).then(() => null, (err) => err)
+      : Promise.resolve(null);
+
     if (field && !field.isResident(frame)) {
       setStatus(`loading …`);
       try {
@@ -1152,34 +1173,40 @@ async function start() {
       particles.setFrame(frame);
     }
 
-    /*
-      The current is on its own axis, so it gets its own frame from the shared
-      moment rather than reusing the wind's index. Wind is hourly and current
-      3-hourly; reusing the index would run the current at a third speed and
-      three times behind, and it would look entirely plausible while doing it.
-
-      Only fetched when a current layer is actually on the map. The 3-hourly
-      tier is 4.3 GB, and nobody should download a chunk of it to render a
-      layer that is switched off.
-    */
-    if (current) {
-      const shown = [currentRaster, currentQuiver, currentParticles].filter((l) => l && map.hasLayer(l));
-      const resultantOn = [resultant, resultantFlow].some((l) => l && map.hasLayer(l));
-      if (shown.length || resultantOn) {
-        const cFrame = clock.frameOf(current.axis);
-        if (!current.layer.isResident(cFrame)) {
-          try {
-            await current.layer.ensure(cFrame);
-          } catch (err) {
-            setStatus(`current: ${err.message}`);
-          }
-          if (mine !== drawToken) return;
-        }
-        for (const l of shown) l.setFrame(cFrame);
-      }
+    if (needCurrent) {
+      const err = await currentJob;
+      if (mine !== drawToken) return;
+      if (err) setStatus(`current: ${err.message}`);
+      for (const l of shown) l.setFrame(cFrame);
     }
 
+    /*
+      THE DRIFT LAYERS DRAW LAST, once BOTH of their inputs are resident. They
+      used to be handed the new frame straight from the clock, before either
+      chunk had arrived: the arrows found nothing to draw, kept the previous
+      hour, and nothing told them again when the data landed. Paused on a new
+      day, or switched on while paused, the drift view stayed blank or stale
+      until somebody moved the slider. It is the bug #37 fixed for the current
+      layers, one list over. Found on the live site, 23 Sep.
+    */
+    if (resultantSource && drift.length && resultantSource.isResident(frame)) {
+      for (const l of drift) l.setFrame(frame);
+    }
+
+    if (playing) prefetchAhead(frame, needCurrent ? cFrame : null);
     if (pinned) showSeries(pinned);
+  }
+
+  /*
+    FETCH THE NEXT CHUNK BEFORE PLAYBACK REACHES IT. Playback awaits each
+    redraw, so without this it stalled ~2.7 s at every chunk boundary -- every
+    48 h of wind and every 24 h of current -- which is most of what "takes a
+    very long time to load" was. Only while playing: while scrubbing it would
+    fetch chunks nobody reaches and evict ones they will.
+  */
+  function prefetchAhead(frame, cFrame) {
+    if (field) field.source?.prefetchNext?.(frame);
+    if (current && cFrame !== null) current.layer.source?.prefetchNext?.(cFrame);
   }
   clock.onChange(() => {
     slider.value = String(clock.index);

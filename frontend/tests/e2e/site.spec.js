@@ -208,3 +208,60 @@ test('clicking the map fills the point panel', async ({ page }) => {
   const where = await page.textContent('#point-where');
   expect(where).toMatch(/\d+\.\d+\s*[NS],\s*\d+\.\d+\s*[EW]/);
 });
+
+/*
+  The drift arrows must paint once their data ARRIVES, not only when the clock
+  next moves. They were handed the new frame straight from the clock, before the
+  current's chunk had landed; they found nothing to draw, and nothing told them
+  again. Paused, or switched on while paused, the Drift view stayed blank until
+  the slider moved. Found on the live site, 23 Sep.
+
+  Reproduced offline by failing the current's first fetch -- the start-up
+  warm-up, as a dropped connection would -- and delaying the rest, so the current
+  is NOT resident when Drift is switched on. That is the state a new day's chunk
+  is in on the live site for the ~2.7 s Hugging Face takes to serve one.
+*/
+test('the drift arrows paint once their data arrives, even while paused', async ({ page }) => {
+  let failCurrent = true;
+  await page.route(/current_3-hourly\.zarr\/water_[uv]\/c\//, async (route) => {
+    if (failCurrent) return route.abort('connectionfailed');
+    await new Promise((r) => setTimeout(r, 800));
+    return route.fallback();
+  });
+
+  await page.goto('');
+  await ready(page);
+  failCurrent = false;
+
+  await page.click('button[data-preset="drift"]');
+  await page.waitForTimeout(2500);
+
+  expect(await paintedOn(page, 'canvas.leaflet-quiver-layer')).toBeGreaterThan(0);
+});
+
+/*
+  A click on land must say it is land. It used to answer "If someone were in the
+  water here ... leeway alone would carry them 208 m NNE in an hour" for a point
+  in North Carolina. The fixture's south-west corner, 26.00-26.20 N by
+  79.00-78.84 W, is land in its current field, so the click goes inside it.
+*/
+test('clicking on land says it is land, and gives no drift', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+
+  // The dashed study-box outline is drawn at the data bounds, 26-27 N by 79-78 W.
+  // Linear in latitude is close enough over one degree for a target 0.2 deg wide.
+  const box = await page.locator('path[stroke-dasharray="6,5"]').boundingBox();
+  const x = box.x + (-78.92 - -79.0) * box.width;
+  const y = box.y + (27.0 - 26.08) * box.height;
+  await page.mouse.click(x, y);
+  await page.waitForTimeout(800);
+
+  // The click landed where intended, or the rest of the test proves nothing. The
+  // read-out snaps to the nearest 0.25 deg wind cell, so 26.08 N 78.92 W shows as
+  // the corner cell; the drift sample itself is taken at the exact click.
+  expect(await page.textContent('#point-where')).toBe('26.00 N, 79.00 W');
+  expect(await page.textContent('#dr-head')).toBe('On land');
+  expect(await page.textContent('#dr-lead')).toMatch(/land in the current model/);
+  expect(await page.textContent('#dr-1h')).toBe('—');
+});

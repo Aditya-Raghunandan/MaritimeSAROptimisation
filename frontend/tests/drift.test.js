@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  ALPHA, bearingFrom, bearingTowards, compass, currentBand, driftBand, leewayDistance, leewayFractionOfCurrent, leewaySpeed, speed, summarise, sweepWidthMinutes,
+  ALPHA, bearingFrom, bearingTowards, compass, currentBand, driftBand, explain, leewayDistance, leewayFractionOfCurrent, leewaySpeed, speed, summarise, sweepWidthMinutes,
 } from '../src/drift.js';
 
 describe('ALPHA', () => {
@@ -171,3 +171,18 @@ describe('driftBand', () => {
     expect(driftBand(NaN)).toBe('—');
   });
 });
+
+describe('explain, over land', () => {
+  it('describes the wind as what it would do offshore, not here', () => {
+    const got = explain(10, 45, 1.8, 185, { overLand: true });
+    expect(got.lead).toMatch(/^Over open water/);
+    expect(got.caveat).toMatch(/no sea at this point/);
+    // No "current here" comparison: there is no current here.
+    expect(got.caveat).not.toMatch(/current/);
+  });
+
+  it('is unchanged at sea, so nothing else on the panel moves', () => {
+    expect(explain(10, 45, 1.8, 185).lead).toMatch(/^Wind alone would carry a drifter/);
+  });
+});
+

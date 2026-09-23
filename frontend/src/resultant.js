@@ -132,12 +132,18 @@ export class ResultantSource {
 
     if (this.current) {
       const [uc, vc] = this._currentAt(frame, this.grid.lat(j), this.grid.lon(i));
-      // A land cell is NaN in HYCOM. Adding it would wipe out the leeway term
-      // and blank the arrow, which reads as "no wind" rather than "no sea".
-      if (Number.isFinite(uc) && Number.isFinite(vc)) {
-        u += uc;
-        v += vc;
-      }
+      /*
+        NO CURRENT MEANS NO SEA, SO NO ARROW. HYCOM writes land as NaN. This used
+        to keep the leeway term on its own, on the worry that a blank would read
+        as "no wind". What it drew instead was drift arrows and streaks over
+        Florida, Cuba and Hispaniola, each saying a person there would be carried
+        a couple of hundred metres an hour. Wind over land is the wind layer's
+        job. This layer answers "where would a person in the water go", and on
+        land the answer is nowhere. Found by eye on the live site, 23 Sep.
+      */
+      if (!Number.isFinite(uc) || !Number.isFinite(vc)) return [NaN, NaN];
+      u += uc;
+      v += vc;
     }
     return [u, v];
   }
@@ -157,7 +163,7 @@ export class ResultantSource {
         return [s.u, s.v];
       } catch {
         // Off the current grid, or within one cell of land. Either way there is no
-        // current to add here, and the leeway term still stands on its own.
+        // current to add here, so `vector` draws no arrow.
         return [NaN, NaN];
       }
     }
@@ -179,6 +185,10 @@ export class ResultantSource {
    * caller can show which term dominates. `current` is null when the position has no
    * usable current, with `currentReason` saying why in words; the leeway term is still
    * returned, exactly as the leeway-only layer is still drawn.
+   *
+   * ON LAND the answer is different in kind, not a partial one: `onLand` is true and
+   * `u`, `v` are NaN, because nothing drifts from there. The leeway term is still
+   * reported, since the wind is real, but it is not a drift.
    */
   sampleAt(frame, lat, lon) {
     const [uw, vw] = this._windAt(frame, lat, lon);
@@ -187,27 +197,50 @@ export class ResultantSource {
     let current = null;
     let currentReason = 'the surface current is not published yet';
     let uncertainty = null;
+    let onLand = false;
 
     if (this.current) {
+      const k = this._currentFrame(frame);
       try {
-        const s = sampleField(this.current, this._currentFrame(frame), lat, lon);
+        const s = sampleField(this.current, k, lat, lon);
         current = [s.u, s.v];
         uncertainty = s.uncertainty;
         currentReason = null;
       } catch (err) {
-        currentReason = err.name === 'MissingCornerError'
-          ? 'within one cell of land, so the current cannot be interpolated here'
-          : 'outside the published current grid';
+        if (err.name === 'MissingCornerError' && this._landAt(k, lat, lon)) {
+          onLand = true;
+          currentReason = 'on land in the current model';
+        } else {
+          currentReason = err.name === 'MissingCornerError'
+            ? 'within one cell of land, so the current cannot be interpolated here'
+            : 'outside the published current grid';
+        }
       }
     }
 
-    const u = leeway[0] + (current ? current[0] : 0);
-    const v = leeway[1] + (current ? current[1] : 0);
+    const u = onLand ? NaN : leeway[0] + (current ? current[0] : 0);
+    const v = onLand ? NaN : leeway[1] + (current ? current[1] : 0);
     return {
       lat, lon, frame, u, v, leeway, current, currentReason, uncertainty,
       isPartial: current === null,
+      onLand,
       ...this.describe(),
     };
+  }
+
+  /**
+   * Whether the point itself is on HYCOM's land, not merely beside it.
+   *
+   * A MissingCornerError says one of the four surrounding grid points is land, which is
+   * as true of a point 1 km offshore as of one 100 km inland. The nearest cell tells the
+   * two apart. The coastline is HYCOM's, at 0.04 x 0.08 deg (about 4.5 x 8 km), so a
+   * point right at the shore can count as land: the model's coastline, not the map's.
+   */
+  _landAt(k, lat, lon) {
+    const cell = this.current.grid.cellAt(lat, lon);
+    if (!cell) return false;
+    const [u, v] = this.current.source.vector(k, cell.j, cell.i);
+    return !Number.isFinite(u) || !Number.isFinite(v);
   }
 
   /** The wind at a position, bilinear on its own grid, falling back to the cell. */

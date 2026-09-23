@@ -95,6 +95,8 @@ export class BufferSource {
 
   async ensure() { /* nothing to fetch: it is all here */ }
 
+  prefetchNext() { /* nothing to fetch ahead of, either */ }
+
   vector(frame, j, i) {
     const at = frame * this.frameSize + (j * this.nlon + i) * 2;
     return [this.data[at], this.data[at + 1]];
@@ -194,6 +196,19 @@ export class ZarrSource {
 
     this._inflight.set(c, job);
     return job;
+  }
+
+  /**
+   * Start fetching the chunk after the one holding `frame`, and do not wait for it.
+   *
+   * Fire and forget. A failed prefetch is nobody's error to see: the clock fetches that
+   * chunk again, normally and with its error reported, when it actually gets there. At
+   * the last chunk there is nothing ahead, so it does nothing.
+   */
+  prefetchNext(frame) {
+    const next = (this.chunkOf(frame) + 1) * this.chunkFrames;
+    if (!Number.isInteger(next) || next >= this.frames) return;
+    this.ensure(next).catch(() => {});
   }
 
   /**
