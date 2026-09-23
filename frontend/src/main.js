@@ -693,13 +693,25 @@ async function start() {
   // rather than a second copy of the same arithmetic in chart.js.
   let resultantSource = null;
   if (field) {
+    /*
+      GETTERS, NOT VALUES, and do not "simplify" them back. `applySpan` swaps
+      `field.source` and `current.layer.source` onto another published tier
+      whenever the span changes, and the page itself does this once at start-up
+      (it opens on the daily tier, then switches to hourly for the default day).
+      `source: field.source` copied the daily store in and kept it: the drift
+      arrows read daily data with hourly frame numbers, painted the wrong day,
+      and froze past hour 48 while the clock ran on. Reproduced on the real
+      archive 23 Sep; see resultant.js.
+    */
     const source = new ResultantSource(
-      { source: field.source, grid: field.grid, axis },
+      { get source() { return field.source; }, grid: field.grid, axis },
       // The second argument, at last. Everything else about this layer was
       // already the code that would be used -- passing it is the whole change,
       // and `isPartial` flips to false on its own, so the caveat the UI shows
       // stops saying the current is missing without anyone editing the wording.
-      current ? { source: current.layer.source, grid: current.layer.grid, axis: current.axis } : null,
+      current
+        ? { get source() { return current.layer.source; }, grid: current.layer.grid, axis: current.axis }
+        : null,
     );
     resultantSource = source;
     const meta = source.describe();
@@ -983,12 +995,35 @@ async function start() {
     if (name !== manifest._tier) {
       const source = await openTier(manifest._base, archive, name);
       // Mutated in place, not replaced: the resultant layer and the clock
-      // listeners closed over this object when they were wired.
+      // listeners closed over this object when they were wired. The resultant
+      // reads `field.source` through a getter for the same reason.
       axis.start = new Date(tier.start);
       axis.stepSeconds = tier.step_seconds;
       axis.frames = tier.frames;
       field.source = source;
       manifest._tier = name;
+    }
+
+    /*
+      THE CURRENT FOLLOWS THE SPAN TOO. It used to be opened once, at the tier
+      suited to the whole five-year archive -- daily -- and never switched, so
+      the default one-day view drew hourly wind over a single daily current
+      snapshot, and the drift arrows snapped to the next day's current at noon.
+      Same rule as the wind: the finest tier that fits the slider, which for the
+      current is 3-hourly up to 30 days and daily beyond.
+    */
+    if (current && current.archive && current.archive.tiers) {
+      const cName = chooseTier(current.archive.tiers, spanSeconds);
+      if (cName !== current.tierName) {
+        const cTier = current.archive.tiers[cName];
+        const cSource = await openTier(manifest._base, current.archive, cName);
+        current.axis.start = new Date(cTier.start);
+        current.axis.stepSeconds = cTier.step_seconds;
+        current.axis.frames = cTier.frames;
+        current.layer.source = cSource;
+        current.tierName = cName;
+        current.tier = cTier;
+      }
     }
 
     clock.setStep(tier.step_seconds);
@@ -1199,9 +1234,10 @@ async function start() {
 
   /*
     FETCH THE NEXT CHUNK BEFORE PLAYBACK REACHES IT. Playback awaits each
-    redraw, so without this it stalled ~2.7 s at every chunk boundary -- every
-    48 h of wind and every 24 h of current -- which is most of what "takes a
-    very long time to load" was. Only while playing: while scrubbing it would
+    redraw, so without this it stalled ~2.7 s at every chunk boundary. A chunk
+    is 48 frames of wind (two days at hourly) and 8 frames of current (one day
+    at 3-hourly, eight at daily), so at the default span the current is the
+    one crossing boundaries daily. Only while playing: while scrubbing it would
     fetch chunks nobody reaches and evict ones they will.
   */
   function prefetchAhead(frame, cFrame) {
