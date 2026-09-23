@@ -58,16 +58,39 @@ from sar.utils.geo import (
 LAT_S, LAT_N = 17.0, 36.0
 LON_W, LON_E = -82.0, -63.0
 
-# A gap longer than this starts a new in-box drifter segment. Same value
-# `sar.fetch.drifters.report()` uses, and it must stay the same: the 642
-# segments quoted in D018 were counted with it.
+# A gap longer than this starts a new in-box drifter segment. The hourly value
+# must stay the same: the 640 segments >= 48 h in D018 were counted with it.
 SEGMENT_GAP = pd.Timedelta("3h")
+
+# The same rule per product. The 6-hourly product's fixes are 6 h apart, so
+# "tolerate jitter, never a missing fix" is 7 h there; the 23 Sep audit counted
+# its 141 segments >= 48 h with that value.
+SEGMENT_GAPS = {"hourly": SEGMENT_GAP, "6-hourly": pd.Timedelta("7h")}
+
+# The hourly QC product's last timestamp, asked of the server on 2026-09-23.
+# 6-hourly fixes are used only from a week after it, so a buoy that crosses from
+# one product to the other leaves a gap rather than a seam: its two halves cannot
+# sit either side of a dev/sealed split while sharing water (#51).
+HOURLY_QC_END = pd.Timestamp("2022-10-31", tz="UTC")
+PRODUCT_BUFFER = pd.Timedelta("7D")
+
+# `drogue_lost_date` of 0 seconds -- 1970-01-01 -- is the server's own code for
+# "drogue status uncertain from the beginning" (its long_name says so). Read as a
+# date it would make a buoy undrogued since 1970. None in the box on 23 Sep; the
+# guard is for the next pull.
+DROGUE_UNCERTAIN = pd.Timestamp("1970-01-01", tz="UTC")
 
 # sst arrives in Kelvin carrying unmasked fill values -- the raw range observed
 # on 2026-09-10 was -76.9 to 1000 C. ~99.9 % of values are plausible, so a naive
 # mean looks ALMOST right, which is the worst kind of wrong. D013 needs Celsius
 # and this filter.
 SST_PLAUSIBLE_C = (-2.0, 40.0)
+
+# The two GDP products do not share SST units, read off each dataset's `sst`
+# attributes on 2026-09-23: Kelvin hourly, degrees C 6-hourly. Assuming Kelvin for
+# both put every 2023 value at about -247 C, where the plausibility mask removed
+# all 47,282 of them without a word.
+SST_OFFSET_TO_C = {"hourly": 273.15, "6-hourly": 0.0}
 
 ARRIVAL_D020 = "d020"
 ARRIVAL_PRE_D020 = "pre-d020"
@@ -264,29 +287,141 @@ def _erddap_units_row(path: Path) -> list[int]:
     return []
 
 
-def load_drifters(path: str | Path, *, in_box: bool = True) -> pd.DataFrame:
+def _as_utc(series: pd.Series) -> pd.Series:
+    """Datetimes in UTC whichever way they arrived: naive, offset, or already UTC."""
+    s = pd.to_datetime(series)
+    return s.dt.tz_localize("UTC") if s.dt.tz is None else s.dt.tz_convert("UTC")
+
+
+def infer_product(path: str | Path) -> str:
+    """Which GDP product a CSV holds, from the name `sar.fetch.drifters` gives it."""
+    return "6-hourly" if "_6hour_" in Path(path).name else "hourly"
+
+
+def _depth_m(text) -> float:
+    """'15 m' -> 15.0, '0 m' -> 0.0, and blank or ' m' -> NaN, as the server writes it."""
+    try:
+        return float(str(text).strip().removesuffix("m").strip())
+    except ValueError:
+        return float("nan")
+
+
+def load_buoys(source: str | Path | pd.DataFrame) -> pd.DataFrame:
+    """The per-buoy metadata table `sar.fetch.drifters` writes, in project conventions.
+
+    One row per buoy: `ID` as a string, dates in UTC, and `drogue_depth_m` as a
+    number parsed from the server's '15 m' / '0 m' strings. `location_type` is
+    absent from the 6-hourly product's table, and stays absent here.
+    """
+    if isinstance(source, pd.DataFrame):
+        buoys = source.copy()
+    else:
+        path = Path(source)
+        if not path.exists():
+            raise FileNotFoundError(f"no buoy table at {path}")
+        buoys = pd.read_csv(path)
+    if "ID" not in buoys.columns:
+        raise ValueError(f"buoy table has no ID column; got {list(buoys.columns)}")
+    buoys["ID"] = buoys["ID"].astype(str)
+    for col in ("deploy_date", "end_date", "drogue_lost_date"):
+        if col in buoys.columns:
+            buoys[col] = _as_utc(buoys[col])
+    buoys["drogue_depth_m"] = (buoys["DrogueCenterDepth"].map(_depth_m)
+                               if "DrogueCenterDepth" in buoys.columns else np.nan)
+    if buoys["ID"].duplicated().any():
+        dup = buoys.loc[buoys["ID"].duplicated(), "ID"].tolist()[:5]
+        raise ValueError(f"buoy table lists some buoys more than once, e.g. {dup}")
+    return buoys
+
+
+def apply_buoy_metadata(df: pd.DataFrame, buoys: pd.DataFrame) -> pd.DataFrame:
+    """Join the buoy table onto the fixes: drop Argos, and settle each buoy's tier.
+
+    GPS ONLY. 3 of 268 buoys in the box are Argos-tracked (23 Sep), with positions
+    far less accurate. A buoy with no `location_type` -- every buoy in the 6-hourly
+    product, which does not serve the field -- is kept, not assumed Argos.
+
+    NO DROGUE MEANS UNDROGUED AT EVERY FIX. 52 buoys were deployed with a drogue
+    depth of 0 m. The loss-date rule alone gets 43 of them right, because their
+    loss date equals their deployment date.
+
+    TIER-UNCERTAIN where the metadata disagrees: a 0 m drogue with a loss date
+    that is not the deployment date (7 buoys, 1-9 days later) or with no
+    deployment date (2), and the server's 1970 "uncertain from the beginning"
+    code. These stay in the data for tier-agnostic checks, but D018's
+    drogued-versus-undrogued comparison must leave them out, because its whole
+    argument rests on the label being right.
+    """
+    keep = ["ID", "drogue_depth_m", "deploy_date"]
+    if "location_type" in buoys.columns:
+        keep.append("location_type")
+    out = df.drop(columns=[c for c in keep if c != "ID" and c in df.columns])
+    out = out.merge(buoys[keep], on="ID", how="left", indicator=True)
+    if "location_type" not in out.columns:
+        out["location_type"] = np.nan
+
+    # Asked of the merge itself, not inferred from blanks: one real buoy (an SVPB)
+    # has a row whose depth and dates are all blank, and it is not missing.
+    unknown = out.loc[out["_merge"] == "left_only", "ID"].unique()
+    out = out.drop(columns="_merge")
+    if len(unknown):
+        warnings.warn(f"{len(unknown)} buoy(s) have no row in the buoy table, "
+                      f"e.g. {list(unknown[:3])}; their tier comes from the loss date alone",
+                      stacklevel=2)
+
+    out = out[out["location_type"] != "Argos"].copy()
+
+    lost = out["drogue_lost_date"] if "drogue_lost_date" in out.columns else pd.Series(pd.NaT, index=out.index)
+    no_drogue = out["drogue_depth_m"] == 0
+    sentinel = lost == DROGUE_UNCERTAIN
+    disagrees = no_drogue & (out["deploy_date"].isna() | (lost != out["deploy_date"]))
+
+    out["undrogued"] = out["undrogued"] | no_drogue
+    out.loc[sentinel, "undrogued"] = False
+    out["tier_uncertain"] = sentinel | disagrees
+    return out
+
+
+def load_drifters(path: str | Path, *, in_box: bool = True, product: str | None = None,
+                  buoys: str | Path | pd.DataFrame | None = None) -> pd.DataFrame:
     """Read a GDP drifter CSV into the project's conventions.
 
     The raw file keeps ERDDAP's own names and units. This applies, in one place,
-    every rule `sar.fetch.drifters.report()` established on 2026-09-10:
+    every rule established on 2026-09-10 and in the 23 Sep audit (#55):
 
         latitude/longitude -> lat/lon, and lon to 0-360   (D020, as for grids)
+        time               -> UTC
         sst Kelvin -> sst_c Celsius, masked to [-2, 40]   (fill values, D013)
         undrogued  -> bool, per OBSERVATION not per buoy  (D018)
-        segment_id -> contiguous in-box run, split on >3h gaps
+        fix_gap_h  -> hours between the real fixes either side, where served
+        product    -> "hourly" or "6-hourly"
+        segment_id -> contiguous in-box run, split on the product's gap rule
 
     `undrogued` is per observation because `drogue_lost_date` is a single date
     per buoy: the same buoy is drogued before it and undrogued after. Treating
     it as a buoy-level flag would mislabel every pre-loss hour of 209 buoys.
 
-    Returns ~926,533 rows for the full five-year pull, about 110 MB on disk.
+    `fix_gap_h` FLAGS, it does not drop. The hourly product interpolates across
+    raw-fix gaps of up to 12 h without leaving a hole, and 1.49 % of points sit
+    more than 3 h from a real fix. Dropping them would cut 168 tracks; a scorer
+    skips them as truth instead. NaN where the product does not serve `gap`.
+
+    `buoys`, the table `sar.fetch.drifters` writes beside each product, adds the
+    GPS-only filter, `drogue_depth_m`, `location_type` and `tier_uncertain`
+    (`apply_buoy_metadata`). Without it the tier comes from the loss date alone
+    and `tier_uncertain` is False everywhere, which is how the file loaded
+    before 23 Sep.
+
+    Returns ~926,533 rows for the full five-year hourly pull, about 110 MB on disk.
     """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"no drifter CSV at {path}")
+    product = product or infer_product(path)
+    if product not in SEGMENT_GAPS:
+        raise ValueError(f"unknown product {product!r}; expected one of {sorted(SEGMENT_GAPS)}")
 
-    df = pd.read_csv(path, skiprows=_erddap_units_row(path),
-                     parse_dates=["time", "drogue_lost_date"])
+    df = pd.read_csv(path, skiprows=_erddap_units_row(path))
     df = df.rename(columns={"latitude": "lat", "longitude": "lon"})
 
     missing = {"ID", "time", "lat", "lon"} - set(df.columns)
@@ -294,6 +429,9 @@ def load_drifters(path: str | Path, *, in_box: bool = True) -> pd.DataFrame:
         raise ValueError(f"drifter CSV missing {sorted(missing)}; got {list(df.columns)}")
 
     df["ID"] = df["ID"].astype(str)
+    df["time"] = _as_utc(df["time"])
+    if "drogue_lost_date" in df.columns:
+        df["drogue_lost_date"] = _as_utc(df["drogue_lost_date"])
 
     if in_box:
         # Applied on DISPLAY longitude, before the 0-360 conversion, because the
@@ -302,10 +440,11 @@ def load_drifters(path: str | Path, *, in_box: bool = True) -> pd.DataFrame:
         if df.empty:
             raise ValueError(f"no observations inside the study box in {path.name}")
 
+    df = df.copy()
     df["lon"] = to_store_longitude(df["lon"].to_numpy())
 
     if "sst" in df.columns:
-        sst_c = df["sst"] - 273.15
+        sst_c = df["sst"] - SST_OFFSET_TO_C[product]
         df["sst_c"] = sst_c.where(sst_c.between(*SST_PLAUSIBLE_C))
 
     if "drogue_lost_date" in df.columns:
@@ -313,12 +452,38 @@ def load_drifters(path: str | Path, *, in_box: bool = True) -> pd.DataFrame:
     else:
         df["undrogued"] = False
 
+    df["fix_gap_h"] = df["gap"] / 3600.0 if "gap" in df.columns else np.nan
+    df["product"] = product
+
+    if buoys is not None:
+        df = apply_buoy_metadata(df, load_buoys(buoys))
+    else:
+        df["tier_uncertain"] = False
+
     df = df.sort_values(["ID", "time"]).reset_index(drop=True)
-    gap = df.groupby("ID")["time"].diff() > SEGMENT_GAP
+    gap = df.groupby("ID")["time"].diff() > SEGMENT_GAPS[product]
     new_buoy = df["ID"] != df["ID"].shift()
     df["segment_id"] = (gap | new_buoy).cumsum() - 1
 
     return df
+
+
+def combine_products(hourly: pd.DataFrame, six_hourly: pd.DataFrame, *,
+                     hourly_end: pd.Timestamp = HOURLY_QC_END,
+                     buffer: pd.Timedelta = PRODUCT_BUFFER) -> pd.DataFrame:
+    """The hourly record, then the 6-hourly one from `buffer` after the hourly end.
+
+    The 6-hourly product covers the hourly years too, at lower resolution, so only
+    its fixes from `hourly_end + buffer` on are kept: the hourly product is the
+    better truth wherever it exists. Segment ids are renumbered so the two
+    products' ids cannot collide.
+    """
+    later = six_hourly[six_hourly["time"] >= hourly_end + buffer].copy()
+    if "segment_id" in later.columns and len(later) and len(hourly):
+        # Renumber from zero, then shift past the hourly ids.
+        later["segment_id"] = later["segment_id"].rank(method="dense").astype(int) - 1
+        later["segment_id"] += int(hourly["segment_id"].max()) + 1
+    return pd.concat([hourly, later], ignore_index=True)
 
 
 def open_box_means(paths: str | Path | Sequence[str | Path]) -> pd.DataFrame:
@@ -377,10 +542,11 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Open what the fetchers wrote, and describe it.")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--forcing", help="an era5_*.nc or hycom_*.nc file")
-    g.add_argument("--drifters", help="a gdp_hourly_*.csv file")
+    g.add_argument("--drifters", help="a gdp_hourly_*.csv or gdp_6hour_*.csv file")
     g.add_argument("--box-means", help="a derived/ directory or a single parquet")
     p.add_argument("--start", help="with --forcing: window start, inclusive")
     p.add_argument("--end", help="with --forcing: window end, EXCLUSIVE")
+    p.add_argument("--buoys", help="with --drifters: the gdp_*_buoys_*.csv written beside it")
     args = p.parse_args()
 
     if args.forcing:
@@ -399,18 +565,26 @@ def main() -> None:
         print(f"one timestep : {cells * 2 * 4 / 1024:.1f} KB as u/v float32")
 
     elif args.drifters:
-        df = load_drifters(args.drifters)
+        df = load_drifters(args.drifters, buoys=args.buoys)
+        print(f"product      : {df['product'].iloc[0]}")
         print(f"observations : {len(df):,}")
-        print(f"buoys        : {df.ID.nunique()}")
+        print(f"buoys        : {df.ID.nunique()}"
+              + (f"  (tracking: {df.drop_duplicates('ID').location_type.value_counts(dropna=False).to_dict()})"
+                 if args.buoys else "  (no --buoys: Argos not filtered, tier from loss date only)"))
         print(f"time         : {df.time.min()} -> {df.time.max()}")
         print(f"undrogued    : {100 * df.undrogued.mean():.1f} %  <- the leeway-capable set")
+        print(f"tier unsure  : {df.loc[df.tier_uncertain, 'ID'].nunique()} buoys, "
+              f"{int(df.tier_uncertain.sum()):,} fixes  <- keep out of the drogued/undrogued test")
+        if df.fix_gap_h.notna().any():
+            print(f"> 3 h to fix : {(df.fix_gap_h > 3).mean():.2%} of points (flagged, not dropped)")
         print(f"segments     : {df.segment_id.nunique():,} contiguous in-box runs")
-        # The `+ 1` counts OBSERVATIONS, not elapsed span: a run from 00:00 to
-        # 47:00 is 48 hourly fixes. `sar.fetch.drifters.report()` defines it that
-        # way and D018's cited "642 segments >= 48 h" was counted with it, so
-        # dropping the +1 silently reports 640 and makes the vault look wrong.
+        # DURATION, not observation count. This used to add 1 so it reproduced
+        # D018's "642 segments >= 48 h", but 48 hourly fixes span 47 hours and a
+        # 47 h track cannot verify a 48 h forecast: D018 was corrected to 640 on
+        # 18 Sep and `sar.viz.drifters` counts it this way. Duration also means the
+        # same thing for the 6-hourly product, where "+ 1" would have meant 1 h.
         hrs = df.groupby("segment_id").time.agg(
-            lambda t: (t.max() - t.min()).total_seconds() / 3600 + 1
+            lambda t: (t.max() - t.min()).total_seconds() / 3600
         )
         for h in (24, 48, 72):
             print(f"  >= {h:3d} h   : {int((hrs >= h).sum()):,} segments")
