@@ -77,11 +77,22 @@ describe('with a current, which is where we are going', () => {
     expect(d.caveat).toMatch(/will not\s+follow the same path/)
   })
 
-  it('a land cell in the current does not blank the arrow', () => {
-    // HYCOM is NaN over land. Adding it would wipe the leeway term too, and an
-    // absent arrow reads as "no wind" rather than "no sea".
+  it('a land cell in the current draws no arrow at all', () => {
+    // HYCOM is NaN over land. This used to keep the leeway term on its own, which
+    // drew drift arrows over Florida and Cuba saying a person there would move a
+    // couple of hundred metres an hour. Nobody drifts on land. Reversed 23 Sep.
     const withLand = new ResultantSource(wind(10, 0), current(NaN, NaN))
-    expect(withLand.vector(0, 0, 0)).toEqual([0.2, 0])
+    const [u, v] = withLand.vector(0, 0, 0)
+    expect(Number.isNaN(u)).toBe(true)
+    expect(Number.isNaN(v)).toBe(true)
+  })
+
+  it('without a current at all it is still leeway everywhere, and says so', () => {
+    // Land is only knowable from the current. With no current published there is
+    // no land mask, so the leeway-only layer keeps drawing and keeps its label.
+    const r = new ResultantSource(wind(10, 0), null)
+    expect(r.vector(0, 0, 0)).toEqual([0.2, 0])
+    expect(r.describe().label).toMatch(/leeway only/i)
   })
 })
 
@@ -196,8 +207,10 @@ describe('the bilinear flag', () => {
     const land = varying(CUR_GRID)
     land.source.vector = () => [NaN, NaN]
     const r = new ResultantSource(wind(10, 0), land, { bilinear: true })
-    // The leeway term survives: a coastal cell must not blank the arrow or the frame.
-    expect(r.vector(0, 0, 0)).toEqual([0.2, 0])
+    // One land cell must not take the frame down: it answers NaN, which the
+    // renderers skip, rather than throwing out of the draw loop.
+    expect(() => r.vector(0, 0, 0)).not.toThrow()
+    expect(Number.isNaN(r.vector(0, 0, 0)[0])).toBe(true)
   })
 })
 
@@ -245,12 +258,51 @@ describe('sampleAt, the point query', () => {
     expect(got.u).toBeCloseTo(0.2, 12)
   })
 
+  // Positions 0.4 of a cell past a grid line, so the nearest cell is unambiguous:
+  // j = i = 10, with the four corners at 10 and 11 on each axis.
+  const NEAR_LAT = CUR_GRID.lat0 + 10.4 * CUR_GRID.dlat
+  const NEAR_LON = CUR_GRID.lon0 + 10.4 * CUR_GRID.dlon
+  const landWhere = (isLand) => ({
+    ...varying,
+    source: {
+      ...varying.source,
+      vector: (f, j, i) => (isLand(j, i) ? [NaN, NaN] : varying.source.vector(f, j, i)),
+    },
+  })
+
   it('says in words why a coastal point has no current, rather than throwing', () => {
-    const land = { ...varying, source: { ...varying.source, vector: () => [NaN, NaN] } }
-    const got = new ResultantSource(wind(10, 0), land).sampleAt(0, LAT, LON)
+    // The nearest cell is water; one corner beside it is land. The point is at sea,
+    // so the leeway term still stands and the reason names the coast.
+    const coast = landWhere((j, i) => i === 11)
+    const got = new ResultantSource(wind(10, 0), coast).sampleAt(0, NEAR_LAT, NEAR_LON)
+    expect(got.onLand).toBe(false)
     expect(got.current).toBeNull()
-    expect(got.currentReason).toMatch(/land/)
-    expect(got.u).toBeCloseTo(0.2, 12)     // the leeway term still stands
+    expect(got.currentReason).toMatch(/within one cell of land/)
+    expect(got.u).toBeCloseTo(0.2, 12)
+  })
+
+  it('says a point ON land is land, and gives no drift there', () => {
+    // The nearest cell itself is land. A leeway-only answer here told people a
+    // person in North Carolina would drift 208 m an hour. Found 23 Sep.
+    const inland = landWhere((j, i) => i === 10)
+    const got = new ResultantSource(wind(10, 0), inland).sampleAt(0, NEAR_LAT, NEAR_LON)
+    expect(got.onLand).toBe(true)
+    expect(got.currentReason).toMatch(/on land/)
+    expect(Number.isNaN(got.u)).toBe(true)
+    expect(Number.isNaN(got.v)).toBe(true)
+    expect(got.leeway[0]).toBeCloseTo(0.2, 12)   // the wind is still real, and reported
+  })
+
+  it('a point far inland, with every cell land, is land too', () => {
+    const allLand = landWhere(() => true)
+    const got = new ResultantSource(wind(10, 0), allLand).sampleAt(0, NEAR_LAT, NEAR_LON)
+    expect(got.onLand).toBe(true)
+  })
+
+  it('open water is not land', () => {
+    const got = new ResultantSource(wind(10, 0), varying).sampleAt(0, NEAR_LAT, NEAR_LON)
+    expect(got.onLand).toBe(false)
+    expect(Number.isFinite(got.u)).toBe(true)
   })
 
   it('says so when the point is off the current grid', () => {

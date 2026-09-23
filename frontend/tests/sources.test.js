@@ -13,6 +13,8 @@ const fetched = [];
 // The mocked store's shape. Tests that vary `frames` set this too, because
 // ZarrSource deliberately refuses a store that disagrees with its manifest.
 const shape = { frames: 96 };
+// Flip on to make the mocked store fail, as a dropped connection would.
+const failing = { on: false };
 
 vi.mock('zarrita', () => {
   const slice = (start, stop) => ({ start, stop });
@@ -24,6 +26,7 @@ vi.mock('zarrita', () => {
     // One value per cell, encoding (frame, j, i) so a read can be checked
     // exactly: u = frame * 100 + j * 10 + i, and v = -u.
     get: async (arr, sel) => {
+      if (failing.on) throw new Error('network down');
       const [{ start, stop }] = sel;
       fetched.push({ name: arr.name, start, stop });
       const n = (stop - start) * 2 * 3;
@@ -87,7 +90,7 @@ describe('BufferSource', () => {
 });
 
 describe('ZarrSource', () => {
-  beforeEach(() => { fetched.length = 0; shape.frames = 96; });
+  beforeEach(() => { fetched.length = 0; shape.frames = 96; failing.on = false; });
 
   it('maps a frame to its chunk', () => {
     const s = new ZarrSource('http://x/w.zarr', tier());
@@ -207,6 +210,50 @@ describe('ZarrSource', () => {
   it('using it before open() is a clear error, not undefined', async () => {
     const s = new ZarrSource('http://x/w.zarr', tier());
     await expect(s.ensure(0)).rejects.toThrow(/open\(\) was never awaited/);
+  });
+});
+
+describe('prefetchNext', () => {
+  beforeEach(() => { fetched.length = 0; shape.frames = 96; failing.on = false; });
+
+  it('fetches the chunk AFTER the one holding the frame', async () => {
+    const s = await new ZarrSource('http://x/w.zarr', tier()).open();
+    s.prefetchNext(10);                 // frame 10 is in chunk 0, so chunk 1
+    await Promise.all(s._inflight.values());
+    expect(fetched.map((f) => [f.start, f.stop])).toEqual([[48, 96], [48, 96]]);
+  });
+
+  it('leaves the next frame resident, so playback does not stall on it', async () => {
+    const s = await new ZarrSource('http://x/w.zarr', tier()).open();
+    await s.ensure(40);
+    s.prefetchNext(40);
+    await Promise.all(s._inflight.values());
+    const before = fetched.length;
+    expect(s.isResident(48)).toBe(true);
+    await s.ensure(48);
+    expect(fetched).toHaveLength(before);   // no second fetch
+  });
+
+  it('does nothing at the last chunk', async () => {
+    const s = await new ZarrSource('http://x/w.zarr', tier()).open();
+    s.prefetchNext(60);                 // chunk 1 is the last of 96 frames
+    expect(fetched).toHaveLength(0);
+  });
+
+  it('swallows a failed fetch rather than raising an unhandled rejection', async () => {
+    const s = await new ZarrSource('http://x/w.zarr', tier()).open();
+    failing.on = true;
+    expect(() => s.prefetchNext(0)).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(s.isResident(48)).toBe(false);
+    failing.on = false;
+    await s.ensure(48);                 // and the normal path still works afterwards
+    expect(s.isResident(48)).toBe(true);
+  });
+
+  it('is a no-op on a flat buffer, which holds everything already', () => {
+    const b = new BufferSource(new Float32Array(2 * 3 * 2 * 4), GRID);
+    expect(() => b.prefetchNext(0)).not.toThrow();
   });
 });
 

@@ -1,0 +1,10 @@
+{
+  "attributes": {
+    "title": "INVENTED demo current, not HYCOM",
+    "source": "scripts/make_demo_forcing.py",
+    "sar_arrival_convention": "d020",
+    "sar_source_path": "C:\\Users\\aragh\\AppData\\Local\\Temp\\tmp2bihg1oh\\raw\\hycom_demo_2021-01-05-2021-01-06.nc"
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

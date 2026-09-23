@@ -9,11 +9,19 @@
  *
  * HOW THE SMOOTHNESS IS PRODUCED, AND WHAT IT IS NOT.
  *
- * The field is drawn into an offscreen canvas at GRID resolution -- one pixel
- * per cell, 77 x 77 -- and then blitted to the map scaled up, with the
- * browser's own bilinear filtering doing the interpolation. That is fast (one
- * putImageData and one drawImage per frame, whatever the zoom) and it is
- * exactly what the GPU is for.
+ * The field is drawn into an offscreen canvas at roughly grid resolution --
+ * one pixel per cell across, and one row per equal step of MERCATOR Y down --
+ * and then blitted to the map scaled up, with the browser's own bilinear
+ * filtering doing the interpolation. That is fast (one putImageData and one
+ * drawImage per frame, whatever the zoom) and it is exactly what the GPU is
+ * for.
+ *
+ * The rows are spaced in Mercator y rather than in latitude because the blit
+ * is a LINEAR stretch and the map is not linear in latitude. With uniform
+ * latitude rows the field was painted up to 44 km north of where it belongs in
+ * the middle of this box -- pinned correctly at 17 N and 36 N and wrong
+ * everywhere between. Measured on the live site against two coastlines; the
+ * numbers, and the model that predicts them, are in mercator.js.
  *
  * It is also INTERPOLATION FOR DISPLAY, and that distinction matters enough
  * that the vault has a note on it: "Two things called interpolation - sampling
@@ -32,6 +40,7 @@
 import L from 'leaflet';
 
 import { VIRIDIS, normaliseSpeed, ramp } from './colormap.js';
+import { mercatorRowMap, rowsFor } from './mercator.js';
 import { isFrameReady } from './sources.js';
 
 export const RasterLayer = L.Layer.extend({
@@ -60,6 +69,22 @@ export const RasterLayer = L.Layer.extend({
     // lets the two thirds of the box under 0.3 m/s recede so the Gulf Stream
     // is the only bright thing on the map.
     this._ramp = opts.ramp ?? VIRIDIS;
+
+    /*
+      The vertical mapping for the offscreen buffer, worked out HERE rather
+      than in `onAdd` because the grid is already known and `setFrame` can
+      legitimately arrive before the layer is on a map -- `main.js` warms the
+      first frame before any `addTo`, precisely because of the first-paint race
+      that #19 was. Computing this in `onAdd` would make that warm-up throw.
+
+      Its rows are uniform in MERCATOR Y, not in latitude, so there are a few
+      more of them than the grid has: 512 against 476 for the current, 82
+      against 77 for wind. That is what makes the single stretched `drawImage`
+      in `_draw` correct. Columns need no such treatment -- longitude IS linear
+      in Web Mercator. See mercator.js for the measurement behind all of it.
+    */
+    this._rows = rowsFor(field.grid);
+    this._rowMap = mercatorRowMap(field.grid, this._rows);
   },
 
   onAdd(map) {
@@ -71,10 +96,18 @@ export const RasterLayer = L.Layer.extend({
     map.getPanes().overlayPane.appendChild(this._canvas);
     this._canvas.style.zIndex = '150';
 
-    // The grid-resolution buffer. Allocated once; only its contents change.
+    /*
+      The buffer. Allocated once; only its contents change.
+
+      Its rows are uniform in MERCATOR Y, not in latitude, so there are a few
+      more of them than the grid has (512 against 476 for the current). That is
+      what makes the single stretched `drawImage` in `_draw` correct -- see
+      mercator.js for the measurement that made it necessary. Columns are still
+      one per cell, because longitude IS linear in Web Mercator.
+    */
     this._src = document.createElement('canvas');
     this._src.width = this._field.grid.nlon;
-    this._src.height = this._field.grid.nlat;
+    this._src.height = this._rows;
 
     map.on('move', this._reset, this);
     map.on('zoomend viewreset resize', this._reset, this);
@@ -94,6 +127,18 @@ export const RasterLayer = L.Layer.extend({
     this._frame = frame;
     this._paintSource();
     this._draw();
+  },
+
+  /**
+   * Change how strongly the field paints, after construction.
+   *
+   * A view can demote this layer from subject to context -- the Drift view does
+   * exactly that, so the resultant's thin green marks are not competing with a
+   * bright jet underneath them. Touches only the canvas, never the data.
+   */
+  setOpacity(opacity) {
+    this._opacity = opacity;
+    if (this._canvas) this._canvas.style.opacity = String(opacity);
   },
 
   setMaxSpeed(maxSpeed) {
@@ -126,17 +171,25 @@ export const RasterLayer = L.Layer.extend({
     if (!isFrameReady(this._field, this._frame)) return;
     const g = this._field.grid;
     const ctx = this._src.getContext('2d');
-    const img = ctx.createImageData(g.nlon, g.nlat);
+    const img = ctx.createImageData(g.nlon, this._rows);
 
-    for (let j = 0; j < g.nlat; j += 1) {
-      // The buffer is an image, so row 0 is the TOP, which is the NORTH edge.
-      // Our grid ascends in latitude (D020), so it is read from the far end.
-      // Getting this wrong flips the field about the equator and still looks
-      // like weather.
-      const row = g.nlat - 1 - j;
+    for (let r = 0; r < this._rows; r += 1) {
+      /*
+        Row 0 is the TOP of the image, which is the NORTH edge, while the grid
+        ascends in latitude (D020) -- so the rows are read from the far end.
+        Getting that backwards flips the field about the equator and still
+        looks like weather.
+
+        The inversion now lives inside `_rowMap`, which also does the part that
+        matters: rows are spaced evenly in MERCATOR Y rather than in latitude,
+        so the linear stretch in `_draw` lands every row where that latitude
+        actually is. Uniform-in-latitude rows put the field up to 44 km north
+        of the truth in the middle of this box -- mercator.js has the numbers.
+      */
+      const row = this._rowMap[r];
       for (let i = 0; i < g.nlon; i += 1) {
         const [u, v] = this._field.vector(this._frame, row, i);
-        const at = (j * g.nlon + i) * 4;
+        const at = (r * g.nlon + i) * 4;
         const c = ramp(this._ramp, normaliseSpeed(Math.hypot(u, v), this._maxSpeed));
         if (!c) { img.data[at + 3] = 0; continue; }   // NaN -> transparent, not calm
         img.data[at] = c[0];

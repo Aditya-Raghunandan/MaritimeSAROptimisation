@@ -18,6 +18,8 @@
  * looks like an answer.
  */
 
+import { SWEEP_WIDTH_M } from './geo.js';
+
 /**
  * Leeway coefficient, the fraction of wind speed a floating object makes
  * downwind.
@@ -109,9 +111,13 @@ export function summarise(series) {
  * three, so the sentence says whose contribution it is describing every time,
  * rather than relying on a footnote nobody reads.
  *
+ * `overLand` says the clicked point has no sea. The wind is still real there, so the
+ * sentence still describes it, but as what it would do offshore, and the comparison
+ * with "the current here" is dropped because there is no current here.
+ *
  * @returns {{lead: string, caveat: string}}
  */
-export function explain(windSpeed, towardsDeg, currentSpeed, sweepWidthM) {
+export function explain(windSpeed, towardsDeg, currentSpeed, sweepWidthM, { overLand = false } = {}) {
   const km = leewayDistance(windSpeed, 24) / 1000;
   // Two decimals, ALWAYS. This used to interpolate currentSpeed raw, which was
   // fine while it was the constant 1.8 and produced
@@ -124,8 +130,16 @@ export function explain(windSpeed, towardsDeg, currentSpeed, sweepWidthM) {
   const pct = frac === null ? null : frac * 100;
   const dir = compass(towardsDeg);
 
-  const lead = `Wind alone would carry a drifter about `
-    + `${km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`} ${dir} in a day.`;
+  const distance = km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
+
+  if (overLand) {
+    return {
+      lead: `Over open water, this wind would carry a drifter about ${distance} ${dir} in a day.`,
+      caveat: 'There is no sea at this point, so nothing here drifts.',
+    };
+  }
+
+  const lead = `Wind alone would carry a drifter about ${distance} ${dir} in a day.`;
 
   let caveat;
   if (pct === null) {
@@ -173,4 +187,48 @@ export function currentBand(speedMs) {
   if (speedMs < 1.0) return 'strong';
   if (speedMs < 1.6) return 'swift · jet edge';
   return 'Gulf Stream core';
+}
+
+/*
+  Sweep width comes from geo.js rather than being declared again here. It is
+  one physical constant and the whole point of this project is that it sets
+  both the track spacing and the probability map's cell size -- two copies of
+  it would be two things free to disagree, which is the failure this repository
+  has now hit in three separate places.
+
+  geo.js imports nothing either, so drift.js stays testable without a DOM.
+*/
+
+/**
+ * How long a drift at this speed takes to cross one sweep width.
+ *
+ * This is the comparison the whole project is built on: an effective visual
+ * sweep width for a person in the water is about 185 m, and the Gulf Stream
+ * runs 1-2.5 m/s, so a target crosses the full detectable width of a search
+ * track in a minute or two. Stating it in minutes rather than in metres per
+ * second is what makes that land -- "0.64 m/s" is a number, "out of the swept
+ * lane in five minutes" is the problem.
+ */
+export function sweepWidthMinutes(speedMs, sweepWidthM = SWEEP_WIDTH_M) {
+  if (!Number.isFinite(speedMs) || speedMs <= 0) return null;
+  return sweepWidthM / speedMs / 60;
+}
+
+/**
+ * Bands for a RESULTANT drift speed, phrased for the search problem.
+ *
+ * Not Beaufort, which is wind, and not `currentBand`, which describes the water
+ * on its own. What matters about a resultant is how fast the datum is leaving
+ * the place it was last seen, so the bands are cut where the search consequence
+ * changes rather than at round numbers.
+ */
+export function driftBand(speedMs) {
+  if (!Number.isFinite(speedMs)) return '—';
+  const minutes = sweepWidthMinutes(speedMs);
+  if (speedMs < 0.10) return 'nearly stationary · datum holds';
+  if (speedMs < 0.30) return `slow · a sweep width every ${Math.round(minutes)} min`;
+  if (speedMs < 0.60) return `moderate · a sweep width every ${Math.round(minutes)} min`;
+  if (speedMs < 1.00) return `fast · a sweep width every ${minutes.toFixed(1)} min`;
+  if (speedMs < 1.80) return `very fast · a sweep width every ${minutes.toFixed(1)} min`;
+  return `jet speed · a sweep width every ${minutes.toFixed(1)} min`;
 }
