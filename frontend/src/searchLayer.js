@@ -17,6 +17,8 @@
  *   datum error  a dotted line from the datum to where the buoy REALLY was then
  *   real path    where the buoy actually went, growing as the search plays (#71)
  *   marker       dropped at the datum, drifting with the current; the pattern follows it
+ *   planned      the rest of the pattern, faint, carried with the marker; a Parallel
+ *                Track's area is outlined too (#75)
  *   swept strip  the path flown, drawn at its TRUE width, 185.2 m, re-scaled on zoom
  *   helicopter   an icon at the current moment, pointing along its heading
  *   real buoy    where the buoy actually was at this moment
@@ -27,6 +29,7 @@
 import L from 'leaflet';
 
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
+import { offsetPosition } from './patterns.js';
 import { formatElapsed, helicopterAt, markerPositionAt, searchPath } from './searchRun.js';
 
 /** How often the buoy's real path is sampled for drawing, in seconds. */
@@ -163,6 +166,7 @@ export const SearchLayer = L.Layer.extend({
     if (!plan.free) this._renderPrediction(g, plan);
     this._renderBuoyPath(g, plan, s);
     if (!plan.free) this._renderDoctrine(g, plan, s);
+    if (!plan.free) this._renderPlanned(g, plan, s);
     this._renderFlown(g, plan, s);
 
     // The real target, where it actually was at this moment.
@@ -274,6 +278,34 @@ export const SearchLayer = L.Layer.extend({
         className: 'search-marker', interactive: false,
       }).addTo(g);
       tag([now.lat, now.lon], 'marker', SEARCH_COLOURS.marker).addTo(g);
+    }
+  },
+
+  /**
+   * The pattern still to fly, faint and dashed, where the marker is now -- so the shape is
+   * legible before the helicopter has drawn it. A Parallel Track also shows its area.
+   */
+  _renderPlanned(g, plan, s) {
+    // Before the drop the pattern sits on the datum; after it, it rides the marker.
+    const m = markerPositionAt(plan, Math.max(s, plan.arriveS)) ?? plan.datum;
+    const p = plan.pattern;
+    const pts = p.eastM.map((e, k) => offsetPosition(m.lat, m.lon, e, p.northM[k]));
+    L.polyline(pts, {
+      color: SEARCH_COLOURS.helicopter, weight: 1, opacity: 0.35, dashArray: '3 6',
+      className: 'search-planned', interactive: false,
+    }).addTo(g);
+    if (p.area) {
+      const len = p.area.lengthM;
+      const wid = p.area.widthM;
+      const b = (p.area.bearingDeg * Math.PI) / 180;
+      const u = [Math.sin(b), Math.cos(b)];
+      const v = [Math.cos(b), -Math.sin(b)];
+      const corner = (x, y) => offsetPosition(m.lat, m.lon, x * u[0] + y * v[0], x * u[1] + y * v[1]);
+      L.polygon([corner(-len / 2, -wid / 2), corner(len / 2, -wid / 2), corner(len / 2, wid / 2),
+        corner(-len / 2, wid / 2)], {
+        color: SEARCH_COLOURS.helicopter, weight: 1, opacity: 0.5, dashArray: '6 4', fill: false,
+        className: 'search-area', interactive: false,
+      }).addTo(g);
     }
   },
 

@@ -48,10 +48,6 @@ export function speedLabel(x) {
   return hit ? hit.label.replace(/ \(.*\)$/, '').replace(' of search', '') : `${x} s per second`;
 }
 
-const PATTERN_HELP = {
-  expanding_square: 'A square spiral out from the marker: even coverage.',
-  sector_search: 'Spokes through the marker: densest right beside it.',
-};
 
 export const SearchPanel = L.Control.extend({
   options: { position: 'topleft' },
@@ -83,9 +79,9 @@ export const SearchPanel = L.Control.extend({
     // Side by side, with one line of help for the one chosen: two wrapped descriptions
     // were what pushed the set-up past the bottom of a 900 px screen (#71).
     const patterns = Object.entries(PATTERNS).map(([k, p], n) => `
-      <label class="sp-pill" title="${PATTERN_HELP[k] ?? ''}"><input type="radio" name="sp-pattern" value="${k}"${n === 0 ? ' checked' : ''}>
-        <span>${p.label}</span></label>`).join('');
-    const firstHelp = PATTERN_HELP[Object.keys(PATTERNS)[0]] ?? '';
+      <label class="sp-pill" title="${p.label}: ${p.help}"><input type="radio" name="sp-pattern" value="${k}"${n === 0 ? ' checked' : ''}>
+        <span>${p.short}</span></label>`).join('');
+    const firstHelp = Object.values(PATTERNS)[0].help;
     const targets = Object.entries(TARGETS).map(([k, t], n) => `
       <label class="sp-choice"><input type="radio" name="sp-kind" value="${k}"${n === 0 ? ' checked' : ''}>
         <span>${t.label}</span></label>`).join('');
@@ -193,7 +189,7 @@ export const SearchPanel = L.Control.extend({
     }
     for (const d of root.querySelectorAll('details')) d.addEventListener('toggle', () => this.fit());
     for (const r of root.querySelectorAll('input[name="sp-pattern"]')) {
-      r.addEventListener('change', () => { q('.sp-pattern-help').textContent = PATTERN_HELP[r.value] ?? ''; });
+      r.addEventListener('change', () => { q('.sp-pattern-help').textContent = PATTERNS[r.value].help; });
     }
     q('.sp-toggle').addEventListener('click', () => {
       const collapsed = root.classList.toggle('collapsed');
