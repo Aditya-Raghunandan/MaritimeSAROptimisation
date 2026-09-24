@@ -59,7 +59,7 @@ t, glat, glon = ground_track(pattern, marker)           # every waypoint, plus e
 - `transit_time_s` refuses a datum beyond the H-60's 300 NM radius of action.
 - `marker_track` without a forcing backend raises; a still marker is `MarkerTrack.fixed`.
 
-## On the site (issues #64, #68, #69, #71)
+## On the site (issues #64, #68, #69, #71, #73)
 
 The **Search** preset flies the same doctrine against a real buoy. The panel, top-left, has two
 tabs: **Coast Guard search** and **Fly it yourself**. It is built to fit a 1366 × 768 screen
@@ -115,6 +115,32 @@ steer with **W A S D** or the **arrow keys**; two keys fly a diagonal.
 - If a buoy is chosen, passing within 92.6 m of it finds it, by the same closest-approach test the
   patterns get.
 - A finished flight can be scrubbed and replayed. A flight still in the air cannot be rewound.
+
+**One control** (#73). One button runs a search's whole life: *Fly the search → Pause → Resume →
+Replay*. In the Search view, the time bar's ▶ and Space do exactly the same, and they never play
+the site's hours there. *Change the set-up* clears the loaded search, because a new set-up is a new
+search.
+
+**The compass** (#73, top right, while a search or flight is loaded) shows:
+- north;
+- the helicopter's heading (orange);
+- the current (cyan) and the wind (amber) where the helicopter is, each pointing the way it is
+  going.
+
+Its readout gives the speeds, where the wind comes from, and the Beaufort force. Above 15 kt it
+adds the Addendum's caveat that the sweep width would be halved (Table H-10, limitation L19); this
+view does not apply that.
+
+**Close up** (#73). Flying yourself follows the helicopter at zoom 15 by default; the Search view
+allows zoom 16, where the strip is about 90 px wide. From zoom 13.5 a **sea texture** is drawn.
+- **Wave marks** lie across the wind and ride the real current, sped up by the playback rate.
+- **Whitecaps** follow the Beaufort force.
+
+It is decoration only and never an input to detection.
+
+**The drogue** (#73). When a buoy is chosen, step 4 says whether it still had its drogue at the
+report time. A drogued buoy follows the water, so *current only* fits it. An undrogued one feels
+the wind more, but less than a person.
 
 | Browser module | Mirrors | Held to Python by |
 |---|---|---|

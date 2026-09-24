@@ -129,11 +129,12 @@ const BASEMAPS = {
   */
   'Ocean (bathymetry)': L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
-    { maxZoom: 13, attribution: 'Esri, GEBCO, NOAA, National Geographic, and other contributors' },
+    // Up-scaled past its last native zoom rather than blank: the Search view goes to 16 (#73).
+    { maxNativeZoom: 13, maxZoom: 18, attribution: 'Esri, GEBCO, NOAA, National Geographic, and other contributors' },
   ),
   Satellite: L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    { maxZoom: 17, attribution: 'Esri, Maxar, Earthstar Geographics' },
+    { maxNativeZoom: 17, maxZoom: 18, attribution: 'Esri, Maxar, Earthstar Geographics' },
   ),
 };
 
@@ -175,7 +176,7 @@ const DEFAULT_BASEMAP = CARTO_KEY ? 'Dark (field first)' : 'Ocean (bathymetry)';
  */
 const LABELS = L.tileLayer(
   'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-  { maxZoom: 13, opacity: 0.9 },
+  { maxNativeZoom: 13, maxZoom: 18, opacity: 0.9 },
 );
 
 /**
@@ -1323,16 +1324,26 @@ async function start() {
     if (playing) playTimer = setTimeout(tick, 110);
   }
 
-  playBtn.addEventListener('click', () => {
+  /*
+    ONE PLAY BUTTON (#73). In the Search view ▶ and Space always mean the search -- fly
+    it, pause it, replay it, exactly as the panel's button -- and never the site's hours,
+    which is what made the three play buttons read as three different things.
+  */
+  function pressPlay() {
     if (timeOwner) timeOwner.togglePlay();
+    else if (searchView && searchView.claimsPlay()) searchView.playFromBar();
     else setPlaying(!playing);
-  });
+  }
+  playBtn.addEventListener('click', pressPlay);
   document.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && e.target === document.body) {
       e.preventDefault();
-      if (timeOwner) timeOwner.togglePlay();
-      else setPlaying(!playing);
+      pressPlay();
     }
+  });
+  map.on('overlayadd overlayremove', () => {
+    const search = searchView && searchView.claimsPlay();
+    playBtn.title = search ? 'Fly, pause or replay the search (space)' : 'Play through the window (space)';
   });
 
   /*
