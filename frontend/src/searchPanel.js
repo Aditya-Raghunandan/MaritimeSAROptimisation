@@ -17,6 +17,12 @@
  * a search is flying the four steps fold into a one-line summary with a Change button;
  * and the longer help and the key fold away until asked for.
  *
+ * ONE BUTTON (#73). There used to be three play buttons that meant different things:
+ * "Fly the search" started one, the panel's Play did nothing until one ran, and the time
+ * bar's ▶ played the site's hours. Now one primary button runs the whole life of a search
+ * -- Fly the search, Pause, Resume, Replay -- and the time bar's ▶ does the same thing
+ * while the Search view is open.
+ *
  * The DOM is built ONCE and kept. Leaflet calls onAdd every time the view is switched
  * back to, and rebuilding here made the panel say "Base: not placed" over a search that
  * had a base. The panel only collects choices and shows state; searchView.js does the work.
@@ -50,10 +56,12 @@ const PATTERN_HELP = {
 export const SearchPanel = L.Control.extend({
   options: { position: 'topleft' },
 
-  /** @param {{onUseBuoy, onChangeBuoy, onPlaceBase, onFly, onSpawn, onPlayPause, onReset}} handlers */
+  /** @param {{onUseBuoy, onChangeBuoy, onPlaceBase, onPrimary, onSpawn, onEdit, onReset}} handlers */
   initialize(handlers) {
     this._h = handlers;
     this._root = null;
+    this._tab = 'search';
+    this._state = 'idle';
   },
 
   onAdd(map) {
@@ -121,6 +129,7 @@ export const SearchPanel = L.Control.extend({
             <section>
               <h4><b>4</b>Where will it be when they arrive?</h4>
               ${targets}
+              <p class="sp-help sp-drogue" hidden></p>
               <details class="sp-more"><summary>What does this change?</summary>
                 <p>The <b>datum</b>: where the helicopter flies to and drops its marker. The marker
                   itself always drifts with the current alone, and the real buoy goes where it really
@@ -132,6 +141,8 @@ export const SearchPanel = L.Control.extend({
 
         <div class="sp-pane" data-pane="fly" hidden>
           <button type="button" class="sp-spawn">Spawn a helicopter on the map</button>
+          <label class="sp-follow"><input type="checkbox" class="sp-follow-box" checked>
+            Follow it close up, with the sea drawn</label>
           <p class="sp-help">Click where it should appear, then steer with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
             or the arrow keys; two keys fly a diagonal. 90 kt, and it sees 92.6 m either side.
             If a buoy is chosen, flying over it finds it.</p>
@@ -139,7 +150,6 @@ export const SearchPanel = L.Control.extend({
 
         <div class="sp-actions">
           <button type="button" class="sp-fly on">Fly the search</button>
-          <button type="button" class="sp-pause" disabled>Pause</button>
           <button type="button" class="sp-reset">Reset</button>
           <select class="sp-speed" aria-label="Playback speed">${speeds}</select>
         </div>
@@ -151,6 +161,7 @@ export const SearchPanel = L.Control.extend({
             <span><i class="sp-dash"></i>predicted drift, ending at the datum</span>
             <span><i class="sp-sw" style="background:${SEARCH_COLOURS.target}"></i>where the buoy really went</span>
             <span><i class="sp-dot" style="background:${SEARCH_COLOURS.marker}"></i>marker: drifts with the current</span>
+            <span><i class="sp-wave"></i>close up: the sea moves with the real current, whitecaps by wind force (decoration only)</span>
           </div>
         </details>
       </div>`;
@@ -163,7 +174,8 @@ export const SearchPanel = L.Control.extend({
     this._els = {
       target: q('.sp-target-text'), use: q('.sp-use'), change: q('.sp-change'), base: q('.sp-base-text'),
       move: q('.sp-move'),
-      place: q('.sp-place'), fly: q('.sp-fly'), pause: q('.sp-pause'), speed: q('.sp-speed'),
+      place: q('.sp-place'), fly: q('.sp-fly'), speed: q('.sp-speed'), drogue: q('.sp-drogue'),
+      follow: q('.sp-follow-box'),
       phase: q('.sp-phase'), result: q('.sp-result'), spawn: q('.sp-spawn'),
       summary: q('.sp-summary'), summaryText: q('.sp-summary-text'), setup: q('.sp-setup'),
     };
@@ -171,10 +183,10 @@ export const SearchPanel = L.Control.extend({
     this._els.change.addEventListener('click', () => this._h.onChangeBuoy());
     this._els.place.addEventListener('click', () => this._h.onPlaceBase());
     this._els.move.addEventListener('click', () => this._h.onPlaceBase());
-    this._els.fly.addEventListener('click', () => this._h.onFly(this.choices()));
-    this._els.pause.addEventListener('click', () => this._h.onPlayPause());
+    this._els.fly.addEventListener('click', () => this._h.onPrimary(this.choices()));
     this._els.spawn.addEventListener('click', () => this._h.onSpawn());
-    q('.sp-edit').addEventListener('click', () => this.expandSetup());
+    // Changing the set-up means a new search: the loaded one is cleared first.
+    q('.sp-edit').addEventListener('click', () => { this._h.onEdit(); this.expandSetup(); });
     q('.sp-reset').addEventListener('click', () => this._h.onReset());
     for (const tab of root.querySelectorAll('.sp-tab')) {
       tab.addEventListener('click', () => this.showTab(tab.dataset.tab));
@@ -202,8 +214,25 @@ export const SearchPanel = L.Control.extend({
   showTab(name) {
     for (const tab of this._root.querySelectorAll('.sp-tab')) tab.classList.toggle('on', tab.dataset.tab === name);
     for (const pane of this._root.querySelectorAll('.sp-pane')) pane.hidden = pane.dataset.pane !== name;
-    // Fly belongs to the Coast Guard search; it shares the row with Play and Reset.
-    this._els.fly.hidden = name !== 'search';
+    this._tab = name;
+    this._syncPrimary();
+    this.fit();
+  },
+
+  /** Which tab is open. A method, not a getter: L.Class.extend copies getters as values. */
+  currentTab() {
+    return this._tab;
+  },
+
+  /** Whether "Follow it close up" is ticked. */
+  follow() {
+    return this._els.follow.checked;
+  },
+
+  /** A line under step 4 about the chosen buoy's drogue, or nothing. */
+  setDrogueHint(text) {
+    this._els.drogue.hidden = !text;
+    this._els.drogue.textContent = text ?? '';
     this.fit();
   },
 
@@ -263,10 +292,22 @@ export const SearchPanel = L.Control.extend({
     this._els.spawn.textContent = mode === 'spawn' ? 'Click the map where it should appear…' : 'Spawn a helicopter on the map';
   },
 
-  /** state: 'idle' | 'armed' | 'playing' | 'paused' | 'done' */
+  /** state: 'idle' | 'armed' | 'playing' | 'paused' | 'done' -- the primary button follows it. */
   setFlying(state) {
-    this._els.pause.disabled = state === 'idle' || state === 'armed';
-    this._els.pause.textContent = state === 'playing' ? 'Pause' : (state === 'done' ? 'Replay' : 'Play');
+    this._state = state;
+    this._syncPrimary();
+  },
+
+  _syncPrimary() {
+    const b = this._els.fly;
+    const s = this._state;
+    const labels = {
+      idle: 'Fly the search', armed: 'Press a key to take off', playing: 'Pause', paused: 'Resume', done: 'Replay',
+    };
+    b.textContent = labels[s] ?? 'Fly the search';
+    b.disabled = s === 'armed';
+    // Idle on the fly-it-yourself tab there is nothing to start: Spawn does that.
+    b.hidden = s === 'idle' && this._tab === 'fly';
   },
 
   setPhase(text) { this._els.phase.textContent = text; },

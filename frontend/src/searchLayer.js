@@ -155,7 +155,8 @@ export const SearchLayer = L.Layer.extend({
         radius: 6, color: SEARCH_COLOURS.target, weight: 1.5, fill: false, dashArray: '2 3',
         className: 'search-lkp', interactive: false,
       }).addTo(g);
-      tag([lkp.lat, lkp.lon], 'last known position', SEARCH_COLOURS.target).addTo(g);
+      // To the left: the buoy is usually still near it, and its own label goes right.
+      tag([lkp.lat, lkp.lon], 'last known position', SEARCH_COLOURS.target, 'search-tag-left').addTo(g);
     }
     if (!plan) return;
 

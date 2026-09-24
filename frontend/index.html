@@ -672,7 +672,28 @@
         .sp-pattern-help, .sp-more { display: none; }
         .sp-body { gap: 3px !important; }
         .search-panel section { padding-bottom: 3px; gap: 2px; }
+        .search-panel h4 { font-size: 11.5px; }
+        .sp-tab { padding: 3px 8px; }
+        .sp-drogue { font-size: 10.5px; }
       }
+      /* The compass (#73): top-right, under the layer control. */
+      .search-compass {
+        background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+        width: 188px; font-size: 10.5px; color: var(--ink-2); box-shadow: 0 4px 16px rgba(0, 0, 0, .35);
+        display: flex; flex-direction: column; align-items: center; gap: 3px;
+      }
+      .search-compass .cp-lines { align-self: stretch; display: flex; flex-direction: column; gap: 1px; }
+      .search-compass .cp-caveat { color: #ffb27a; font-size: 10px; align-self: stretch; }
+      .search-compass .cp-caveat[hidden] { display: none; }
+      .search-compass .cp-key { color: var(--ink-3); font-size: 9.5px; }
+      .search-compass .cp-key i { display: inline-block; width: 9px; height: 3px; margin: 0 3px 0 5px; vertical-align: middle; }
+      .sp-follow { display: flex; gap: 6px; align-items: center; color: var(--ink-2); font-size: 11.5px; cursor: pointer; }
+      .sp-follow input { accent-color: #ff6b35; }
+      .sp-drogue { color: #9ad1ff !important; }
+      .sp-drogue[hidden] { display: none; }
+      .sp-wave { display: inline-block; width: 14px; height: 6px; margin-right: 4px; vertical-align: middle;
+        background: repeating-linear-gradient(90deg, rgba(210, 240, 255, .6) 0 3px, transparent 3px 6px); border-radius: 3px; }
+      .search-tag-left span { display: inline-block; transform: translate(calc(-100% - 22px), 0); }
       /* The time bar while a search owns it (#69): its phases under the slider. */
       #time.searching { accent-color: #ff6b35; }
       #search-phases {

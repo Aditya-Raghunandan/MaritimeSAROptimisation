@@ -31,10 +31,12 @@
  * sequences it, loads data and animates.
  */
 
-import { positionAt } from './drifters.js';
+import { Compass } from './compass.js';
+import { positionAt, undroguedAt } from './drifters.js';
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
 import { PATTERNS } from './patterns.js';
 import { NM_M, ON_SCENE_WINDOW_S, distanceM, transitTimeS } from './platform.js';
+import { OceanLayer } from './oceanLayer.js';
 import { resultantSampler } from './pointDrift.js';
 import { SearchLayer } from './searchLayer.js';
 import { SearchPanel, speedLabel } from './searchPanel.js';
@@ -54,10 +56,12 @@ const MOMENT_MS = 250;
 
 /*
   CLOSE ENOUGH TO SEE THE STRIP. The site stops at zoom 11, where 185 m is under three
-  pixels; the search lifts that to 13 while it is open, where the strip is about eleven
-  pixels wide. 13, not more: the ocean basemap has no tiles past it.
+  pixels; the search lifts that to 16 while it is open -- the strip is about 11 px wide at
+  13 and 90 px at 16. Basemaps up-scale their last native zoom past that rather than going
+  blank (main.js). Flying yourself follows the helicopter at 15 (#73).
 */
-const SEARCH_MAX_ZOOM = 13;
+const SEARCH_MAX_ZOOM = 16;
+const FOLLOW_ZOOM = 15;
 
 const PHASES = {
   ready: 'on the ground: airborne within 30 minutes (B-0)',
@@ -93,6 +97,11 @@ function utc(ms) {
 export function createSearchView(deps) {
   const { map, setStatus, timeBar } = deps;
   const layer = new SearchLayer();
+  const compass = new Compass();
+  const ocean = new OceanLayer();
+  // The forcing where the helicopter is, for the compass and the sea. Reads the site's
+  // store at every call, so it follows a tier switch, and answers null until loaded.
+  const sampleHere = resultantSampler(deps.resultantSource, deps.frameOf);
 
   let placing = null;          // 'base' | 'spawn' | null
   let base = null;
@@ -104,10 +113,10 @@ export function createSearchView(deps) {
   let datumErr = null;
   let targetAt = null;
   const held = new Set();
-  const anim = { s: 0, raf: null, last: null, drawn: 0, moment: 0, state: 'idle', zoomed: false };
+  const anim = { s: 0, raf: null, last: null, drawn: 0, moment: 0, state: 'idle', zoomed: false, rate: 0 };
 
   const panel = new SearchPanel({
-    onUseBuoy, onChangeBuoy, onPlaceBase, onFly, onSpawn, onPlayPause: togglePlay, onReset,
+    onUseBuoy, onChangeBuoy, onPlaceBase, onPrimary, onSpawn, onEdit: () => reset(), onReset,
   });
 
   // The panel is part of the layer: it shows exactly when the layer does.
@@ -116,10 +125,12 @@ export function createSearchView(deps) {
     const on = map.hasLayer(layer);
     if (on && !panel._map) {
       panel.addTo(map);
+      map.addLayer(ocean);
       map.setMaxZoom(Math.max(siteMaxZoom, SEARCH_MAX_ZOOM));
     } else if (!on && panel._map) {
       reset();
       map.removeControl(panel);
+      if (map.hasLayer(ocean)) map.removeLayer(ocean);
       map.setMaxZoom(siteMaxZoom);
       setPlacing(null);
     }
@@ -205,6 +216,11 @@ export function createSearchView(deps) {
       + (buoy.sealed ? ' · sealed: fine to watch, not to tune on' : ''), true);
     describeBase();
     layer.setTarget(target.lkp);
+    // Whether it still has its drogue then: that decides how much the wind moves it.
+    const und = undroguedAt(track, reportMs);
+    panel.setDrogueHint(und === null ? null : (und
+      ? 'Drogue lost by then: the wind moves it more than a drogued buoy, less than a person.'
+      : 'Still drogued then (a sea anchor 15 m down): it follows the water, so "current only" fits.'));
     // The list has done its job. Hiding the drifter layer also removes its second copy of
     // the buoy, which moved on the site clock while the search drew its own.
     deps.showDrifters(false);
@@ -215,6 +231,7 @@ export function createSearchView(deps) {
     reset();
     target = null;
     layer.setTarget(null);
+    panel.setDrogueHint(null);
     panel.setTarget('Pick a buoy in the Drifters list and move the clock to when it is reported missing.', false);
     describeBase();
     deps.showDrifters(true);
@@ -249,6 +266,19 @@ export function createSearchView(deps) {
       setStatus('Helicopter ready: steer with W A S D or the arrow keys.');
     }
     return true;
+  }
+
+  /**
+   * The primary button: fly a search when none is loaded, else play, pause or replay it.
+   * The time bar's ▶ comes here too while the Search view is open.
+   */
+  function onPrimary(choices) {
+    if (plan) { togglePlay(); return; }
+    if (panel.currentTab() === 'fly') {
+      setStatus('Spawn a helicopter first: press "Spawn a helicopter on the map", then click the map.');
+      return;
+    }
+    onFly(choices);
   }
 
   /* ---------------------------------------------------------------- a doctrinal search */
@@ -313,7 +343,11 @@ export function createSearchView(deps) {
     flight = new ManualFlight(plan, targetAt);
     layer.setPlan(plan, targetAt, null, { flight });
     panel.showTab('fly');
-    if (map.getZoom() < 12) map.setView([at.lat, at.lon], 12);
+    // Close up and following, or just in view, as the tick-box says.
+    if (panel.follow()) map.setView([at.lat, at.lon], FOLLOW_ZOOM, { animate: false });
+    else if (map.getZoom() < 12) map.setView([at.lat, at.lon], 12);
+    // For the compass and the sea: loaded in the background, shown once it lands.
+    loadForcing(plan.reportMs).catch(() => {});
     // A person needs time to steer: past 45 s per second the helicopter crosses the whole
     // area a pattern would cover in a couple of seconds.
     if (panel.speedX() > 45) panel.setSpeed(15);
@@ -328,6 +362,7 @@ export function createSearchView(deps) {
 
   function ownTime(bands) {
     timeBar.take({ seek, togglePlay }, { endS: plan.endS, bands });
+    if (!compass._map) compass.addTo(map);
   }
 
   /** Where the search can play to: the result if found, else the end of the window. */
@@ -360,14 +395,26 @@ export function createSearchView(deps) {
   function render(s, force = false) {
     const now = performance.now();
     layer.setTime(s);
-    // A helicopter flown by hand crosses a screen in a few minutes: keep it in view.
+    // A helicopter flown by hand crosses a screen in a few minutes: follow it close up,
+    // or at least keep it clear of the panel on the left and the legends on the right.
     if (mode === 'free' && live()) {
       const p = flight.position();
-      // Clear of the search panel on the left and the legends on the right, not just the edge.
-      map.panInside([p.lat, p.lon], {
-        paddingTopLeft: [400, 160], paddingBottomRight: [360, 220], animate: false,
-      });
+      if (panel.follow()) map.setView([p.lat, p.lon], map.getZoom(), { animate: false });
+      else {
+        map.panInside([p.lat, p.lon], {
+          paddingTopLeft: [400, 160], paddingBottomRight: [360, 220], animate: false,
+        });
+      }
     }
+    // The compass and the sea read the forcing where the helicopter is now.
+    const h = mode === 'free'
+      ? (s >= flight.s ? flight.position() : flight.positionAt(s))
+      : helicopterAt(plan, Math.min(s, plan.endS));
+    const here = sampleHere(plan.reportMs + s * 1000, h.lat, h.lon);
+    const current = here && here.current ? here.current : null;
+    const wind = here && here.wind ? here.wind : null;
+    compass.update({ heading: h.heading, current, wind });
+    ocean.setConditions({ current, wind, rate: anim.state === 'playing' ? anim.rate : 0 });
     timeBar.update(s, label(s), anim.state === 'playing');
     if (force || now - anim.moment >= MOMENT_MS) {
       anim.moment = now;
@@ -418,12 +465,14 @@ export function createSearchView(deps) {
     const speed = panel.speedX();
 
     if (live()) {
+      anim.rate = speed;
       flight.advance(dt * speed, headingFromKeys(held));
       anim.s = flight.s;
     } else {
       // Launch and transit fast-forward to about eight seconds (three at the quick look).
       const rate = mode === 'pattern' && anim.s < plan.arriveS
         ? Math.max(300, plan.arriveS / (speed >= 600 ? 3 : 8)) : speed;
+      anim.rate = rate;
       anim.s = Math.min(anim.s + dt * rate, stopAt());
     }
 
@@ -524,6 +573,8 @@ export function createSearchView(deps) {
     panel.setPhase('');
     panel.setResult('');
     panel.expandSetup();
+    if (compass._map) map.removeControl(compass);
+    ocean.setConditions({ rate: 0 });
     if (owned) timeBar.release();
   }
 
@@ -532,5 +583,20 @@ export function createSearchView(deps) {
     setStatus('Search reset.');
   }
 
-  return { layer, panel, consumeClick };
+  /** Whether the time bar's ▶ belongs to the search: whenever the Search view is open. */
+  function claimsPlay() {
+    return map.hasLayer(layer);
+  }
+
+  /** The time bar's ▶, in the Search view: the same as the primary button. */
+  function playFromBar() {
+    if (!plan && panel.currentTab() === 'search' && (!target || !base)) {
+      setStatus(target ? 'Place the base, then ▶ flies the search.'
+        : 'Choose who is missing and place the base, then ▶ flies the search.');
+      return;
+    }
+    onPrimary(panel.choices());
+  }
+
+  return { layer, panel, consumeClick, claimsPlay, playFromBar };
 }
