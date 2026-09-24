@@ -834,7 +834,8 @@ async function start() {
     real buoy -- the doctrinal searcher the paper compares against, on the map. It
     needs a target (a drifter) and the drift field (for the datum and the marker),
     so without either the placeholder stays. All of its logic is in searchRun.js;
-    searchView.js sequences it on its own seconds-long clock.
+    searchView.js sequences it. While a search is loaded it owns the time bar
+    (`searchBar`, below): one clock for the search, the fields and the buoy (#69).
   */
   let searchView = null;
   if (drifterLayer && resultantSource) {
@@ -851,7 +852,17 @@ async function start() {
       resultantSource,
       frameOf,
       prepareHourly: (ms) => prepareHourly(ms),
-      collapseDrifterList: () => drifterPanel.setCollapsed(true),
+      showDrifters: (on) => {
+        if (on && !map.hasLayer(drifterLayer)) map.addLayer(drifterLayer);
+        else if (!on && map.hasLayer(drifterLayer)) map.removeLayer(drifterLayer);
+      },
+      // Called only once a search runs, long after `searchBar` below exists.
+      timeBar: {
+        take: (owner, opts) => searchBar.take(owner, opts),
+        update: (s, text, isPlaying) => searchBar.update(s, text, isPlaying),
+        release: () => searchBar.release(),
+      },
+      setMoment: (ms) => clock.setTime(new Date(ms)),
       setStatus,
     });
     overlays[entry('Search — Coast Guard helicopter', 'fly a pattern to find a buoy')] = searchView.layer;
@@ -926,6 +937,8 @@ async function start() {
       // The drifters stay on so a target can be picked from the list; the current
       // dimmed underneath, because the marker the pattern follows drifts on it.
       layers: () => [currentRaster, drifterLayer, searchView.layer],
+      // Hidden once a target is chosen, and still this view.
+      optional: () => [drifterLayer],
     }] : []),
     {
       id: 'clean',
@@ -1017,7 +1030,8 @@ async function start() {
   map.on('overlayadd overlayremove', () => {
     const current_ = PRESETS.find((preset) => {
       const want = new Set(preset.layers().filter(Boolean));
-      return ALL_FIELD_LAYERS().every((l) => want.has(l) === map.hasLayer(l));
+      const optional = new Set((preset.optional ? preset.optional() : []).filter(Boolean));
+      return ALL_FIELD_LAYERS().every((l) => optional.has(l) || want.has(l) === map.hasLayer(l));
     });
     for (const btn of presetBar.querySelectorAll('button')) {
       btn.classList.toggle('on', Boolean(current_) && btn.dataset.preset === current_.id);
@@ -1026,10 +1040,15 @@ async function start() {
 
   applyPreset(PRESETS[0]);
 
+  // Declared before anything that reads it: a search that owns the time bar (#69).
+  let timeOwner = null;
   const slider = document.getElementById('time');
   clock.setWindowSpan(null);   // replaced below once the span control is wired
   slider.max = String(clock.steps - 1);
-  slider.addEventListener('input', () => clock.setIndex(Number(slider.value)));
+  slider.addEventListener('input', () => {
+    if (timeOwner) timeOwner.seek(Number(slider.value));
+    else clock.setIndex(Number(slider.value));
+  });
 
   /*
     TIME RESOLUTION. The archive is published at several strides of the same
@@ -1052,6 +1071,7 @@ async function start() {
 
   /** Re-point the slider at the clock's current window. */
   function syncSlider() {
+    if (timeOwner) return;   // a search is drawing the bar (#69)
     slider.max = String(clock.steps - 1);
     slider.value = String(clock.index);
     if (windowLabel) windowLabel.textContent = clock.windowLabel();
@@ -1202,7 +1222,7 @@ async function start() {
     if (lifetimeEl) {
       const bar = selectedDrifter
         && lifetimeBar(selectedDrifter.startMs, selectedDrifter.endMs, ws, we);
-      lifetimeEl.hidden = !bar;
+      lifetimeEl.hidden = Boolean(timeOwner) || !bar;
       if (bar) {
         lifetimeEl.style.left = `${bar.left * 100}%`;
         lifetimeEl.style.width = `${bar.width * 100}%`;
@@ -1287,13 +1307,84 @@ async function start() {
     if (playing) playTimer = setTimeout(tick, 110);
   }
 
-  playBtn.addEventListener('click', () => setPlaying(!playing));
+  playBtn.addEventListener('click', () => {
+    if (timeOwner) timeOwner.togglePlay();
+    else setPlaying(!playing);
+  });
   document.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && e.target === document.body) {
       e.preventDefault();
-      setPlaying(!playing);
+      if (timeOwner) timeOwner.togglePlay();
+      else setPlaying(!playing);
     }
   });
+
+  /*
+    ONE CLOCK (#69). While a search is loaded it OWNS this bar, because two clocks on one
+    screen disagreed: the bar stood still while the helicopter flew, and Play moved the
+    site's copy of the buoy while the search drew its own. So the search takes the bar:
+
+      the slider   spans the search, in seconds after the report, and scrubs it
+      Play/Space   play and pause the search, not the site
+      the label    says where the search is and how fast it is going
+      the band     under the slider marks call-to-launch, flying out, and on scene
+      the clock    is moved to the search's moment, so the header, the wind and current
+                   and the drifter layer all show that instant
+
+    The span control and the window arrows are disabled meanwhile: changing the tier
+    under a running search is the kind of swap that froze the drift view on 23 Sep.
+    `release` hands the bar back at the moment the search had reached.
+  */
+  const phaseBand = document.getElementById('search-phases');
+
+  function showPlayIcon(on) {
+    playBtn.innerHTML = on ? '&#10073;&#10073;' : '&#9654;';
+    playBtn.classList.toggle('on', on);
+    playBtn.setAttribute('aria-label', on ? 'Pause' : 'Play');
+  }
+
+  const searchBar = {
+    take(owner, { endS, bands }) {
+      setPlaying(false);
+      timeOwner = owner;
+      slider.min = '0';
+      slider.max = String(Math.max(1, Math.ceil(endS)));
+      slider.step = '1';
+      slider.classList.add('searching');
+      for (const el of [spanSelect, winBack, winFwd]) if (el) el.disabled = true;
+      if (lifetimeEl) lifetimeEl.hidden = true;
+      if (phaseBand) {
+        let from = 0;
+        phaseBand.innerHTML = bands.map((b) => {
+          const width = ((b.toS - from) / endS) * 100;
+          from = b.toS;
+          return `<span class="${b.cls}" style="width:${width}%" title="${b.label}">`
+            + `${width > 14 ? b.label : ''}</span>`;
+        }).join('');
+        phaseBand.hidden = false;
+      }
+    },
+    update(s, text, isPlaying) {
+      if (!timeOwner) return;
+      slider.value = String(s);
+      if (windowLabel) windowLabel.textContent = text;
+      showPlayIcon(isPlaying);
+    },
+    release() {
+      if (!timeOwner) return;
+      timeOwner = null;
+      slider.classList.remove('searching');
+      if (phaseBand) phaseBand.hidden = true;
+      if (spanSelect) spanSelect.disabled = false;
+      showPlayIcon(false);
+      // The search may have carried the clock out of the window; bring the window to it.
+      const span = spanSelect && spanSelect.value ? Number(spanSelect.value) : null;
+      clock.jumpTo(clock.t, span || null);
+      syncSlider();
+      syncDrifters();
+      redraw();
+    },
+  };
 
   let pinned = null;
 
@@ -1413,8 +1504,10 @@ async function start() {
     if (current && cFrame !== null) current.layer.source?.prefetchNext?.(cFrame);
   }
   clock.onChange(() => {
-    slider.value = String(clock.index);
-    if (windowLabel) windowLabel.textContent = clock.windowLabel();
+    if (!timeOwner) {
+      slider.value = String(clock.index);
+      if (windowLabel) windowLabel.textContent = clock.windowLabel();
+    }
     redraw();
   });
 

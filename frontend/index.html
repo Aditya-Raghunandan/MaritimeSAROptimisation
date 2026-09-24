@@ -614,12 +614,49 @@
       .dp-key { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 11px; }
       .dp-sw { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
       .dp-dash { background: repeating-linear-gradient(90deg, var(--ink-2) 0 4px, transparent 4px 7px); }
-      /* The search (#64). Same surface as the drifter list, which it sits under. */
+      /* The search (#64, #68, #69). Top-left, clear of the drifter list and the legends. */
       .search-panel {
         background: var(--surface-1); color: var(--ink); border: 1px solid var(--line);
-        border-radius: 8px; width: 320px; max-width: calc(100vw - 24px); font-size: 12px;
+        border-radius: 8px; width: 330px; max-width: calc(100vw - 24px); font-size: 12px;
         box-shadow: 0 4px 16px rgba(0, 0, 0, .35);
       }
+      .search-panel section { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+      .search-panel h4 { margin: 0; font-size: 12px; font-weight: 600; color: var(--ink); display: flex; gap: 6px; align-items: center; }
+      .search-panel h4 b {
+        flex: none; width: 16px; height: 16px; border-radius: 50%; background: var(--surface-2);
+        color: var(--ink); font-size: 10px; display: inline-flex; align-items: center; justify-content: center;
+      }
+      .search-panel p { margin: 0; color: var(--ink-2); }
+      .sp-choice { display: flex; gap: 6px; align-items: baseline; color: var(--ink-2); cursor: pointer; }
+      .sp-choice i { font-style: normal; color: var(--ink-3); }
+      .sp-choice input { accent-color: #ff6b35; }
+      .sp-help { font-size: 11px; color: var(--ink-3) !important; }
+      .sp-row-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+      .sp-speed-row { color: var(--ink-2); display: flex; gap: 6px; align-items: center; }
+      .sp-yourself h4 { color: #ff6b35; }
+      .search-panel kbd {
+        font: 10px/1 system-ui, sans-serif; border: 1px solid var(--line); border-bottom-width: 2px;
+        border-radius: 3px; padding: 1px 4px; margin: 0 1px; color: var(--ink); background: var(--surface-2);
+      }
+      .search-tag { background: none; border: none; white-space: nowrap; font-size: 10.5px; font-weight: 600;
+        text-shadow: 0 0 3px #000, 0 0 4px #000; pointer-events: none; }
+      /* Left of its point and a little down, so it does not sit on the marker's label. */
+      .search-tag-error span {
+        font-weight: 500; font-style: italic; display: inline-block;
+        transform: translate(calc(-100% - 22px), 9px);
+      }
+      /* The time bar while a search owns it (#69): its phases under the slider. */
+      #time.searching { accent-color: #ff6b35; }
+      #search-phases {
+        position: absolute; left: 7px; right: 7px; top: calc(50% + 6px); height: 11px; display: flex;
+        pointer-events: none; font-size: 9px; line-height: 11px; border-radius: 2px; overflow: hidden;
+      }
+      /* `display: flex` above would otherwise override the hidden attribute. */
+      #search-phases[hidden] { display: none; }
+      #search-phases span { overflow: hidden; white-space: nowrap; text-align: center; color: #121211; font-weight: 600; }
+      #search-phases .ph-ready { background: #8a8a80; }
+      #search-phases .ph-transit { background: rgba(255, 107, 53, .5); }
+      #search-phases .ph-search { background: #ff6b35; }
       .sp-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
       .sp-title { font-weight: 600; font-size: 13px; }
       .sp-sub { color: var(--ink-3); font-size: 11px; flex: 1; }
@@ -631,13 +668,7 @@
         /* Scrolls rather than running under the timeline on a short screen. */
         max-height: calc(100vh - 300px); overflow-y: auto;
       }
-      .sp-row { display: flex; gap: 6px; align-items: baseline; color: var(--ink-2); }
-      .sp-row b {
-        flex: none; width: 16px; height: 16px; border-radius: 50%; background: var(--surface-2);
-        color: var(--ink); font-size: 10px; display: inline-flex; align-items: center; justify-content: center;
-      }
-      .sp-row select { margin-left: 4px; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; font: inherit; }
-      .sp-body > button.on, .sp-actions button.on { border-color: #ff6b35; color: #ffffff; }
+            .sp-body > button.on, .sp-actions button.on { border-color: #ff6b35; color: #ffffff; }
       .sp-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
       .sp-speed { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; font: inherit; }
       .sp-phase { color: var(--ink); font-variant-numeric: tabular-nums; min-height: 1em; }
@@ -826,6 +857,7 @@
         <div class="slider-wrap">
           <input id="time" type="range" min="0" max="0" value="0" step="1" />
           <div id="lifetime" hidden></div>
+          <div id="search-phases" hidden></div>
         </div>
         <button id="win-fwd" class="win-step" title="Next window" aria-label="Next window">&#8250;</button>
         <span id="window-label" title="The span the slider covers">&mdash;</span>
