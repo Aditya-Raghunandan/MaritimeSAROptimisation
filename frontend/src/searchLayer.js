@@ -12,7 +12,10 @@
  *   base         where the helicopter launches from
  *   last known   the buoy's position at the report time
  *   datum        where drift predicts it will be when the helicopter arrives
+ *   predicted    the drift model's path from the last known position to the datum: why
+ *                the marker lands so far from where the buoy started (#71)
  *   datum error  a dotted line from the datum to where the buoy REALLY was then
+ *   real path    where the buoy actually went, growing as the search plays (#71)
  *   marker       dropped at the datum, drifting with the current; the pattern follows it
  *   swept strip  the path flown, drawn at its TRUE width, 185.2 m, re-scaled on zoom
  *   helicopter   an icon at the current moment, pointing along its heading
@@ -24,7 +27,10 @@
 import L from 'leaflet';
 
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
-import { helicopterAt, markerPositionAt, searchPath } from './searchRun.js';
+import { formatElapsed, helicopterAt, markerPositionAt, searchPath } from './searchRun.js';
+
+/** How often the buoy's real path is sampled for drawing, in seconds. */
+const TRACE_STEP_S = 300;
 
 /**
  * Rescue orange for the searcher: not the wind's amber, the current's cyan, the drift's
@@ -153,6 +159,8 @@ export const SearchLayer = L.Layer.extend({
     }
     if (!plan) return;
 
+    if (!plan.free) this._renderPrediction(g, plan);
+    this._renderBuoyPath(g, plan, s);
     if (!plan.free) this._renderDoctrine(g, plan, s);
     this._renderFlown(g, plan, s);
 
@@ -187,6 +195,41 @@ export const SearchLayer = L.Layer.extend({
       }),
       interactive: false,
       zIndexOffset: 1000,
+    }).addTo(g);
+  },
+
+  /**
+   * The drift model's prediction, drawn as the path it is: from the last known position
+   * to the datum, over the time the helicopter took to get there. That is the answer to
+   * "why is the marker so far from where the buoy started?".
+   */
+  _renderPrediction(g, plan) {
+    const d = plan.datumTrack;
+    if (!d || d.tS.length < 2) return;
+    const pts = d.tS.map((_, k) => [d.lat[k], d.lon[k]]);
+    L.polyline(pts, {
+      color: SEARCH_COLOURS.datum, weight: 1.6, opacity: 0.85, dashArray: '2 5',
+      className: 'search-predicted', interactive: false,
+    }).addTo(g);
+    const mid = pts[Math.floor(pts.length / 2)];
+    tag(mid, `predicted drift, ${formatElapsed(plan.arriveS).slice(2)}`, SEARCH_COLOURS.datum,
+      'search-tag-predicted').addTo(g);
+  },
+
+  /** Where the buoy really went, from the report to now: the trace the prediction is judged by. */
+  _renderBuoyPath(g, plan, s) {
+    if (!this._targetAt) return;
+    const pts = [];
+    for (let t = 0; t < s; t += TRACE_STEP_S) {
+      const p = this._targetAt(plan.reportMs + t * 1000);
+      if (p) pts.push(p);
+    }
+    const now = this._targetAt(plan.reportMs + s * 1000);
+    if (now) pts.push(now);
+    if (pts.length < 2) return;
+    L.polyline(pts, {
+      color: SEARCH_COLOURS.target, weight: 2, opacity: 0.9,
+      className: 'search-buoy-path', interactive: false,
     }).addTo(g);
   },
 
