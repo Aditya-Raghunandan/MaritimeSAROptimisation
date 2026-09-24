@@ -632,8 +632,26 @@
       .sp-choice input { accent-color: #ff6b35; }
       .sp-help { font-size: 11px; color: var(--ink-3) !important; }
       .sp-row-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
-      .sp-speed-row { color: var(--ink-2); display: flex; gap: 6px; align-items: center; }
-      .sp-yourself h4 { color: #ff6b35; }
+      /* A done step keeps a small text link rather than a full-width button (#71). */
+      .sp-link { border: none; background: none; padding: 0 2px; color: #ff9a6e; text-decoration: underline;
+        font-size: 11px; cursor: pointer; }
+      .sp-link:hover { color: #ffffff; border: none; }
+      .sp-link[hidden] { display: none; }
+      /* Tabs (#71): the Coast Guard search, or flying it yourself -- one open at a time. */
+      .sp-tabs { display: flex; gap: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; flex: none; }
+      .sp-tab { flex: 1; border: none; border-radius: 0; background: var(--surface-2); color: var(--ink-3); padding: 5px 8px; }
+      .sp-tab.on { background: rgba(255, 107, 53, .18); color: #ffffff; box-shadow: inset 0 -2px 0 #ff6b35; }
+      .sp-pane { display: flex; flex-direction: column; gap: 6px; }
+      .sp-pane[hidden], .sp-setup[hidden], .sp-summary[hidden] { display: none; }
+      .sp-setup { display: flex; flex-direction: column; gap: 6px; }
+      .sp-summary { background: var(--surface-2); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+      .sp-summary p { color: var(--ink) !important; }
+      .sp-summary button { align-self: flex-start; padding: 2px 8px; font-size: 11px; }
+      .search-panel details summary { cursor: pointer; color: var(--ink-3); font-size: 11px; }
+      .search-panel details p { margin-top: 4px; font-size: 11px; color: var(--ink-3); }
+      .sp-keywrap .sp-key { margin-top: 4px; }
+      .sp-dash { display: inline-block; width: 14px; height: 0; border-top: 2px dotted #ffffff; vertical-align: middle; margin-right: 4px; }
+      .search-tag-predicted span { font-weight: 500; font-style: italic; }
       .search-panel kbd {
         font: 10px/1 system-ui, sans-serif; border: 1px solid var(--line); border-bottom-width: 2px;
         border-radius: 3px; padding: 1px 4px; margin: 0 1px; color: var(--ink); background: var(--surface-2);
@@ -644,6 +662,16 @@
       .search-tag-error span {
         font-weight: 500; font-style: italic; display: inline-block;
         transform: translate(calc(-100% - 22px), 9px);
+      }
+      /*
+        A laptop's 768 px: the optional help lines give way, and the gaps tighten, so the
+        set-up still fits without scrolling. Both lines stay reachable -- the pattern's as
+        the button's tooltip, and the datum's is in the docs and in step 4's own wording.
+      */
+      @media (max-height: 820px) {
+        .sp-pattern-help, .sp-more { display: none; }
+        .sp-body { gap: 3px !important; }
+        .search-panel section { padding-bottom: 3px; gap: 2px; }
       }
       /* The time bar while a search owns it (#69): its phases under the slider. */
       #time.searching { accent-color: #ff6b35; }
@@ -664,12 +692,21 @@
       .search-panel.collapsed .sp-body { display: none; }
       .search-panel.collapsed .sp-head { border-bottom: none; }
       .sp-body {
-        padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;
+        padding: 8px 10px; display: flex; flex-direction: column; gap: 5px;
         /* Scrolls rather than running under the timeline on a short screen. */
         max-height: calc(100vh - 300px); overflow-y: auto;
       }
-            .sp-body > button.on, .sp-actions button.on { border-color: #ff6b35; color: #ffffff; }
+      /* Orange for the search's own "on" buttons, not the site's blue accent. */
+      .search-panel .sp-pane > button.on, .search-panel .sp-actions button.on,
+      .search-panel section button.on { background: rgba(255, 107, 53, .12); border-color: #ff6b35; color: #ffffff; }
+      .sp-pills { display: flex; gap: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+      .sp-pill { flex: 1; position: relative; cursor: pointer; }
+      .sp-pill input { position: absolute; opacity: 0; pointer-events: none; }
+      .sp-pill span { display: block; text-align: center; padding: 5px 6px; color: var(--ink-3); background: var(--surface-2); }
+      .sp-pill input:checked + span { color: #ffffff; background: rgba(255, 107, 53, .18); box-shadow: inset 0 -2px 0 #ff6b35; }
+      .sp-pill input:focus-visible + span { outline: 2px solid #ff6b35; outline-offset: -2px; }
       .sp-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
+      .sp-actions .sp-speed { flex-basis: 100%; }
       .sp-speed { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; font: inherit; }
       .sp-phase { color: var(--ink); font-variant-numeric: tabular-nums; min-height: 1em; }
       .sp-result p { margin: 4px 0 0; color: var(--ink-2); }
