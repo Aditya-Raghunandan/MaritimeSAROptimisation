@@ -614,6 +614,46 @@
       .dp-key { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 11px; }
       .dp-sw { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
       .dp-dash { background: repeating-linear-gradient(90deg, var(--ink-2) 0 4px, transparent 4px 7px); }
+      /* The search (#64). Same surface as the drifter list, which it sits under. */
+      .search-panel {
+        background: var(--surface-1); color: var(--ink); border: 1px solid var(--line);
+        border-radius: 8px; width: 320px; max-width: calc(100vw - 24px); font-size: 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, .35);
+      }
+      .sp-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+      .sp-title { font-weight: 600; font-size: 13px; }
+      .sp-sub { color: var(--ink-3); font-size: 11px; flex: 1; }
+      .sp-toggle { background: none; border: none; color: var(--ink-2); cursor: pointer; font-size: 15px; line-height: 1; }
+      .search-panel.collapsed .sp-body { display: none; }
+      .search-panel.collapsed .sp-head { border-bottom: none; }
+      .sp-body {
+        padding: 8px 10px; display: flex; flex-direction: column; gap: 6px;
+        /* Scrolls rather than running under the timeline on a short screen. */
+        max-height: calc(100vh - 300px); overflow-y: auto;
+      }
+      .sp-row { display: flex; gap: 6px; align-items: baseline; color: var(--ink-2); }
+      .sp-row b {
+        flex: none; width: 16px; height: 16px; border-radius: 50%; background: var(--surface-2);
+        color: var(--ink); font-size: 10px; display: inline-flex; align-items: center; justify-content: center;
+      }
+      .sp-row select { margin-left: 4px; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; font: inherit; }
+      .sp-body > button.on, .sp-actions button.on { border-color: #ff6b35; color: #ffffff; }
+      .sp-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
+      .sp-speed { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; font: inherit; }
+      .sp-phase { color: var(--ink); font-variant-numeric: tabular-nums; min-height: 1em; }
+      .sp-result p { margin: 4px 0 0; color: var(--ink-2); }
+      .sp-ok { color: #5cff9d; }
+      .sp-miss { color: #ff8a65; }
+      .sp-key { display: flex; flex-wrap: wrap; gap: 4px 12px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 11px; }
+      .sp-sw { display: inline-block; width: 14px; height: 4px; vertical-align: middle; margin-right: 4px; }
+      .sp-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; margin-right: 4px; border: 1px solid #121211; }
+      .sp-ring { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; margin-right: 4px; border: 1.5px dashed #ffffff; box-sizing: border-box; }
+      .search-base {
+        background: #9ad1ff; color: #121211; font-size: 9.5px; font-weight: 700; letter-spacing: .04em;
+        border-radius: 3px; text-align: center; line-height: 16px; box-shadow: 0 0 0 1px #121211;
+      }
+      .search-heli { background: none; border: none; }
+      .search-heli > div { width: 26px; height: 26px; transform-origin: 50% 50%; }
     </style>
   </head>
   <body>

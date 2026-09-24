@@ -406,3 +406,35 @@ test('picking a long-lived buoy lands on its first fix, and the click stays in t
   expect(await page.textContent('#status')).not.toMatch(/Outside the data box/);
   expect(await page.$eval('#point', (el) => el.classList.contains('visible'))).toBe(false);
 });
+
+/*
+  THE SEARCH (#64): a Coast Guard pattern flown from a placed base to find a real buoy.
+  The whole sequence on the fixture -- pick the buoy, take it as the report, place the
+  base near it, fly at the quick-look speed -- ending in a result either way.
+*/
+test('the search view flies a pattern from a placed base and reports a result', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="search"]');
+  await page.waitForTimeout(500);
+  await page.click('.dp-list li >> nth=0');                 // E2E-A: jumps to its first fix
+  await page.waitForTimeout(1500);
+
+  await page.click('.sp-use');
+  await expect(page.locator('.sp-target')).toHaveText(/Buoy E2E-A, reported/);
+  const lkp = await page.locator('path.search-lkp').boundingBox();
+  expect(lkp).not.toBeNull();
+
+  await page.click('.sp-place');
+  await page.mouse.click(lkp.x - 60, lkp.y + 40);           // a base a little way off
+  await expect(page.locator('.sp-base')).toHaveText(/NM to the LKP/);
+  expect(await page.$eval('#point', (el) => el.classList.contains('visible'))).toBe(false);
+
+  await page.selectOption('.sp-speed', '600');
+  await page.click('.sp-fly');
+  await page.waitForSelector('.search-heli', { timeout: 15_000 });
+  await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
+  expect(await page.locator('path.search-trail').count()).toBeGreaterThan(0);
+  expect(await page.locator('path.search-marker').count()).toBe(1);
+  expect(await page.textContent('.sp-result')).toMatch(/datum was/);
+});
