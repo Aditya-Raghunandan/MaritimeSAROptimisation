@@ -11,8 +11,8 @@ import { M_PER_DEG_LAT, offsetPosition } from '../src/patterns.js';
 import { M_PER_DEG, constantSampler } from '../src/pointDrift.js';
 import { NM_M } from '../src/platform.js';
 import {
-  bearingOf, closestApproach, datumErrorM, detect, formatElapsed, helicopterAt,
-  markerPositionAt, planSearch, searchPath,
+  ManualFlight, bearingOf, closestApproach, datumErrorM, detect, formatElapsed, freePlan,
+  headingFromKeys, helicopterAt, keyDirection, markerPositionAt, planSearch, searchPath,
 } from '../src/searchRun.js';
 
 const REPORT = Date.parse('2019-06-01T06:00Z');
@@ -184,5 +184,108 @@ describe('helpers', () => {
   it('formats elapsed time for the read-out', () => {
     expect(formatElapsed(65)).toBe('T+1:05');
     expect(formatElapsed(4620)).toBe('T+1:17:00');
+  });
+});
+
+describe('the keyboard', () => {
+  it('reads WASD and the arrow keys alike', () => {
+    expect(keyDirection('KeyW')).toBe('up');
+    expect(keyDirection('ArrowUp')).toBe('up');
+    expect(keyDirection('KeyA')).toBe('left');
+    expect(keyDirection('ArrowRight')).toBe('right');
+    expect(keyDirection('KeyQ')).toBeNull();
+  });
+
+  it('turns held keys into a heading, two keys a diagonal', () => {
+    expect(headingFromKeys(new Set(['up']))).toBeCloseTo(0, 9);
+    expect(headingFromKeys(new Set(['right']))).toBeCloseTo(90, 9);
+    expect(headingFromKeys(new Set(['up', 'right']))).toBeCloseTo(45, 9);
+    expect(headingFromKeys(new Set(['down', 'left']))).toBeCloseTo(225, 9);
+  });
+
+  it('keeps the heading when nothing is held or opposite keys cancel', () => {
+    expect(headingFromKeys(new Set())).toBeNull();
+    expect(headingFromKeys(new Set(['up', 'down']))).toBeNull();
+  });
+});
+
+describe('a helicopter flown by hand', () => {
+  const START = Date.parse('2019-06-01T06:00Z');
+  const spawn = { lat: 26.5, lon: -79.0 };
+
+  function flight(targetAt = () => null) {
+    return new ManualFlight(freePlan({ spawn, startMs: START }), targetAt);
+  }
+
+  it('starts on the spot, with no base, transit or marker', () => {
+    const plan = freePlan({ spawn, startMs: START });
+    expect(plan.free).toBe(true);
+    expect(plan.arriveS).toBe(0);
+    expect(plan.endS).toBe(2700);
+    expect(plan.marker).toBeNull();
+  });
+
+  it('flies 90 kt along its heading', () => {
+    const f = flight();
+    f.advance(60, 90);
+    const p = f.position();
+    const eastM = (p.lon - spawn.lon) * M_PER_DEG_LAT * Math.cos(spawn.lat * Math.PI / 180);
+    expect(eastM).toBeCloseTo(46.3 * 60, 0);
+    expect(f.lengthM).toBeCloseTo(46.3 * 60, 6);
+  });
+
+  it('keeps flying the last heading when given none', () => {
+    const f = flight();
+    f.advance(30, 0);
+    f.advance(30, null);
+    expect(f.heading).toBe(0);
+    expect((f.position().lat - spawn.lat) * M_PER_DEG_LAT).toBeCloseTo(46.3 * 60, 0);
+  });
+
+  it('stores a straight run as one segment, and a turn as a new one', () => {
+    const f = flight();
+    for (let k = 0; k < 20; k += 1) f.advance(3, 90);
+    expect(f.tS).toHaveLength(2);
+    f.advance(3, 180);
+    expect(f.tS).toHaveLength(3);
+  });
+
+  it('never flies past the window', () => {
+    const f = flight();
+    f.advance(10000, 90);
+    expect(f.s).toBeCloseTo(2700, 9);
+    expect(f.done).toBe(true);
+  });
+
+  it('finds a target it passes over, and stops there', () => {
+    const buoy = offsetPosition(spawn.lat, spawn.lon, 1000, 0);
+    const f = flight(() => buoy);
+    f.advance(600, 90);
+    expect(f.found).toBe(true);
+    expect(f.foundS).toBeCloseTo((1000 - SWEEP_WIDTH_M / 2) / 46.3, 0);
+    expect(f.done).toBe(true);
+  });
+
+  it('reports the closest pass of a miss', () => {
+    const buoy = offsetPosition(spawn.lat, spawn.lon, 1000, 500);
+    const f = flight(() => buoy);
+    f.advance(120, 90);
+    expect(f.found).toBe(false);
+    expect(f.closestM).toBeCloseTo(500, -1);
+  });
+
+  it('replays: where it was, and the path so far, at any earlier moment', () => {
+    const f = flight();
+    f.advance(60, 90);
+    f.advance(60, 0);
+    const mid = f.positionAt(30);
+    const eastM = (mid.lon - spawn.lon) * M_PER_DEG_LAT * Math.cos(spawn.lat * Math.PI / 180);
+    expect(eastM).toBeCloseTo(46.3 * 30, 0);
+    expect(mid.heading).toBeCloseTo(90, 3);
+    expect(f.pathUpTo(90)).toHaveLength(3);   // spawn, the turn, and where it was at 90 s
+  });
+
+  it('refuses a plan that has a pattern', () => {
+    expect(() => new ManualFlight(still(), () => null)).toThrow(/no pattern/);
   });
 });
