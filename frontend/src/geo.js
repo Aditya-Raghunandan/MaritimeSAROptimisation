@@ -20,8 +20,15 @@ const TO_RAD = Math.PI / 180;
 /** Gulf Stream surface average -- what the project sizes drift against. */
 export const TYPICAL_CURRENT_MS = 1.8;
 
-/** IAMSAR sweep width. Still unpinned in the vault; shown so it can be judged. */
-export const SWEEP_WIDTH_M = 185;
+/**
+ * Sweep width for a person in the water, seen from a helicopter: 0.1 NM.
+ *
+ * USCG Addendum COMDTINST M16130.2F (2013), App. H Tables H-15/H-16, p. H-44, at
+ * 300-1000 ft, visibility 3 NM or more, winds up to 15 kt, 90 kt, no lifejacket.
+ * `sar.search.platform.SWEEP_WIDTH_M` is the reference, and `tests/platform.test.js`
+ * holds this to it through `fixtures/search_golden.json` (issue #44).
+ */
+export const SWEEP_WIDTH_M = 185.2;
 
 export const RANGE_RINGS_KM = [10, 25, 50, 100];
 

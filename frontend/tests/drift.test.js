@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ALPHA, bearingFrom, bearingTowards, compass, currentBand, driftBand, explain, leewayDistance, leewayFractionOfCurrent, leewaySpeed, speed, summarise, sweepWidthMinutes,
 } from '../src/drift.js';
+import { SWEEP_WIDTH_M } from '../src/geo.js';
 
 describe('ALPHA', () => {
   it('is 2 %, matching the Python side', () => {
@@ -137,8 +138,9 @@ describe('currentBand', () => {
 */
 describe('sweepWidthMinutes', () => {
   it('is the time to cross one sweep width', () => {
-    // 185 m at 1 m/s is 185 s, which is 3.08 minutes.
-    expect(sweepWidthMinutes(1)).toBeCloseTo(185 / 60, 6);
+    // 185.2 m at 1 m/s is 185.2 s, which is 3.09 minutes.
+    expect(sweepWidthMinutes(1)).toBeCloseTo(SWEEP_WIDTH_M / 60, 6);
+    expect(sweepWidthMinutes(1)).toBeCloseTo(3.0867, 4);
     // The Gulf Stream core: the number that motivates the project.
     expect(sweepWidthMinutes(1.8)).toBeLessThan(2);
   });
@@ -150,7 +152,7 @@ describe('sweepWidthMinutes', () => {
   });
 
   it('takes a different sweep width when one is given', () => {
-    expect(sweepWidthMinutes(1, 370)).toBeCloseTo(2 * sweepWidthMinutes(1), 6);
+    expect(sweepWidthMinutes(1, 2 * SWEEP_WIDTH_M)).toBeCloseTo(2 * sweepWidthMinutes(1), 6);
   });
 });
 
