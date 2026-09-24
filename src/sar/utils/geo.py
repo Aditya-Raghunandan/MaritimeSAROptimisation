@@ -70,6 +70,32 @@ def metres_per_degree_lon(lat):
     return M_PER_DEG_LAT * np.cos(np.radians(np.asarray(lat, dtype=float)))
 
 
+def east_north(bearing_deg, distance_m):
+    """A distance along a compass bearing as (east, north) metres. Scalar or array.
+
+    Bearing is degrees clockwise from true north, the direction of travel -- the same
+    convention `sar.model.interpolate.speed_direction` returns, so a heading read off the
+    drift field can be flown without a conversion.
+    """
+    b = np.radians(np.asarray(bearing_deg, dtype=float))
+    d = np.asarray(distance_m, dtype=float)
+    return d * np.sin(b), d * np.cos(b)
+
+
+def offset_position(lat, lon, east_m, north_m):
+    """The point (east, north) metres from (lat, lon), on a local flat earth.
+
+    cos(lat) is taken at the reference point, which is what a search pattern needs: its
+    legs are laid out in metres about a datum a few kilometres across, where the change of
+    cos(lat) across the pattern is under 0.1 %. Longitude is returned in whatever
+    convention it was given in; nothing here wraps it.
+    """
+    lat = np.asarray(lat, dtype=float)
+    dlat = np.asarray(north_m, dtype=float) / M_PER_DEG_LAT
+    dlon = np.asarray(east_m, dtype=float) / metres_per_degree_lon(lat)
+    return lat + dlat, np.asarray(lon, dtype=float) + dlon
+
+
 def normalise_grid(ds: xr.Dataset) -> xr.Dataset:
     """Put any forcing dataset into the D020 convention.
 

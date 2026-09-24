@@ -12,6 +12,7 @@ renumbered once merged — a number that has been cited somewhere is a permanent
 |---|---|---|
 | [ADR001](ADR001.md) | Dependency management tooling — `pip` and `venv` for Python, `npm` for the frontend | Decided, amended (the original `uv` choice is withdrawn; the cluster has no `uv`) |
 | [ADR002](ADR002.md) | Probability map interface — three grids not one; box anchored at arrival; cell size a required parameter; binning at N = 10⁶; coverage swept on the particles; cos φ recomputed per particle per step | **Proposed** — six rows await agreement from the search half |
+| [ADR003](ADR003.md) | Search platform, sweep width and the doctrinal patterns — W = 0.1 NM, definite-range detection, 90 kt search, 125 kt transit, 30 min launch; Expanding Square and Sector Search flown relative to a current-drifting datum marker, all cited to the USCG Addendum | **Decided** on the build side, awaiting the search half's co-sign |
 
 **These numbers are not the vault's D-numbers.** The project vault keeps its own decision series,
 `decisions/Dnnn`, covering decisions that are not about code — the case study region, the study
@@ -33,6 +34,7 @@ They may cite an ADR or a vault decision for *why*, and should not restate the r
 | [viz-export.md](viz-export.md) | `sar.viz` — the published archive the website reads |
 | [resultant-vector.md](resultant-vector.md) | `sar.model.interpolate` — current and wind at any position and time (issue #10) |
 | [probability-grid.md](probability-grid.md) | `sar.model.grid` — particle positions to cells, and back (issue #7) |
+| [search-patterns.md](search-patterns.md) | `sar.search` — the helicopter's numbers, the Expanding Square and Sector Search, the datum and its marker (issues #44, #48, #63) |
 | [linear_time_interpolation.md](linear_time_interpolation.md) | `sar.utils.interpolation` — why the drift model needs it |
 | [e2e-testing.md](e2e-testing.md) | `npm run test:e2e` and `npm run shots` — browser tests, and looking at the page (issue #21) |
 | [issue-template.md](issue-template.md) | the structure every new issue follows, and what "done" means |

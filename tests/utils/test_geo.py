@@ -5,8 +5,12 @@ import pytest
 import xarray as xr
 
 from sar.utils.geo import (
+    M_PER_DEG_LAT,
     assert_conventions,
+    east_north,
+    metres_per_degree_lon,
     normalise_grid,
+    offset_position,
     regular_axis_step,
     to_display_longitude,
     to_store_longitude,
@@ -154,3 +158,25 @@ class TestRegularAxisStep:
     def test_refuses_an_axis_that_does_not_move(self):
         with pytest.raises(ValueError, match="zero step"):
             regular_axis_step([5.0, 5.0, 5.0])
+
+
+class TestEastNorth:
+    def test_compass_points(self):
+        for bearing, expected in ((0, (0, 1)), (90, (1, 0)), (180, (0, -1)), (270, (-1, 0))):
+            e, n = east_north(bearing, 1.0)
+            assert (e, n) == pytest.approx(expected, abs=1e-12)
+
+    def test_is_clockwise_from_north(self):
+        e, n = east_north(45.0, np.sqrt(2.0))
+        assert (e, n) == pytest.approx((1.0, 1.0))
+
+
+class TestOffsetPosition:
+    def test_metres_become_degrees_at_the_reference_latitude(self):
+        lat, lon = offset_position(26.5, 281.0, 1000.0, 2000.0)
+        assert (lat - 26.5) * M_PER_DEG_LAT == pytest.approx(2000.0)
+        assert (lon - 281.0) * metres_per_degree_lon(26.5) == pytest.approx(1000.0)
+
+    def test_accepts_arrays(self):
+        lat, lon = offset_position(np.array([17.0, 36.0]), 281.0, 100.0, 0.0)
+        assert lat.shape == lon.shape == (2,)
