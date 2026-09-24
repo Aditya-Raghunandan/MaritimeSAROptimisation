@@ -1109,6 +1109,20 @@ async function start() {
     return { chunks, mb: (chunks * perChunk) / 1e6 };
   }
 
+  /*
+    SPAN CHANGES RUN ONE AT A TIME, in the order asked (#71). Picking a buoy starts a
+    switch to its lifetime's span, which on real data takes seconds; pressing Fly before
+    it lands started the search's own switch to one day alongside it, the two finished
+    in either order, and the menu ended up saying "1 year" over hourly data. Every span
+    change goes through this queue, so the last one asked for is the one that holds.
+  */
+  let spanQueue = Promise.resolve();
+  function queueSpan(spanSeconds, opts) {
+    const job = spanQueue.then(() => applySpan(spanSeconds, opts));
+    spanQueue = job.catch(() => {});
+    return job;
+  }
+
   async function applySpan(spanSeconds, { quiet = false } = {}) {
     if (!archive || !archive.tiers) return;
     const name = chooseTier(archive.tiers, spanSeconds);
@@ -1186,7 +1200,7 @@ async function start() {
       spanSelect.disabled = true;
       setStatus('switching …');
       try {
-        await applySpan(spanSeconds);
+        await queueSpan(spanSeconds);
       } catch (err) {
         setStatus(`could not switch: ${err.message}`);
       } finally {
@@ -1243,7 +1257,7 @@ async function start() {
     clock.jumpTo(new Date(buoy.startMs), span);
     if (spanSelect) spanSelect.value = String(span ?? '');
     try {
-      await applySpan(span, { quiet: true });
+      await queueSpan(span, { quiet: true });
     } catch (err) {
       setStatus(`could not switch span: ${err.message}`);
       return;
@@ -1259,10 +1273,12 @@ async function start() {
     report time -- the same move as `timeTravel`, moment and window together.
   */
   async function prepareHourly(ms) {
-    if (axis.stepSeconds <= 3600) return;
+    // After any span switch still in flight, so this one is the last word, and always
+    // to one day around the report: the menu and the data then cannot disagree.
+    await spanQueue;
     clock.jumpTo(new Date(ms), 86400);
     if (spanSelect) spanSelect.value = '86400';
-    await applySpan(86400, { quiet: true });
+    await queueSpan(86400, { quiet: true });
     syncSlider();
   }
 
@@ -1766,7 +1782,7 @@ async function start() {
   // five years of daily steps -- the default view should be the one that shows
   // the data at its real resolution.
   try {
-    await applySpan(86400, { quiet: true });
+    await queueSpan(86400, { quiet: true });
   } catch (err) {
     setStatus(`could not open the default span: ${err.message}`);
   }
