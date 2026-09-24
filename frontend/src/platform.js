@@ -34,6 +34,11 @@ export const ON_SCENE_WINDOW_S = 45 * 60;
 /** The integration step and the agent's decision interval (D009, ADR002). */
 export const STEP_S = 60;
 
+/** The available search effort Z = W x V x T: what one window covers at coverage 1 (p. H-40). */
+export function searchEffortM2(sweepWidthM = SWEEP_WIDTH_M, speedMs = SEARCH_SPEED_MS, windowS = ON_SCENE_WINDOW_S) {
+  return sweepWidthM * speedMs * windowS;
+}
+
 /** One minute at search speed or twice the sweep width, whichever is larger (p. 3-23). */
 export function sectorRadiusM(speedMs = SEARCH_SPEED_MS, sweepWidthM = SWEEP_WIDTH_M) {
   return Math.max(speedMs * 60, 2 * sweepWidthM);

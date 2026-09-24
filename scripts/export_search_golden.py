@@ -35,13 +35,20 @@ import numpy as np
 
 from sar.pipeline.forcing import ConstantForcing
 from sar.search.datum import drift_track, marker_track
-from sar.search.patterns import expanding_square, on_ground, sector_search
+from sar.search.patterns import (
+    expanding_square,
+    on_ground,
+    parallel_track,
+    sector_search,
+    trackline_return,
+)
 from sar.search.platform import (
     NM_M,
     SEARCH_SPEED_MS,
     SWEEP_WIDTH_M,
     constants,
     great_circle_m,
+    search_effort_m2,
     transit_time_s,
 )
 from sar.utils.geo import to_display_longitude
@@ -58,9 +65,18 @@ PATTERN_CASES = [
     ("sector_search", {"radius_m": None, "first_bearing_deg": 0.0, "duration_s": 540.0}),
     ("sector_search", {"radius_m": None, "first_bearing_deg": 10.0, "duration_s": 1080.0}),
     ("sector_search", {"radius_m": 1000.0, "first_bearing_deg": 200.0, "duration_s": 700.0}),
+    ("parallel_track", {"length_m": None, "width_m": None, "spacing_m": S,
+                        "first_bearing_deg": 30.0, "duration_s": 2700.0}),
+    ("parallel_track", {"length_m": 3000.0, "width_m": 1500.0, "spacing_m": S,
+                        "first_bearing_deg": 250.0, "duration_s": 900.0}),
+    ("trackline_return", {"half_length_m": 4000.0, "spacing_m": S,
+                          "first_bearing_deg": 45.0, "duration_s": 2700.0}),
+    ("trackline_return", {"half_length_m": 1200.0, "spacing_m": S,
+                          "first_bearing_deg": 300.0, "duration_s": 800.0}),
 ]
 
-BUILDERS = {"expanding_square": expanding_square, "sector_search": sector_search}
+BUILDERS = {"expanding_square": expanding_square, "sector_search": sector_search,
+            "parallel_track": parallel_track, "trackline_return": trackline_return}
 
 
 def disp(lon) -> list[float]:
@@ -121,7 +137,7 @@ def build() -> dict:
         "tolerance_m": 1e-6,
         "tolerance_deg": 1e-10,
         "tolerance_s": 1e-6,
-        "platform": constants(),
+        "platform": {**constants(), "search_effort_m2": search_effort_m2()},
         "patterns": [pattern_case(kind, args) for kind, args in PATTERN_CASES],
         "on_ground": [on_ground_case(lat, 281.0) for lat in (17.0, 26.5, 36.0)],
         "drift": [

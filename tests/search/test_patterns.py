@@ -11,7 +11,9 @@ from sar.search.patterns import (
     expanding_square,
     ground_track,
     on_ground,
+    parallel_track,
     sector_search,
+    trackline_return,
 )
 from sar.search.platform import NM_M, SEARCH_SPEED_MS, SWEEP_WIDTH_M
 from sar.utils.geo import M_PER_DEG_LAT, metres_per_degree_lon
@@ -181,3 +183,87 @@ class TestDescribeAndCLI:
         assert es["length_m"] == pytest.approx(V * 2700.0)
         vs = _cli(["sector", "--duration-min", "9"])
         assert vs["legs"] == 9
+
+
+def unit(bearing):
+    b = np.radians(bearing)
+    return np.array([np.sin(b), np.cos(b)]), np.array([np.sin(b + np.pi / 2), np.cos(b + np.pi / 2)])
+
+
+def along_across(p, bearing):
+    u, v = unit(bearing)
+    xy = np.column_stack([p.east_m, p.north_m])
+    return xy @ u, xy @ v
+
+
+class TestParallelTrack:
+    def test_the_default_area_is_what_one_window_covers(self):
+        # Z = W x V x T, 23.15 km2: a square 4.81 km a side (Addendum p. H-40 (g)).
+        side = np.sqrt(S * V * 2700)
+        p = parallel_track()
+        _, c = along_across(p, 0.0)
+        legs = round(side / S)                      # 26 legs across 25.98 spacings
+        assert c[1:].max() - c[1:].min() == pytest.approx((legs - 1) * S)
+        # The outermost legs sit about half a spacing inside the edges, so none is left unflown.
+        assert side / 2 - c[1:].max() == pytest.approx(S / 2, abs=S / 4)
+
+    def test_first_leg_starts_half_a_spacing_inside_the_corner(self):
+        p = parallel_track(4000.0, 2000.0, S, 30.0, V, 2700.0)
+        a, c = along_across(p, 30.0)
+        assert (a[1], c[1]) == pytest.approx((-2000 + S / 2, -1000 + S / 2))
+
+    def test_legs_run_along_the_axis_and_are_a_spacing_apart(self):
+        p = parallel_track(4000.0, 2000.0, S, 30.0, V, 2700.0)
+        a, c = along_across(p, 30.0)
+        # Waypoints 1, 2 are the ends of leg 1; 3, 4 of leg 2; and so on.
+        assert c[1] == pytest.approx(c[2]) and c[3] == pytest.approx(c[4])
+        assert c[3] - c[1] == pytest.approx(S)
+        assert abs(a[2] - a[1]) == pytest.approx(4000 - S)
+
+    def test_starts_by_flying_from_the_marker_to_the_start_point(self):
+        p = parallel_track(4000.0, 2000.0, S, 0.0, V, 2700.0)
+        assert (p.east_m[0], p.north_m[0]) == (0.0, 0.0)
+        assert p.t_s[1] == pytest.approx(np.hypot(p.east_m[1], p.north_m[1]) / V)
+
+    def test_a_finished_area_ends_the_pattern_early(self):
+        p = parallel_track(1000.0, 1000.0, S, 0.0, V, 2700.0)
+        assert p.duration_s < 2700.0
+
+    def test_too_small_an_area_raises(self):
+        with pytest.raises(ValueError, match="one track spacing"):
+            parallel_track(100.0, 1000.0, S, 0.0, V, 2700.0)
+
+
+class TestTracklineReturn:
+    def test_first_pass_is_up_one_side_and_down_the_other(self):
+        # Addendum Figure H-31: the CSP 1/2 S off the line; up one side, down the other.
+        p = trackline_return(3000.0, S, 45.0, V, 2700.0)
+        a, c = along_across(p, 45.0)
+        assert (a[1], c[1]) == pytest.approx((-3000.0, S / 2))
+        assert (a[2], c[2]) == pytest.approx((3000.0, S / 2))
+        assert (a[3], c[3]) == pytest.approx((3000.0, -S / 2))
+        assert (a[4], c[4]) == pytest.approx((-3000.0, -S / 2))
+
+    def test_it_ends_the_first_return_one_track_space_from_where_it_began(self):
+        p = trackline_return(3000.0, S, 0.0, V, 2700.0)
+        assert np.hypot(p.east_m[4] - p.east_m[1], p.north_m[4] - p.north_m[1]) == pytest.approx(S)
+
+    def test_each_later_pass_widens_by_a_spacing(self):
+        p = trackline_return(3000.0, S, 0.0, V, 2700.0)
+        _, c = along_across(p, 0.0)
+        assert sorted({round(abs(x) / S, 6) for x in c[1:13]}) == pytest.approx([0.5, 1.5, 2.5])
+
+    def test_it_flies_the_whole_window(self):
+        p = trackline_return(3000.0, S, 0.0, V, 2700.0)
+        assert p.length_m == pytest.approx(V * 2700.0)
+
+    @pytest.mark.parametrize("lat", [17.0, 36.0])
+    def test_the_same_shape_in_metres_at_every_latitude(self, lat):
+        p = trackline_return(2000.0, S, 60.0, V, 900.0)
+        glat, glon = on_ground(p, MarkerTrack.fixed(lat, 281.0, p.duration_s), p.t_s)
+        east = (glon - 281.0) * metres_per_degree_lon(lat)
+        assert east == pytest.approx(p.east_m, abs=1e-6)
+
+    def test_bad_inputs_raise(self):
+        with pytest.raises(ValueError, match="positive number"):
+            trackline_return(0.0)
