@@ -59,28 +59,61 @@ t, glat, glon = ground_track(pattern, marker)           # every waypoint, plus e
 - `transit_time_s` refuses a datum beyond the H-60's 300 NM radius of action.
 - `marker_track` without a forcing backend raises; a still marker is `MarkerTrack.fixed`.
 
-## On the site (issue #64)
+## On the site (issues #64, #68, #69)
 
-The **Search** preset flies the same doctrine against a real buoy. There are four steps:
+The **Search** preset flies the same doctrine against a real buoy. The panel, top-left, asks the
+Coast Guard's questions in order:
 
-1. Pick a buoy in the drifter list and move the clock to the moment it is "reported"; its
-   position then is the last known position (LKP).
-2. Place the base with a click.
-3. Choose the pattern.
-4. Choose the target type. That sets the leeway the datum is drifted with: *drogued drifter* is
-   current only, *person in water* adds 2 % of the wind.
+1. **Who is missing?** Pick a buoy in the Drifters list and move the clock to when it is reported
+   missing. Its position then is the last known position (LKP). Once it is chosen, the list gets
+   out of the way; *Choose another buoy* brings it back.
+2. **Where does the helicopter start?** Place the base with a click.
+3. **How does the Coast Guard search?** Expanding Square or Sector Search.
+4. **Where will it have drifted to by the time they arrive?** Either *with the current* (a drifter
+   buoy) or *with the current + 2 % of the wind* (a person in the water). **This sets the
+   datum**, where the helicopter is sent and which way the first leg runs. It does not give the
+   marker any wind: the marker always drifts with the current alone, and the real buoy goes
+   where it really went.
 
-Then **Fly**. The helicopter waits 30 minutes, flies out at 125 kt to the datum, drops a marker,
-and flies the pattern about the marker at 90 kt. The strip it sees is drawn at its true 185.2 m,
-and the map allows zoom 13 while the view is open so it can be seen. The panel ends with *Found at
-T+…* or the closest pass, and how far the datum was from where the buoy really was.
+Then **Fly the search**:
+1. The helicopter waits 30 minutes, then flies out at 125 kt to the datum.
+2. It drops a marker there.
+3. It flies the pattern about the marker at 90 kt.
+
+The map labels every mark: *last known position*, *datum: where drift predicts it*, *marker* and
+*real buoy*. It draws the **datum error**, the dotted line from the datum to where the buoy really
+was on arrival. The marker is dropped at the datum, not on the buoy, because the Coast Guard does
+not know where the buoy is. That gap is the drift model's error, and it is what this project
+measures.
+
+The strip the helicopter sees is drawn at its true 185.2 m. The map allows zoom 13 while the view
+is open so the strip can be seen.
+
+**One clock.** While a search is loaded it owns the time bar at the bottom:
+- the slider scrubs it, and Play or Space plays and pauses it;
+- the label gives the time since the call, the phase and the playback rate (e.g. "45 s per
+  second");
+- a band under the slider marks *call to launch*, *flying out* and *on scene*;
+- the site clock follows the search moment, so the header time, the wind and current fields, and
+  the buoy all show the same instant.
+
+Reset, or leaving the view, hands the bar back at the moment the search had reached. Before this
+(#69), the search ran a second clock of its own, and the buoy showed in two places.
+
+**Fly it yourself** (#68). *Spawn a helicopter on the map*, click where it should appear, and
+steer with **W A S D** or the **arrow keys**; two keys fly a diagonal.
+- It takes off on the first key and keeps its heading when the keys are released.
+- It flies 90 kt with the same 185.2 m strip, for one 45-minute window, and the map follows it.
+- If a buoy is chosen, passing within 92.6 m of it finds it, by the same closest-approach test the
+  patterns get.
+- A finished flight can be scrubbed and replayed. A flight still in the air cannot be rewound.
 
 | Browser module | Mirrors | Held to Python by |
 |---|---|---|
 | `platform.js` | `sar.search.platform` | `tests/platform.test.js` |
 | `patterns.js` | `sar.search.patterns` | `tests/patterns.test.js` |
 | `pointDrift.js` | `sar.search.datum.drift_track` | `tests/patterns.test.js` (drift cases) |
-| `searchRun.js` | the sequence above, and closest-approach detection | `tests/searchRun.test.js` (unit only) |
+| `searchRun.js` | the sequence above, closest-approach detection, and `ManualFlight` for flying by hand | `tests/searchRun.test.js` (unit only) |
 
 Two differences from the Python are deliberate, and both are stated in the code:
 

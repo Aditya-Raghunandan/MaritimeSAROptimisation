@@ -427,7 +427,7 @@ test('the search view flies a pattern from a placed base and reports a result', 
 
   await page.click('.sp-place');
   await page.mouse.click(lkp.x - 60, lkp.y + 40);           // a base a little way off
-  await expect(page.locator('.sp-base')).toHaveText(/NM to the LKP/);
+  await expect(page.locator('.sp-base')).toHaveText(/NM from the last known position/);
   expect(await page.$eval('#point', (el) => el.classList.contains('visible'))).toBe(false);
 
   await page.selectOption('.sp-speed', '600');
@@ -436,5 +436,87 @@ test('the search view flies a pattern from a placed base and reports a result', 
   await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
   expect(await page.locator('path.search-trail').count()).toBeGreaterThan(0);
   expect(await page.locator('path.search-marker').count()).toBe(1);
-  expect(await page.textContent('.sp-result')).toMatch(/datum was/);
+  expect(await page.textContent('.sp-result')).toMatch(/datum error/);
+});
+
+/** Pick E2E-A, take it as the report, and place a base a little way off. */
+async function readySearch(page) {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="search"]');
+  await page.waitForTimeout(500);
+  await page.click('.dp-list li >> nth=0');
+  await page.waitForTimeout(1500);
+  await page.click('.sp-use');
+  await expect(page.locator('.sp-target')).toHaveText(/Buoy E2E-A, reported/);
+  const lkp = await page.locator('path.search-lkp').boundingBox();
+  await page.click('.sp-place');
+  await page.mouse.click(lkp.x - 60, lkp.y + 40);
+  await expect(page.locator('.sp-base')).toHaveText(/NM from the last known position/);
+}
+
+/*
+  ONE CLOCK (#69). A search owns the time bar while it is loaded: the band shows its
+  phases, the label says where it is, Play pauses it, and the buoy is drawn once -- the
+  drifter layer, which moved on the site clock, is out of the way. Reset hands it back.
+*/
+test('a search takes over the time bar, draws the buoy once, and hands the bar back', async ({ page }) => {
+  await readySearch(page);
+  expect(await page.locator('path.drifter-live').count()).toBe(0);   // the list is out of the way
+  expect(await page.locator('.drifter-panel').count()).toBe(0);
+
+  await page.selectOption('.sp-speed', '45');
+  await page.click('.sp-fly');
+  await page.waitForSelector('.search-heli', { timeout: 15_000 });
+  expect(await page.isVisible('#search-phases')).toBe(true);
+  await expect(page.locator('#window-label')).toHaveText(/T\+/);
+  expect(Number(await page.$eval('#time', (el) => el.max))).toBeGreaterThan(2700);
+
+  // The bottom Play pauses the search rather than the site.
+  await page.click('#play');
+  const held = await page.$eval('#time', (el) => el.value);
+  await page.waitForTimeout(600);
+  expect(await page.$eval('#time', (el) => el.value)).toBe(held);
+  expect(await page.locator('path.search-target').count()).toBeLessThanOrEqual(1);
+
+  await page.click('.sp-reset');
+  expect(await page.isVisible('#search-phases')).toBe(false);
+  await expect(page.locator('#window-label')).not.toHaveText(/T\+/);
+});
+
+test('the panel keeps its choices when the view is left and opened again', async ({ page }) => {
+  await readySearch(page);
+  await page.click('button[data-preset="wind"]');
+  await page.waitForTimeout(300);
+  await page.click('button[data-preset="search"]');
+  await page.waitForTimeout(300);
+  await expect(page.locator('.sp-base')).toHaveText(/NM from the last known position/);
+  await expect(page.locator('.sp-target')).toHaveText(/Buoy E2E-A/);
+});
+
+/*
+  FLOWN BY HAND (#68): spawn a helicopter with a click, steer it with the keys, and it
+  draws its strip and ends with what it flew.
+*/
+test('a spawned helicopter flies on the keyboard and reports what it flew', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="search"]');
+  await page.waitForTimeout(500);
+  await page.click('.sp-spawn');
+  const box = await page.locator('#map').boundingBox();
+  await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.5);
+  await page.waitForSelector('.search-heli', { timeout: 5_000 });
+  await expect(page.locator('.sp-phase')).toHaveText(/take off/);
+
+  await page.selectOption('.sp-speed', '600');
+  await page.keyboard.down('KeyD');                // WASD
+  await page.waitForTimeout(700);
+  await page.keyboard.up('KeyD');
+  await page.keyboard.down('ArrowUp');             // and the arrow keys
+  await page.waitForTimeout(700);
+  await page.keyboard.up('ArrowUp');
+  expect(await page.locator('path.search-trail').count()).toBeGreaterThan(0);
+
+  await expect(page.locator('.sp-result')).toHaveText(/You flew/, { timeout: 15_000 });
 });
