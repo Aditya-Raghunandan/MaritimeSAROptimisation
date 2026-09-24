@@ -51,8 +51,8 @@ const TO_RAD = Math.PI / 180;
  * buoy, which goes where it really went.
  */
 export const TARGETS = {
-  drifter: { label: 'with the current (a drifter buoy)', leeway: 0 },
-  person: { label: 'with the current + 2 % of the wind (a person in the water)', leeway: 0.02 },
+  drifter: { label: 'with the current only (a drifter buoy)', leeway: 0 },
+  person: { label: 'current + 2 % of the wind (a person)', leeway: 0.02 },
 };
 
 /** Compass bearing, degrees true, of a velocity [u, v]; null for no motion. */

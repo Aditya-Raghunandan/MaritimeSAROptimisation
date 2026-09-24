@@ -168,16 +168,16 @@ export function createSearchView(deps) {
   }
 
   function describeBase() {
-    if (!base) { panel.setBase('Base: not placed'); return; }
-    let text = `Base: ${coord(base)}`;
+    if (!base) { panel.setBase('Base: not placed', false); return; }
+    let text = `Base ${coord(base)}`;
     if (target) {
       const d = distanceM(base, target.lkp);
       const t = transitTimeS(d);
-      text += ` · ${(d / NM_M).toFixed(0)} NM from the last known position · `
-        + (t === null ? 'beyond the H-60\'s 300 NM radius of action'
-          : `on scene about ${formatElapsed(t).slice(2)} after the call`);
+      text += ` · ${(d / NM_M).toFixed(0)} NM out · `
+        + (t === null ? 'beyond the H-60\'s 300 NM range'
+          : `on scene ${formatElapsed(t).slice(2)} after the call`);
     }
-    panel.setBase(text);
+    panel.setBase(text, true);
   }
 
   async function onUseBuoy() {
@@ -290,6 +290,10 @@ export function createSearchView(deps) {
     result = detect(plan, targetAt);
     datumErr = datumErrorM(plan, targetAt);
     layer.setPlan(plan, targetAt, result);
+    // The set-up has done its job: fold it to one line so the result fits (#71).
+    const drift = choices.targetKind === 'person' ? 'current + 2 % of wind' : 'current only';
+    panel.collapseSetup(`Buoy ${target.buoy.id} · base ${(plan.distanceM / NM_M).toFixed(0)} NM out · `
+      + `${PATTERNS[plan.patternKind].label} · datum drifted with ${drift}`);
     map.fitBounds([[base.lat, base.lon], [plan.datum.lat, plan.datum.lon]], { padding: [60, 60] });
     ownTime([
       { toS: plan.launchS, label: 'call to launch', cls: 'ph-ready' },
@@ -308,6 +312,7 @@ export function createSearchView(deps) {
     targetAt = target ? (ms) => positionAt(target.track, ms) : () => null;
     flight = new ManualFlight(plan, targetAt);
     layer.setPlan(plan, targetAt, null, { flight });
+    panel.showTab('fly');
     if (map.getZoom() < 12) map.setView([at.lat, at.lon], 12);
     // A person needs time to steer: past 45 s per second the helicopter crosses the whole
     // area a pattern would cover in a couple of seconds.
@@ -518,6 +523,7 @@ export function createSearchView(deps) {
     panel.setFlying('idle');
     panel.setPhase('');
     panel.setResult('');
+    panel.expandSetup();
     if (owned) timeBar.release();
   }
 

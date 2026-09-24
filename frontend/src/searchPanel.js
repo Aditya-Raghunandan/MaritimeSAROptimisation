@@ -1,8 +1,8 @@
 /**
- * searchPanel.js -- the controls for a search (issues #64, #68, #69).
+ * searchPanel.js -- the controls for a search (issues #64, #68, #69, #71).
  *
  * Written as the questions the Coast Guard answers, in the order it answers them, each
- * with one line saying what the choice actually changes -- because the first version's
+ * with a line saying what the choice actually changes -- because the first version's
  * "Target: person in water (2 % of wind)" left a reader asking whether it gave the
  * MARKER wind. It does not: it changes where the helicopter is sent.
  *
@@ -10,7 +10,12 @@
  *   2  Where does the helicopter start? a base, placed on the map
  *   3  How does the Coast Guard search? Expanding Square or Sector Search
  *   4  Where will it have drifted to?   the datum's drift: current, or current + wind
- *   then Fly, or instead spawn a helicopter and fly it yourself.
+ *
+ * IT HAS TO FIT (#71). With all four steps, a result, the fly-yourself controls and a key
+ * open at once it was taller than a laptop's map, and it scrolled -- "the menus still
+ * clip". So: two tabs, the Coast Guard search and flying it yourself, only one open; once
+ * a search is flying the four steps fold into a one-line summary with a Change button;
+ * and the longer help and the key fold away until asked for.
  *
  * The DOM is built ONCE and kept. Leaflet calls onAdd every time the view is switched
  * back to, and rebuilding here made the panel say "Base: not placed" over a search that
@@ -38,8 +43,8 @@ export function speedLabel(x) {
 }
 
 const PATTERN_HELP = {
-  expanding_square: 'a square spiral out from the marker: even coverage, growing outwards',
-  sector_search: 'spokes through the marker: very dense near it, sparse at the edge',
+  expanding_square: 'A square spiral out from the marker: even coverage.',
+  sector_search: 'Spokes through the marker: densest right beside it.',
 };
 
 export const SearchPanel = L.Control.extend({
@@ -67,9 +72,12 @@ export const SearchPanel = L.Control.extend({
 
   _build() {
     const root = L.DomUtil.create('div', 'search-panel');
+    // Side by side, with one line of help for the one chosen: two wrapped descriptions
+    // were what pushed the set-up past the bottom of a 900 px screen (#71).
     const patterns = Object.entries(PATTERNS).map(([k, p], n) => `
-      <label class="sp-choice"><input type="radio" name="sp-pattern" value="${k}"${n === 0 ? ' checked' : ''}>
-        <span><b>${p.label}</b> <i>${PATTERN_HELP[k] ?? ''}</i></span></label>`).join('');
+      <label class="sp-pill" title="${PATTERN_HELP[k] ?? ''}"><input type="radio" name="sp-pattern" value="${k}"${n === 0 ? ' checked' : ''}>
+        <span>${p.label}</span></label>`).join('');
+    const firstHelp = PATTERN_HELP[Object.keys(PATTERNS)[0]] ?? '';
     const targets = Object.entries(TARGETS).map(([k, t], n) => `
       <label class="sp-choice"><input type="radio" name="sp-kind" value="${k}"${n === 0 ? ' checked' : ''}>
         <span>${t.label}</span></label>`).join('');
@@ -78,55 +86,73 @@ export const SearchPanel = L.Control.extend({
     root.innerHTML = `
       <div class="sp-head">
         <span class="sp-title">Search</span>
-        <span class="sp-sub">the Coast Guard's own method, against a real buoy</span>
+        <span class="sp-sub">against a real buoy</span>
         <button class="sp-toggle" type="button" aria-label="Collapse the search panel">&minus;</button>
       </div>
       <div class="sp-body">
-        <section>
-          <h4><b>1</b>Who is missing?</h4>
-          <p class="sp-target">Pick a buoy in the Drifters list and move the clock to when it is reported missing.</p>
-          <div class="sp-row-buttons">
-            <button type="button" class="sp-use">Use the selected buoy at this time</button>
-            <button type="button" class="sp-change" hidden>Choose another buoy</button>
+        <div class="sp-tabs" role="tablist">
+          <button type="button" class="sp-tab on" data-tab="search" role="tab">Coast Guard search</button>
+          <button type="button" class="sp-tab" data-tab="fly" role="tab">Fly it yourself</button>
+        </div>
+
+        <div class="sp-pane" data-pane="search">
+          <div class="sp-summary" hidden>
+            <p class="sp-summary-text"></p>
+            <button type="button" class="sp-edit">Change the set-up</button>
           </div>
-        </section>
-        <section>
-          <h4><b>2</b>Where does the helicopter start?</h4>
-          <p class="sp-base">Base: not placed</p>
-          <button type="button" class="sp-place">Place the base on the map</button>
-        </section>
-        <section>
-          <h4><b>3</b>How does the Coast Guard search?</h4>
-          ${patterns}
-        </section>
-        <section>
-          <h4><b>4</b>Where will it have drifted to by the time they arrive?</h4>
-          ${targets}
-          <p class="sp-help">This sets the <b>datum</b>, where the helicopter flies to and drops its
-            marker. The marker itself always drifts with the current alone, and the real buoy goes
-            where it really went.</p>
-        </section>
+          <div class="sp-setup">
+            <section>
+              <h4><b>1</b>Who is missing?</h4>
+              <p class="sp-target"><span class="sp-target-text">Pick a buoy in the Drifters list and move the clock to when it is reported missing.</span>
+                <button type="button" class="sp-link sp-change" hidden>change</button></p>
+              <button type="button" class="sp-use">Use the selected buoy at this time</button>
+            </section>
+            <section>
+              <h4><b>2</b>Where does the helicopter start?</h4>
+              <p class="sp-base"><span class="sp-base-text">Base: not placed</span>
+                <button type="button" class="sp-link sp-move" hidden>move</button></p>
+              <button type="button" class="sp-place">Place the base on the map</button>
+            </section>
+            <section>
+              <h4><b>3</b>How does the Coast Guard search?</h4>
+              <div class="sp-pills">${patterns}</div>
+              <p class="sp-help sp-pattern-help">${firstHelp}</p>
+            </section>
+            <section>
+              <h4><b>4</b>Where will it be when they arrive?</h4>
+              ${targets}
+              <details class="sp-more"><summary>What does this change?</summary>
+                <p>The <b>datum</b>: where the helicopter flies to and drops its marker. The marker
+                  itself always drifts with the current alone, and the real buoy goes where it really
+                  went. A drifter buoy is built to follow the water, so for one, "with the current" is
+                  the honest choice.</p></details>
+            </section>
+          </div>
+        </div>
+
+        <div class="sp-pane" data-pane="fly" hidden>
+          <button type="button" class="sp-spawn">Spawn a helicopter on the map</button>
+          <p class="sp-help">Click where it should appear, then steer with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
+            or the arrow keys; two keys fly a diagonal. 90 kt, and it sees 92.6 m either side.
+            If a buoy is chosen, flying over it finds it.</p>
+        </div>
+
         <div class="sp-actions">
           <button type="button" class="sp-fly on">Fly the search</button>
           <button type="button" class="sp-pause" disabled>Pause</button>
           <button type="button" class="sp-reset">Reset</button>
+          <select class="sp-speed" aria-label="Playback speed">${speeds}</select>
         </div>
-        <label class="sp-speed-row">Playback <select class="sp-speed" aria-label="Playback speed">${speeds}</select></label>
         <div class="sp-phase" aria-live="polite"></div>
         <div class="sp-result" aria-live="polite"></div>
-        <section class="sp-yourself">
-          <h4>Or fly it yourself</h4>
-          <button type="button" class="sp-spawn">Spawn a helicopter on the map</button>
-          <p class="sp-help">Click where it should appear, then steer with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
-            or the arrow keys; two keys fly a diagonal. It flies at 90 kt and sees 92.6 m either side.
-            If a buoy is chosen, passing over it finds it.</p>
-        </section>
-        <div class="sp-key">
-          <span><i class="sp-sw" style="background:${SEARCH_COLOURS.helicopter}"></i>track, and the strip it sees (to scale)</span>
-          <span><i class="sp-ring"></i>datum: where drift predicts the buoy</span>
-          <span><i class="sp-dot" style="background:${SEARCH_COLOURS.marker}"></i>marker: drifts with the current</span>
-          <span><i class="sp-dot" style="background:${SEARCH_COLOURS.target}"></i>the real buoy</span>
-        </div>
+        <details class="sp-keywrap"><summary>Key</summary>
+          <div class="sp-key">
+            <span><i class="sp-sw" style="background:${SEARCH_COLOURS.helicopter}"></i>track, and the strip it sees (to scale)</span>
+            <span><i class="sp-dash"></i>predicted drift, ending at the datum</span>
+            <span><i class="sp-sw" style="background:${SEARCH_COLOURS.target}"></i>where the buoy really went</span>
+            <span><i class="sp-dot" style="background:${SEARCH_COLOURS.marker}"></i>marker: drifts with the current</span>
+          </div>
+        </details>
       </div>`;
     L.DomEvent.disableClickPropagation(root);
     L.DomEvent.disableScrollPropagation(root);
@@ -135,30 +161,64 @@ export const SearchPanel = L.Control.extend({
     const q = (sel) => root.querySelector(sel);
     this._body = q('.sp-body');
     this._els = {
-      target: q('.sp-target'), use: q('.sp-use'), change: q('.sp-change'), base: q('.sp-base'),
+      target: q('.sp-target-text'), use: q('.sp-use'), change: q('.sp-change'), base: q('.sp-base-text'),
+      move: q('.sp-move'),
       place: q('.sp-place'), fly: q('.sp-fly'), pause: q('.sp-pause'), speed: q('.sp-speed'),
       phase: q('.sp-phase'), result: q('.sp-result'), spawn: q('.sp-spawn'),
+      summary: q('.sp-summary'), summaryText: q('.sp-summary-text'), setup: q('.sp-setup'),
     };
     this._els.use.addEventListener('click', () => this._h.onUseBuoy());
     this._els.change.addEventListener('click', () => this._h.onChangeBuoy());
     this._els.place.addEventListener('click', () => this._h.onPlaceBase());
+    this._els.move.addEventListener('click', () => this._h.onPlaceBase());
     this._els.fly.addEventListener('click', () => this._h.onFly(this.choices()));
     this._els.pause.addEventListener('click', () => this._h.onPlayPause());
     this._els.spawn.addEventListener('click', () => this._h.onSpawn());
+    q('.sp-edit').addEventListener('click', () => this.expandSetup());
     q('.sp-reset').addEventListener('click', () => this._h.onReset());
+    for (const tab of root.querySelectorAll('.sp-tab')) {
+      tab.addEventListener('click', () => this.showTab(tab.dataset.tab));
+    }
+    for (const d of root.querySelectorAll('details')) d.addEventListener('toggle', () => this.fit());
+    for (const r of root.querySelectorAll('input[name="sp-pattern"]')) {
+      r.addEventListener('change', () => { q('.sp-pattern-help').textContent = PATTERN_HELP[r.value] ?? ''; });
+    }
     q('.sp-toggle').addEventListener('click', () => {
       const collapsed = root.classList.toggle('collapsed');
       q('.sp-toggle').innerHTML = collapsed ? '+' : '&minus;';
     });
   },
 
-  /** Keep the body inside the map: it scrolls rather than running under the time bar. */
+  /** Keep the body inside the map: if it ever must scroll, it scrolls rather than clips. */
   fit() {
     if (!this._root || !this._mapRef) return;
     const map = this._mapRef.getContainer().getBoundingClientRect();
     const top = this._body.getBoundingClientRect().top;
     // 40 px short of the bottom: the map's scale bar lives in that corner.
     this._body.style.maxHeight = `${Math.max(140, map.bottom - top - 40)}px`;
+  },
+
+  /** 'search' or 'fly'. */
+  showTab(name) {
+    for (const tab of this._root.querySelectorAll('.sp-tab')) tab.classList.toggle('on', tab.dataset.tab === name);
+    for (const pane of this._root.querySelectorAll('.sp-pane')) pane.hidden = pane.dataset.pane !== name;
+    // Fly belongs to the Coast Guard search; it shares the row with Play and Reset.
+    this._els.fly.hidden = name !== 'search';
+    this.fit();
+  },
+
+  /** Fold the four steps into one line while a search flies. */
+  collapseSetup(text) {
+    this._els.summaryText.textContent = text;
+    this._els.summary.hidden = false;
+    this._els.setup.hidden = true;
+    this.fit();
+  },
+
+  expandSetup() {
+    this._els.summary.hidden = true;
+    this._els.setup.hidden = false;
+    this.fit();
   },
 
   /** What the user has chosen, for onFly. */
@@ -175,7 +235,10 @@ export const SearchPanel = L.Control.extend({
     this._els.speed.value = String(x);
   },
 
-  /** The target line, and whether one is chosen (which swaps the buttons). */
+  /**
+   * The target line. Once one is chosen the step shrinks to that line and a small
+   * "change" link: a done step does not need a full-width button any more (#71).
+   */
   setTarget(text, chosen) {
     this._els.target.textContent = text;
     this._els.use.hidden = Boolean(chosen);
@@ -183,12 +246,19 @@ export const SearchPanel = L.Control.extend({
     this.fit();
   },
 
-  setBase(text) { this._els.base.textContent = text; },
+  /** The base line; placed, the step shrinks to it and a "move" link. */
+  setBase(text, placed = false) {
+    this._els.base.textContent = text;
+    this._els.place.hidden = placed;
+    this._els.move.hidden = !placed;
+    this.fit();
+  },
 
   /** Which placement a map click will make: 'base', 'spawn' or null. */
   setPlacing(mode) {
     this._els.place.classList.toggle('on', mode === 'base');
     this._els.place.textContent = mode === 'base' ? 'Click the map to place the base…' : 'Place the base on the map';
+    this._els.move.textContent = mode === 'base' ? 'click the map…' : 'move';
     this._els.spawn.classList.toggle('on', mode === 'spawn');
     this._els.spawn.textContent = mode === 'spawn' ? 'Click the map where it should appear…' : 'Spawn a helicopter on the map';
   },

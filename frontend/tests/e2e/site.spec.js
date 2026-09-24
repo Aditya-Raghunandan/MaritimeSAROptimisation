@@ -427,7 +427,7 @@ test('the search view flies a pattern from a placed base and reports a result', 
 
   await page.click('.sp-place');
   await page.mouse.click(lkp.x - 60, lkp.y + 40);           // a base a little way off
-  await expect(page.locator('.sp-base')).toHaveText(/NM from the last known position/);
+  await expect(page.locator('.sp-base')).toHaveText(/NM out/);
   expect(await page.$eval('#point', (el) => el.classList.contains('visible'))).toBe(false);
 
   await page.selectOption('.sp-speed', '600');
@@ -452,7 +452,7 @@ async function readySearch(page) {
   const lkp = await page.locator('path.search-lkp').boundingBox();
   await page.click('.sp-place');
   await page.mouse.click(lkp.x - 60, lkp.y + 40);
-  await expect(page.locator('.sp-base')).toHaveText(/NM from the last known position/);
+  await expect(page.locator('.sp-base')).toHaveText(/NM out/);
 }
 
 /*
@@ -490,7 +490,7 @@ test('the panel keeps its choices when the view is left and opened again', async
   await page.waitForTimeout(300);
   await page.click('button[data-preset="search"]');
   await page.waitForTimeout(300);
-  await expect(page.locator('.sp-base')).toHaveText(/NM from the last known position/);
+  await expect(page.locator('.sp-base')).toHaveText(/NM out/);
   await expect(page.locator('.sp-target')).toHaveText(/Buoy E2E-A/);
 });
 
@@ -503,6 +503,7 @@ test('a spawned helicopter flies on the keyboard and reports what it flew', asyn
   await ready(page);
   await page.click('button[data-preset="search"]');
   await page.waitForTimeout(500);
+  await page.click('.sp-tab[data-tab="fly"]');
   await page.click('.sp-spawn');
   const box = await page.locator('#map').boundingBox();
   await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.5);
@@ -519,4 +520,38 @@ test('a spawned helicopter flies on the keyboard and reports what it flew', asyn
   expect(await page.locator('path.search-trail').count()).toBeGreaterThan(0);
 
   await expect(page.locator('.sp-result')).toHaveText(/You flew/, { timeout: 15_000 });
+});
+
+/** How far the search panel would have to scroll to show everything, in px. */
+async function panelOverflow(page) {
+  return page.$eval('.sp-body', (el) => el.scrollHeight - el.clientHeight);
+}
+
+/*
+  IT HAS TO FIT (#71). "The menus still clip": on a laptop the panel was taller than the
+  map. The screenshots showed it and it was judged acceptable because it scrolled; this
+  makes a panel that has to scroll a failure instead of a judgement.
+*/
+for (const size of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
+  test(`the search panel fits without scrolling at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await readySearch(page);
+    expect(await panelOverflow(page)).toBeLessThanOrEqual(1);                            // the set-up
+
+    await page.selectOption('.sp-speed', '600');
+    await page.click('.sp-fly');
+    await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
+    expect(await panelOverflow(page)).toBeLessThanOrEqual(1);                            // the result
+    await expect(page.locator('.sp-summary-text')).toHaveText(/Buoy E2E-A/);
+  });
+}
+
+test('the buoy leaves a trace, and the prediction is drawn as a path to the datum', async ({ page }) => {
+  await readySearch(page);
+  await page.selectOption('.sp-speed', '600');
+  await page.click('.sp-fly');
+  await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
+  expect(await page.locator('path.search-predicted').count()).toBe(1);
+  expect(await page.locator('path.search-buoy-path').count()).toBe(1);
+  await expect(page.locator('.search-tag-predicted')).toHaveText(/predicted drift/);
 });
