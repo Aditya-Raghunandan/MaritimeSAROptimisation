@@ -26,6 +26,7 @@ import { TYPICAL_CURRENT_MS } from './geo.js';
 import { DrifterLayer, TrackCache } from './drifterLayer.js';
 import { DrifterPanel } from './drifterPanel.js';
 import { day, inWindow, lifetimeBar, prepareIndex, spanCovering } from './drifters.js';
+import { createSearchView } from './searchView.js';
 
 const DATA = import.meta.env.VITE_DATA_BASE ?? 'data';
 // The drifter track export (#50). Its own variable so it can be served from
@@ -806,10 +807,12 @@ async function start() {
   */
   let drifterLayer = null;
   let drifterPanel = null;
+  let drifterCache = null;
   let selectedDrifter = null;
   const drifterEntries = await drifterIndexJob;
   if (drifterEntries && drifterEntries.length) {
     const cache = new TrackCache(DRIFTER_BASE);
+    drifterCache = cache;
     const onHover = (id) => { drifterLayer.highlight(id); drifterPanel.highlight(id); };
     // `timeTravel` is declared with the span control, further down.
     const onSelect = (buoy) => timeTravel(buoy);
@@ -826,7 +829,34 @@ async function start() {
     });
   }
 
-  for (const pending of ['Probability map', 'Search tracks']) {
+  /*
+    THE SEARCH (#64): the Coast Guard's own patterns, flown from a base to find a
+    real buoy -- the doctrinal searcher the paper compares against, on the map. It
+    needs a target (a drifter) and the drift field (for the datum and the marker),
+    so without either the placeholder stays. All of its logic is in searchRun.js;
+    searchView.js sequences it on its own seconds-long clock.
+  */
+  let searchView = null;
+  if (drifterLayer && resultantSource) {
+    // Epoch ms to the nearest frame of the wind tier in use, which a span change swaps.
+    const frameOf = (ms) => {
+      const k = Math.round((ms - axis.start.getTime()) / (axis.stepSeconds * 1000));
+      return k < 0 || k >= axis.frames ? null : k;
+    };
+    searchView = createSearchView({
+      map,
+      getSelectedBuoy: () => selectedDrifter,
+      getTrack: (buoy) => drifterCache.get(buoy),
+      getTime: () => clock.t.getTime(),
+      resultantSource,
+      frameOf,
+      prepareHourly: (ms) => prepareHourly(ms),
+      collapseDrifterList: () => drifterPanel.setCollapsed(true),
+      setStatus,
+    });
+    overlays[entry('Search — Coast Guard helicopter', 'fly a pattern to find a buoy')] = searchView.layer;
+  }
+  for (const pending of ['Probability map', ...(searchView ? [] : ['Search tracks'])]) {
     overlays[entry(pending, 'awaiting the engine')] = L.layerGroup();
   }
   L.control.layers(BASEMAPS, overlays, { collapsed: true }).addTo(map);
@@ -889,6 +919,14 @@ async function start() {
       // answers is whether a buoy rode the water it was in.
       layers: () => [currentRaster, currentParticles, drifterLayer],
     }] : []),
+    ...(searchView ? [{
+      id: 'search',
+      label: 'Search',
+      hint: 'fly a Coast Guard pattern',
+      // The drifters stay on so a target can be picked from the list; the current
+      // dimmed underneath, because the marker the pattern follows drifts on it.
+      layers: () => [currentRaster, drifterLayer, searchView.layer],
+    }] : []),
     {
       id: 'clean',
       label: 'Map only',
@@ -902,6 +940,7 @@ async function start() {
     currentRaster, currentParticles, currentQuiver,
     resultant, resultantFlow,
     drifterLayer,
+    searchView && searchView.layer,
   ].filter(Boolean);
 
   function applyPreset(preset) {
@@ -920,7 +959,7 @@ async function start() {
       Current and Wind + water views and must keep its weight there.
     */
     if (currentRaster) {
-      currentRaster.setOpacity(preset.id === 'drift' || preset.id === 'drifters'
+      currentRaster.setOpacity(['drift', 'drifters', 'search'].includes(preset.id)
         ? 0.26 : CURRENT_RASTER_OPACITY);
     }
 
@@ -1191,6 +1230,20 @@ async function start() {
     }
     syncDrifters();
     setStatus(`Buoy ${buoy.id}: first seen ${day(buoy.startMs)}. Press play to follow it.`);
+  }
+
+  /*
+    THE SEARCH NEEDS HOURLY FORCING. A span of weeks or more puts the site on its
+    daily tier, and a datum drifted on daily frames would snap to the next day's
+    current at noon. So before a search the site moves to a one-day span around the
+    report time -- the same move as `timeTravel`, moment and window together.
+  */
+  async function prepareHourly(ms) {
+    if (axis.stepSeconds <= 3600) return;
+    clock.jumpTo(new Date(ms), 86400);
+    if (spanSelect) spanSelect.value = '86400';
+    await applySpan(86400, { quiet: true });
+    syncSlider();
   }
 
   /*
@@ -1608,6 +1661,8 @@ async function start() {
     // is on but disarmed is drawn only, so the point panel is still what a
     // click means when nothing is armed.
     if (armed) return;
+    // Placing the search's base takes the click the same way.
+    if (searchView && searchView.consumeClick(e.latlng)) return;
     showSeries(e.latlng);
   });
 

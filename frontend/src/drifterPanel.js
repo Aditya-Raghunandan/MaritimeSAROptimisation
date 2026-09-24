@@ -65,11 +65,17 @@ export const DrifterPanel = L.Control.extend({
       this._render();
     });
     root.querySelector('.dp-toggle').addEventListener('click', () => {
-      const collapsed = root.classList.toggle('collapsed');
-      root.querySelector('.dp-toggle').innerHTML = collapsed ? '+' : '&minus;';
+      this.setCollapsed(!root.classList.contains('collapsed'));
     });
     this._render();
     return root;
+  },
+
+  /** Fold the list to its header, or open it again. */
+  setCollapsed(on) {
+    if (!this._root) return;
+    this._root.classList.toggle('collapsed', on);
+    this._root.querySelector('.dp-toggle').innerHTML = on ? '+' : '&minus;';
   },
 
   /** The buoys seen in the current window, which the list shows when not searching. */
