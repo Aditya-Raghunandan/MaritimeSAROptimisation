@@ -555,3 +555,35 @@ test('the buoy leaves a trace, and the prediction is drawn as a path to the datu
   expect(await page.locator('path.search-buoy-path').count()).toBe(1);
   await expect(page.locator('.search-tag-predicted')).toHaveText(/predicted drift/);
 });
+
+/*
+  ONE PLAY CONTROL (#73). In the Search view the time bar's ▶ is the search's: it flies
+  it, pauses it and resumes it, exactly as the panel's one button, whose label follows.
+*/
+test('in the Search view ▶ flies the search, and the one button follows it', async ({ page }) => {
+  await readySearch(page);
+  await page.selectOption('.sp-speed', '45');
+  await expect(page.locator('.sp-fly')).toHaveText('Fly the search');
+  await page.click('#play');
+  await page.waitForSelector('.search-heli', { timeout: 15_000 });
+  await expect(page.locator('.sp-fly')).toHaveText('Pause');
+  await page.click('#play');
+  await expect(page.locator('.sp-fly')).toHaveText('Resume');
+  await page.click('.sp-fly');
+  await expect(page.locator('.sp-fly')).toHaveText('Pause');
+  expect(await page.isVisible('.search-compass')).toBe(true);
+  await expect(page.locator('.search-compass .cp-lines')).toContainText('Heading');
+});
+
+test('▶ in the Search view never plays the site hours', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="search"]');
+  await page.waitForTimeout(400);
+  const before = await page.textContent('#stamp');
+  await page.click('#play');
+  await page.waitForTimeout(900);
+  expect(await page.textContent('#stamp')).toBe(before);
+  await expect(page.locator('#status')).toHaveText(/flies the search/);
+  expect(await page.locator('canvas.ocean-canvas').count()).toBe(1);
+});
