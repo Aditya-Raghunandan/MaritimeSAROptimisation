@@ -59,18 +59,23 @@ t, glat, glon = ground_track(pattern, marker)           # every waypoint, plus e
 - `transit_time_s` refuses a datum beyond the H-60's 300 NM radius of action.
 - `marker_track` without a forcing backend raises; a still marker is `MarkerTrack.fixed`.
 
-## On the site (issues #64, #68, #69)
+## On the site (issues #64, #68, #69, #71)
 
-The **Search** preset flies the same doctrine against a real buoy. The panel, top-left, asks the
-Coast Guard's questions in order:
+The **Search** preset flies the same doctrine against a real buoy. The panel, top-left, has two
+tabs: **Coast Guard search** and **Fly it yourself**. It is built to fit a 1366 × 768 screen
+without scrolling, and an e2e test fails if it does not.
+- A finished step shrinks to one line with a small *change* or *move* link.
+- Once a search flies, the four steps fold into a one-line summary with *Change the set-up*.
+
+The first tab asks the Coast Guard's questions in order:
 
 1. **Who is missing?** Pick a buoy in the Drifters list and move the clock to when it is reported
    missing. Its position then is the last known position (LKP). Once it is chosen, the list gets
    out of the way; *Choose another buoy* brings it back.
 2. **Where does the helicopter start?** Place the base with a click.
 3. **How does the Coast Guard search?** Expanding Square or Sector Search.
-4. **Where will it have drifted to by the time they arrive?** Either *with the current* (a drifter
-   buoy) or *with the current + 2 % of the wind* (a person in the water). **This sets the
+4. **Where will it be when they arrive?** Either *with the current only* (a drifter buoy) or
+   *current + 2 % of the wind* (a person). **This sets the
    datum**, where the helicopter is sent and which way the first leg runs. It does not give the
    marker any wind: the marker always drifts with the current alone, and the real buoy goes
    where it really went.
@@ -81,8 +86,11 @@ Then **Fly the search**:
 3. It flies the pattern about the marker at 90 kt.
 
 The map labels every mark: *last known position*, *datum: where drift predicts it*, *marker* and
-*real buoy*. It draws the **datum error**, the dotted line from the datum to where the buoy really
-was on arrival. The marker is dropped at the datum, not on the buoy, because the Coast Guard does
+*real buoy*. It draws three lines that tell the story:
+- the **predicted drift**, white dots from the last known position to the datum, labelled with how
+  long it covers;
+- **where the buoy really went**, a pink line that grows as the search plays;
+- the **datum error**, dotted, from the datum to where the buoy really was on arrival. The marker is dropped at the datum, not on the buoy, because the Coast Guard does
 not know where the buoy is. That gap is the drift model's error, and it is what this project
 measures.
 
