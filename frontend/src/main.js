@@ -9,6 +9,7 @@
 
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import '@fontsource-variable/inter';
 import { Clock } from './clock.js';
 import { buildLayer } from './layers.js';
 import { ZarrSource, pickTier, residentSpanOf } from './sources.js';
@@ -27,6 +28,9 @@ import { DrifterLayer, TrackCache } from './drifterLayer.js';
 import { DrifterPanel } from './drifterPanel.js';
 import { day, inWindow, lifetimeBar, prepareIndex, spanCovering } from './drifters.js';
 import { createSearchView } from './searchView.js';
+import { esriTiles } from './tiles.js';
+import { NorthArrow } from './northArrow.js';
+import { keepCornersApart } from './cornerGuard.js';
 
 const DATA = import.meta.env.VITE_DATA_BASE ?? 'data';
 // The drifter track export (#50). Its own variable so it can be served from
@@ -127,15 +131,13 @@ const BASEMAPS = {
     the subject: the Gulf Stream follows the shelf edge and separates at Cape
     Hatteras because the shelf turns away there.
   */
-  'Ocean (bathymetry)': L.tileLayer(
-    'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
-    // Up-scaled past its last native zoom rather than blank: the Search view goes to 16 (#73).
-    { maxNativeZoom: 13, maxZoom: 18, attribution: 'Esri, GEBCO, NOAA, National Geographic, and other contributors' },
-  ),
-  Satellite: L.tileLayer(
-    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    { maxNativeZoom: 17, maxZoom: 18, attribution: 'Esri, Maxar, Earthstar Geographics' },
-  ),
+  // Up-scaled past their last native zoom rather than blank: the Search view goes to 16
+  // (#73). Over open water Esri holds far less than that -- imagery stops at 13, the
+  // ocean base at 10 in places -- and tiles.js fills those gaps from the zoom above (#76).
+  'Ocean (bathymetry)': esriTiles('Ocean/World_Ocean_Base',
+    { maxNativeZoom: 13, maxZoom: 18, attribution: 'Esri, GEBCO, NOAA, National Geographic, and other contributors' }),
+  Satellite: esriTiles('World_Imagery',
+    { maxNativeZoom: 17, maxZoom: 18, attribution: 'Esri, Maxar, Earthstar Geographics' }),
 };
 
 /*
@@ -366,8 +368,11 @@ function setProvenance(tierName, tier) {
   const el = document.getElementById('provenance');
   if (!el) return;
   if (!tier) { el.textContent = ''; return; }
-  el.textContent = `${tierName} · ${tier.frames.toLocaleString()} frames · `
-    + `${describeStep(tier.step_seconds)} per step · ${tier.compression} · `
+  // The codec is for whoever maintains the store, not for a reader: it moves to the tooltip.
+  const size = tier.bytes >= 1e9 ? `${(tier.bytes / 1e9).toFixed(2)} GB`
+    : tier.bytes >= 1e6 ? `${(tier.bytes / 1e6).toFixed(0)} MB` : `${Math.max(1, Math.round(tier.bytes / 1e3))} kB`;
+  el.textContent = `${tierName} data · ${tier.frames.toLocaleString()} frames · ${size}`;
+  el.title = `${describeStep(tier.step_seconds)} per step · compressed ${tier.compression} · `
     + `${(tier.bytes / 1e6).toFixed(0)} MB published`;
 }
 
@@ -469,6 +474,9 @@ async function start() {
   const mask = domainMask(dataBounds).addTo(map);
   domainLabel(dataBounds, 'Study domain · 17–36 N, 82–63 W').addTo(map);
   addScaleBar(map);
+  new NorthArrow().addTo(map);
+  // Just the library's name: the default prefix carries a flag, which is not ours to fly.
+  map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
 
   const clock = Clock.fromManifest(manifest);
 
@@ -1022,6 +1030,8 @@ async function start() {
     temporal dead zone bug did to this file once already.
   */
   presetBar.parentNode.insertBefore(presetBar, presetBar.parentNode.firstChild);
+  // With every right-hand control in place: the two corners must not meet (#76).
+  keepCornersApart(map);
 
   /*
     Touching a checkbox directly means no preset describes what is on screen
@@ -1378,6 +1388,7 @@ async function start() {
       slider.max = String(Math.max(1, Math.ceil(endS)));
       slider.step = '1';
       slider.classList.add('searching');
+      if (windowLabel) windowLabel.title = 'Time since the call came in, T+ hours:minutes:seconds';
       for (const el of [spanSelect, winBack, winFwd]) if (el) el.disabled = true;
       if (lifetimeEl) lifetimeEl.hidden = true;
       if (phaseBand) {
@@ -1401,6 +1412,7 @@ async function start() {
       if (!timeOwner) return;
       timeOwner = null;
       slider.classList.remove('searching');
+      if (windowLabel) windowLabel.title = 'The span the slider covers';
       if (phaseBand) phaseBand.hidden = true;
       if (spanSelect) spanSelect.disabled = false;
       showPlayIcon(false);
