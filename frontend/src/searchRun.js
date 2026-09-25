@@ -37,8 +37,22 @@ import {
 } from './patterns.js';
 import { driftTrack } from './pointDrift.js';
 import {
-  LAUNCH_DELAY_S, ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, distanceM, transitTimeS,
+  LAUNCH_DELAY_S, ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, distanceM, sectorRadiusM, transitTimeS,
 } from './platform.js';
+
+/** Patterns laid out along the drift model's predicted path rather than from the datum alone. */
+const ALONG_THE_DATUM_LINE = new Set(['parallel_track', 'trackline_return']);
+
+/**
+ * The drift model's prediction as a line: from the last known position to the datum, its
+ * bearing and length in metres. This is the Addendum's "datum line" (§H.7.3.1).
+ */
+export function datumLine(lkp, datum) {
+  const cos = Math.cos(((lkp.lat + datum.lat) / 2) * TO_RAD);
+  const east = (datum.lon - lkp.lon) * M_PER_DEG_LAT * cos;
+  const north = (datum.lat - lkp.lat) * M_PER_DEG_LAT;
+  return { bearingDeg: bearingOf(east, north), lengthM: Math.hypot(east, north) };
+}
 
 
 
@@ -115,9 +129,26 @@ export function planSearch({
     if (bearing === null) bearing = 0;
   }
 
-  const pattern = PATTERNS[patternKind].build({ ...patternArgs, firstBearingDeg: bearing, durationS: windowS });
+  // The Parallel Track and the Trackline are laid out by the prediction itself: along the
+  // datum line, the major axis parallel to the target's drift (§H.7.3.9). The trackline
+  // runs from the last known position through the datum and as far again beyond it --
+  // the buoy having drifted anywhere from not at all to twice as far as predicted.
+  const line = datumLine(lkp, datum);
+  const args = { ...patternArgs };
+  if (ALONG_THE_DATUM_LINE.has(patternKind) && firstBearingDeg === null && line.bearingDeg !== null
+      && line.lengthM > 50) {
+    bearing = line.bearingDeg;
+    bearingSource = 'along the predicted drift (the datum line)';
+  }
+  if (patternKind === 'trackline_return' && args.halfLengthM === undefined) {
+    // At least a minute's flying each way, so a near-still datum still gets a real line.
+    args.halfLengthM = Math.max(line.lengthM, sectorRadiusM());
+  }
+
+  const pattern = PATTERNS[patternKind].build({ ...args, firstBearingDeg: bearing, durationS: windowS });
   return {
-    base, lkp, reportMs, datum, datumTrack, marker, pattern, patternKind,
+    base, lkp, reportMs, datum, datumTrack, marker, pattern, patternKind, datumLine: line,
+    patternArgs: args,
     targetLeeway, firstBearingDeg: bearing, bearingSource,
     launchS: LAUNCH_DELAY_S,
     arriveS: elapsed,
@@ -249,6 +280,20 @@ export function formatElapsed(s) {
   const mm = String(m).padStart(2, '0');
   const ss = String(sec).padStart(2, '0');
   return h > 0 ? `T${sign}${h}:${mm}:${ss}` : `T${sign}${m}:${ss}`;
+}
+
+/**
+ * "2 h 18 min", "21 min 54 s", "39 s": a length of time said in words, for sentences.
+ * The clock form above is for the time bar; in a sentence "2:18:05" read as a time of day.
+ */
+export function formatDuration(s) {
+  const a = Math.max(0, Math.round(s));
+  const h = Math.floor(a / 3600);
+  const m = Math.floor((a % 3600) / 60);
+  const sec = a % 60;
+  if (h > 0) return m > 0 ? `${h} h ${m} min` : `${h} h`;
+  if (m > 0) return sec > 0 ? `${m} min ${sec} s` : `${m} min`;
+  return `${sec} s`;
 }
 
 /* ---------------------------------------------------------------------------------------

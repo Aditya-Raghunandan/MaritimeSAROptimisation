@@ -41,7 +41,7 @@ import { resultantSampler } from './pointDrift.js';
 import { SearchLayer } from './searchLayer.js';
 import { SearchPanel, speedLabel } from './searchPanel.js';
 import {
-  ManualFlight, TARGETS, datumErrorM, detect, formatElapsed, freePlan, headingFromKeys,
+  ManualFlight, TARGETS, datumErrorM, detect, formatDuration, formatElapsed, freePlan, headingFromKeys,
   helicopterAt, keyDirection, planSearch, searchPath,
 } from './searchRun.js';
 
@@ -186,7 +186,7 @@ export function createSearchView(deps) {
       const t = transitTimeS(d);
       text += ` · ${(d / NM_M).toFixed(0)} NM out · `
         + (t === null ? 'beyond the H-60\'s 300 NM range'
-          : `on scene ${formatElapsed(t).slice(2)} after the call`);
+          : `on scene ${formatDuration(t)} after the call`);
     }
     panel.setBase(text, true);
   }
@@ -218,9 +218,12 @@ export function createSearchView(deps) {
     layer.setTarget(target.lkp);
     // Whether it still has its drogue then: that decides how much the wind moves it.
     const und = undroguedAt(track, reportMs);
+    // Said in plain words (#76): "Drogue lost by then" assumed the reader knew what one was.
     panel.setDrogueHint(und === null ? null : (und
-      ? 'Drogue lost by then: the wind moves it more than a drogued buoy, less than a person.'
-      : 'Still drogued then (a sea anchor 15 m down): it follows the water, so "current only" fits.'));
+      ? 'It had lost its drogue by then, the underwater sail that keeps a buoy with the water, '
+        + 'so the wind pushes it too, though less than a person.'
+      : 'It still had its drogue then, an underwater sail 15 m down that keeps it with the '
+        + 'water, so "current only" fits.'), und ? 'undrogued' : 'drogued');
     // The list has done its job. Hiding the drifter layer also removes its second copy of
     // the buoy, which moved on the site clock while the search drew its own.
     deps.showDrifters(false);
@@ -322,13 +325,17 @@ export function createSearchView(deps) {
     layer.setPlan(plan, targetAt, result);
     // The set-up has done its job: fold it to one line so the result fits (#71).
     const drift = choices.targetKind === 'person' ? 'current + 2 % of wind' : 'current only';
-    panel.collapseSetup(`Buoy ${target.buoy.id} · base ${(plan.distanceM / NM_M).toFixed(0)} NM out · `
-      + `${PATTERNS[plan.patternKind].label} · datum drifted with ${drift}`);
+    panel.collapseSetup([
+      ['Buoy', target.buoy.id],
+      ['Base', `${(plan.distanceM / NM_M).toFixed(0)} NM out`],
+      ['Pattern', PATTERNS[plan.patternKind].label],
+      ['Datum', `drifted with ${drift}`],
+    ]);
     map.fitBounds([[base.lat, base.lon], [plan.datum.lat, plan.datum.lon]], { padding: [60, 60] });
     ownTime([
       { toS: plan.launchS, label: 'call to launch', cls: 'ph-ready' },
       { toS: plan.arriveS, label: 'flying out', cls: 'ph-transit' },
-      { toS: plan.endS, label: `on scene: ${PATTERNS[plan.patternKind].label}`, cls: 'ph-search' },
+      { toS: plan.endS, label: `on scene · ${PATTERNS[plan.patternKind].short}`, cls: 'ph-search' },
     ]);
     play();
   }
@@ -376,6 +383,7 @@ export function createSearchView(deps) {
     return mode === 'free' && !flight.done;
   }
 
+  /** The time bar's read-out: T+ clock time, which the bar's tooltip explains. */
   function label(s) {
     const h = helicopterAt(plan, s);
     let what;
@@ -392,6 +400,11 @@ export function createSearchView(deps) {
     return `${formatElapsed(s)} · ${what}${pace}`;
   }
 
+  /** The panel's read-out: the same, with the time said in words. */
+  function phaseLine(s) {
+    return label(s).replace(/^T\+\S+/, `${formatDuration(s)} since the call`);
+  }
+
   function render(s, force = false) {
     const now = performance.now();
     layer.setTime(s);
@@ -402,7 +415,7 @@ export function createSearchView(deps) {
       if (panel.follow()) map.setView([p.lat, p.lon], map.getZoom(), { animate: false });
       else {
         map.panInside([p.lat, p.lon], {
-          paddingTopLeft: [400, 160], paddingBottomRight: [360, 220], animate: false,
+          paddingTopLeft: [400, 160], paddingBottomRight: [340, 300], animate: false,
         });
       }
     }
@@ -420,7 +433,7 @@ export function createSearchView(deps) {
       anim.moment = now;
       deps.setMoment(plan.reportMs + s * 1000);
     }
-    panel.setPhase(label(s));
+    panel.setPhase(phaseLine(s));
   }
 
   function play() {
@@ -502,7 +515,7 @@ export function createSearchView(deps) {
     const lines = mode === 'free' ? freeLines() : patternLines();
     panel.setResult(lines.map((l) => `<p>${l}</p>`).join(''));
     timeBar.update(anim.s, label(anim.s), false);
-    panel.setPhase(label(anim.s));
+    panel.setPhase(phaseLine(anim.s));
     const r = mode === 'free' ? flight.result() : result;
     setStatus(r && r.found ? 'Found. Drag the time bar to look back, or Reset.' : 'Done. Drag the time bar to look back, or Reset.');
   }
@@ -511,12 +524,12 @@ export function createSearchView(deps) {
     const lines = [];
     const name = PATTERNS[plan.patternKind].label;
     if (result.found) {
-      lines.push(`<b class="sp-ok">Found</b> at ${formatElapsed(result.foundS)}, `
-        + `${formatElapsed(result.foundS - plan.arriveS).slice(2)} into the ${name}.`);
+      lines.push(`<b class="sp-ok">Found</b> ${formatDuration(result.foundS)} after the call, `
+        + `${formatDuration(result.foundS - plan.arriveS)} into the ${name}.`);
     } else {
       const pass = Number.isFinite(result.closestM) ? formatDistance(result.closestM) : 'none';
       lines.push(`<b class="sp-miss">Not found</b> in the 45-minute window. Closest pass ${pass}`
-        + (result.closestS !== null ? ` at ${formatElapsed(result.closestS)}.` : '.'));
+        + (result.closestS !== null ? `, ${formatDuration(result.closestS)} after the call.` : '.'));
     }
     if (datumErr !== null) {
       lines.push(`The <b>datum error</b> was ${formatDistance(datumErr)}: that far from the drift model's `
@@ -533,13 +546,13 @@ export function createSearchView(deps) {
     const flown = flight.s - plan.arriveS;
     if (target) {
       if (r.found) {
-        lines.push(`<b class="sp-ok">You found it</b>, ${formatElapsed(r.foundS).slice(2)} into your flight.`);
+        lines.push(`<b class="sp-ok">You found it</b>, ${formatDuration(r.foundS)} into your flight.`);
       } else {
         const pass = Number.isFinite(r.closestM) ? formatDistance(r.closestM) : 'none';
         lines.push(`<b class="sp-miss">Not found.</b> Your closest pass was ${pass}.`);
       }
     }
-    lines.push(`You flew ${formatDistance(flight.lengthM)} in ${formatElapsed(flown).slice(2)}, sweeping about `
+    lines.push(`You flew ${formatDistance(flight.lengthM)} in ${formatDuration(flown)}, sweeping about `
       + `${((flight.lengthM * SWEEP_WIDTH_M) / 1e6).toFixed(1)} km² if no strip overlapped.`);
     if (flown >= ON_SCENE_WINDOW_S - 1) lines.push('That was the whole 45-minute window.');
     return lines;

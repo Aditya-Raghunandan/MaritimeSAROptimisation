@@ -9,6 +9,10 @@
  * the wind's text also says where it comes FROM, because that is how wind is spoken of.
  *
  * `compassReadout` (seaState.js) is pure and tested; the control only draws what it returns.
+ *
+ * Bottom-right, on top of the legends, rose beside its read-out (#76): top-right, under
+ * the drifter list, it ran down over the Surface current key. In the same stack as the
+ * legends it cannot overlap them, and cornerGuard.js keeps that stack clear of the top.
  */
 
 import L from 'leaflet';
@@ -38,23 +42,26 @@ function needle(cls, colour, len, w) {
 }
 
 export const Compass = L.Control.extend({
-  options: { position: 'topright' },
+  options: { position: 'bottomright' },
 
   onAdd() {
     if (this._root) return this._root;
     const root = L.DomUtil.create('div', 'search-compass');
     root.innerHTML = `
-      <svg viewBox="-50 -50 100 100" width="118" height="118" aria-hidden="true">
+      <svg viewBox="-50 -50 100 100" width="84" height="84" aria-hidden="true">
         ${RING}
         ${needle('cp-wind', '#f0b04a', 28, 2.2)}
         ${needle('cp-current', '#48b1e3', 32, 2.6)}
         ${needle('cp-heading', '#ff6b35', 38, 3.2)}
         <circle cx="0" cy="0" r="3" fill="#ffffff"/>
       </svg>
-      <div class="cp-lines"></div>
-      <div class="cp-caveat" hidden></div>
-      <div class="cp-key"><i style="background:#ff6b35"></i>heading <i style="background:#48b1e3"></i>current
-        <i style="background:#f0b04a"></i>wind (going to)</div>`;
+      <div class="cp-text">
+        <div class="cp-lines"></div>
+        <div class="cp-caveat" hidden></div>
+        <div class="cp-key"><span><i style="background:#ff6b35"></i>heading</span>
+          <span><i style="background:#48b1e3"></i>current</span>
+          <span><i style="background:#f0b04a"></i>wind, going to</span></div>
+      </div>`;
     L.DomEvent.disableClickPropagation(root);
     this._root = root;
     this.update({});

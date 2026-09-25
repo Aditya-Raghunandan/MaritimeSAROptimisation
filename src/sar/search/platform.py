@@ -118,6 +118,19 @@ def sector_radius_m(speed_ms: float = SEARCH_SPEED_MS,
     return float(max(speed_ms * 60.0, 2.0 * sweep_width_m))
 
 
+def search_effort_m2(sweep_width_m: float = SWEEP_WIDTH_M, speed_ms: float = SEARCH_SPEED_MS,
+                     window_s: float = ON_SCENE_WINDOW_S) -> float:
+    """The available search effort Z = W x V x T: the area one window covers at coverage 1.
+
+    Addendum p. H-40 (g): "The available search effort on scene is the product of corrected
+    sweep width (W), search speed (V) and search endurance (T) (Z = W x V x T)"; its use in
+    sizing a search area is §H.1.3.2. About 23 km² for one 45-minute window at 90 kt.
+    """
+    if sweep_width_m <= 0 or speed_ms <= 0 or window_s <= 0:
+        raise ValueError("sweep width, speed and window must all be positive")
+    return float(sweep_width_m * speed_ms * window_s)
+
+
 def great_circle_m(lat1, lon1, lat2, lon2):
     """Great-circle distance in metres by the haversine formula. Scalar or array.
 

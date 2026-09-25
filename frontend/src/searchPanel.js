@@ -48,10 +48,6 @@ export function speedLabel(x) {
   return hit ? hit.label.replace(/ \(.*\)$/, '').replace(' of search', '') : `${x} s per second`;
 }
 
-const PATTERN_HELP = {
-  expanding_square: 'A square spiral out from the marker: even coverage.',
-  sector_search: 'Spokes through the marker: densest right beside it.',
-};
 
 export const SearchPanel = L.Control.extend({
   options: { position: 'topleft' },
@@ -83,9 +79,9 @@ export const SearchPanel = L.Control.extend({
     // Side by side, with one line of help for the one chosen: two wrapped descriptions
     // were what pushed the set-up past the bottom of a 900 px screen (#71).
     const patterns = Object.entries(PATTERNS).map(([k, p], n) => `
-      <label class="sp-pill" title="${PATTERN_HELP[k] ?? ''}"><input type="radio" name="sp-pattern" value="${k}"${n === 0 ? ' checked' : ''}>
-        <span>${p.label}</span></label>`).join('');
-    const firstHelp = PATTERN_HELP[Object.keys(PATTERNS)[0]] ?? '';
+      <label class="sp-pill" title="${p.label}: ${p.help}"><input type="radio" name="sp-pattern" value="${k}"${n === 0 ? ' checked' : ''}>
+        <span>${p.short}</span></label>`).join('');
+    const firstHelp = Object.values(PATTERNS)[0].help;
     const targets = Object.entries(TARGETS).map(([k, t], n) => `
       <label class="sp-choice"><input type="radio" name="sp-kind" value="${k}"${n === 0 ? ' checked' : ''}>
         <span>${t.label}</span></label>`).join('');
@@ -105,7 +101,7 @@ export const SearchPanel = L.Control.extend({
 
         <div class="sp-pane" data-pane="search">
           <div class="sp-summary" hidden>
-            <p class="sp-summary-text"></p>
+            <dl class="sp-summary-text sp-facts"></dl>
             <button type="button" class="sp-edit">Change the set-up</button>
           </div>
           <div class="sp-setup">
@@ -193,7 +189,7 @@ export const SearchPanel = L.Control.extend({
     }
     for (const d of root.querySelectorAll('details')) d.addEventListener('toggle', () => this.fit());
     for (const r of root.querySelectorAll('input[name="sp-pattern"]')) {
-      r.addEventListener('change', () => { q('.sp-pattern-help').textContent = PATTERN_HELP[r.value] ?? ''; });
+      r.addEventListener('change', () => { q('.sp-pattern-help').textContent = PATTERNS[r.value].help; });
     }
     q('.sp-toggle').addEventListener('click', () => {
       const collapsed = root.classList.toggle('collapsed');
@@ -206,8 +202,8 @@ export const SearchPanel = L.Control.extend({
     if (!this._root || !this._mapRef) return;
     const map = this._mapRef.getContainer().getBoundingClientRect();
     const top = this._body.getBoundingClientRect().top;
-    // 40 px short of the bottom: the map's scale bar lives in that corner.
-    this._body.style.maxHeight = `${Math.max(140, map.bottom - top - 40)}px`;
+    // 44 px short of the bottom: the north arrow and the scale bar live in that corner.
+    this._body.style.maxHeight = `${Math.max(140, map.bottom - top - 44)}px`;
   },
 
   /** 'search' or 'fly'. */
@@ -229,16 +225,26 @@ export const SearchPanel = L.Control.extend({
     return this._els.follow.checked;
   },
 
-  /** A line under step 4 about the chosen buoy's drogue, or nothing. */
-  setDrogueHint(text) {
+  /** A line under step 4 about the chosen buoy's drogue, or nothing; `kind` colours its rule. */
+  setDrogueHint(text, kind = null) {
     this._els.drogue.hidden = !text;
     this._els.drogue.textContent = text ?? '';
+    if (kind) this._els.drogue.dataset.kind = kind;
     this.fit();
   },
 
-  /** Fold the four steps into one line while a search flies. */
-  collapseSetup(text) {
-    this._els.summaryText.textContent = text;
+  /** Fold the four steps into a short list of what was chosen, while a search flies. */
+  collapseSetup(facts) {
+    const dl = this._els.summaryText;
+    dl.replaceChildren();
+    for (const [k, v] of facts) {
+      const dt = document.createElement('dt');
+      dt.textContent = k;
+      const dd = document.createElement('dd');
+      dd.textContent = v;
+      // A space between them, so the list still reads as text: "Buoy 3002...".
+      dl.append(dt, ' ', dd, ' ');
+    }
     this._els.summary.hidden = false;
     this._els.setup.hidden = true;
     this.fit();

@@ -587,3 +587,62 @@ test('▶ in the Search view never plays the site hours', async ({ page }) => {
   await expect(page.locator('#status')).toHaveText(/flies the search/);
   expect(await page.locator('canvas.ocean-canvas').count()).toBe(1);
 });
+
+/*
+  THE DRIFT MODEL LAYS THESE OUT (#75). Parallel Track and Trackline are flown along the
+  predicted drift; the whole pattern is drawn faint ahead of the helicopter, and a
+  Parallel Track's area is outlined.
+*/
+for (const [kind, area] of [['parallel_track', 1], ['trackline_return', 0]]) {
+  test(`a ${kind.replace('_', ' ')} flies to a result, drawn ahead of the helicopter`, async ({ page }) => {
+    await readySearch(page);
+    await page.click(`.sp-pill:has(input[value="${kind}"])`);
+    await page.selectOption('.sp-speed', '600');
+    await page.click('.sp-fly');
+    await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
+    expect(await page.locator('path.search-planned').count()).toBe(1);
+    expect(await page.locator('path.search-area').count()).toBe(area);
+    await expect(page.locator('.sp-result')).toHaveText(/datum line|as set/);
+  });
+}
+
+/* A north arrow in every view, beside the scale bar (#75). */
+test('the map always carries a north arrow', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await expect(page.locator('.north-arrow')).toBeVisible();
+  await page.click('button[data-preset="search"]');
+  await expect(page.locator('.north-arrow')).toBeVisible();
+});
+
+/** How far the top-right stack runs into the bottom-right one, px (negative is clear). */
+async function cornerOverlap(page) {
+  return page.evaluate(() => {
+    const top = document.querySelector('.leaflet-top.leaflet-right').getBoundingClientRect();
+    const bottom = document.querySelector('.leaflet-bottom.leaflet-right').getBoundingClientRect();
+    return top.bottom - bottom.top;
+  });
+}
+
+/*
+  THE RIGHT-HAND CORNERS NEVER MEET (#76). On 25 Sep the drifter list lay over the
+  legends and the compass over the Surface current key.
+*/
+for (const size of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
+  test(`the right-hand controls do not overlap at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('');
+    await ready(page);
+    for (const preset of ['drifters', 'both', 'drift']) {
+      await page.click(`button[data-preset="${preset}"]`);
+      await page.waitForTimeout(500);
+      expect(await cornerOverlap(page), preset).toBeLessThanOrEqual(0);
+    }
+    await readySearch(page);
+    await page.selectOption('.sp-speed', '600');
+    await page.click('.sp-fly');
+    await page.waitForSelector('.search-compass');
+    await page.waitForTimeout(300);
+    expect(await cornerOverlap(page), 'search').toBeLessThanOrEqual(0);
+  });
+}

@@ -17,6 +17,8 @@
  *   datum error  a dotted line from the datum to where the buoy REALLY was then
  *   real path    where the buoy actually went, growing as the search plays (#71)
  *   marker       dropped at the datum, drifting with the current; the pattern follows it
+ *   planned      the rest of the pattern, faint, carried with the marker; a Parallel
+ *                Track's area is outlined too (#75)
  *   swept strip  the path flown, drawn at its TRUE width, 185.2 m, re-scaled on zoom
  *   helicopter   an icon at the current moment, pointing along its heading
  *   real buoy    where the buoy actually was at this moment
@@ -27,7 +29,8 @@
 import L from 'leaflet';
 
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
-import { formatElapsed, helicopterAt, markerPositionAt, searchPath } from './searchRun.js';
+import { offsetPosition } from './patterns.js';
+import { formatDuration, helicopterAt, markerPositionAt, searchPath } from './searchRun.js';
 
 /** How often the buoy's real path is sampled for drawing, in seconds. */
 const TRACE_STEP_S = 300;
@@ -60,14 +63,18 @@ const HELI_SVG = `
   <rect x="-0.9" y="3.5" width="1.8" height="7" fill="${SEARCH_COLOURS.helicopter}" stroke="#121211" stroke-width=".6"/>
 </svg>`;
 
-/** A small text label beside a point on the map, never in the way of a click. */
-function tag(latlng, text, colour, cls = '') {
+/**
+ * A small label beside a point on the map, never in the way of a click: a dark chip in
+ * the point's colour, so it reads over any basemap (italic white text on a halo did not).
+ * `anchor` is where the chip's corner sits relative to the point, as Leaflet counts it.
+ */
+function tag(latlng, text, colour, cls = '', anchor = [-11, 10]) {
   return L.marker(latlng, {
     icon: L.divIcon({
       className: `search-tag ${cls}`,
       html: `<span style="color:${colour}">${text}</span>`,
       iconSize: null,
-      iconAnchor: [-10, 7],
+      iconAnchor: anchor,
     }),
     interactive: false,
     keyboard: false,
@@ -163,6 +170,7 @@ export const SearchLayer = L.Layer.extend({
     if (!plan.free) this._renderPrediction(g, plan);
     this._renderBuoyPath(g, plan, s);
     if (!plan.free) this._renderDoctrine(g, plan, s);
+    if (!plan.free) this._renderPlanned(g, plan, s);
     this._renderFlown(g, plan, s);
 
     // The real target, where it actually was at this moment.
@@ -172,7 +180,8 @@ export const SearchLayer = L.Layer.extend({
         radius: 5, color: '#121211', weight: 1, fillColor: SEARCH_COLOURS.target, fillOpacity: 1,
         className: 'search-target', interactive: false,
       }).addTo(g);
-      tag(t, 'real buoy', SEARCH_COLOURS.target).addTo(g);
+      // Below and right: the found ring and the helicopter sit on the point itself.
+      tag(t, 'real buoy', SEARCH_COLOURS.target, '', [-15, -9]).addTo(g);
     }
 
     const r = this._flight ? this._flight.result() : this._result;
@@ -213,7 +222,7 @@ export const SearchLayer = L.Layer.extend({
       className: 'search-predicted', interactive: false,
     }).addTo(g);
     const mid = pts[Math.floor(pts.length / 2)];
-    tag(mid, `predicted drift, ${formatElapsed(plan.arriveS).slice(2)}`, SEARCH_COLOURS.datum,
+    tag(mid, `predicted drift · ${formatDuration(plan.arriveS)}`, SEARCH_COLOURS.datum,
       'search-tag-predicted').addTo(g);
   },
 
@@ -245,20 +254,21 @@ export const SearchLayer = L.Layer.extend({
       radius: 7, color: SEARCH_COLOURS.datum, weight: 1.5, fill: false, dashArray: '3 3',
       className: 'search-datum', interactive: false,
     }).addTo(g);
-    tag([datum.lat, datum.lon], 'datum: where drift predicts it', SEARCH_COLOURS.datum).addTo(g);
+    // How wrong the prediction was: the datum against where the buoy really was on arrival.
+    // Said in the datum's own label, once there is an answer: a second label halfway along
+    // the error line ran into the found ring (screenshots, 26 Sep).
+    const truth = s >= plan.arriveS && this._targetAt ? this._targetAt(plan.dropMs) : null;
+    const miss = truth ? this._map.distance([datum.lat, datum.lon], truth) : null;
+    tag([datum.lat, datum.lon], 'datum · where drift predicts it'
+      + (miss === null ? '' : `<small>${formatDistance(miss)} from where the buoy really was</small>`),
+    SEARCH_COLOURS.datum, 'search-tag-datum').addTo(g);
 
     if (s < plan.arriveS) return;
-
-    // How wrong the prediction was: the datum against where the buoy really was on arrival.
-    const truth = this._targetAt ? this._targetAt(plan.dropMs) : null;
     if (truth) {
-      const miss = this._map.distance([datum.lat, datum.lon], truth);
       L.polyline([[datum.lat, datum.lon], truth], {
         color: SEARCH_COLOURS.datum, weight: 1.2, opacity: 0.8, dashArray: '1 4',
         className: 'search-datum-error', interactive: false,
       }).addTo(g);
-      const mid = [(datum.lat + truth[0]) / 2, (datum.lon + truth[1]) / 2];
-      tag(mid, `datum error ${formatDistance(miss)}`, SEARCH_COLOURS.datum, 'search-tag-error').addTo(g);
     }
 
     const m = plan.marker;
@@ -273,7 +283,36 @@ export const SearchLayer = L.Layer.extend({
         radius: 4, color: '#121211', weight: 1, fillColor: SEARCH_COLOURS.marker, fillOpacity: 1,
         className: 'search-marker', interactive: false,
       }).addTo(g);
-      tag([now.lat, now.lon], 'marker', SEARCH_COLOURS.marker).addTo(g);
+      // Above its point: dropped on the datum, it starts on top of the datum's own label.
+      tag([now.lat, now.lon], 'marker', SEARCH_COLOURS.marker, '', [-11, 30]).addTo(g);
+    }
+  },
+
+  /**
+   * The pattern still to fly, faint and dashed, where the marker is now -- so the shape is
+   * legible before the helicopter has drawn it. A Parallel Track also shows its area.
+   */
+  _renderPlanned(g, plan, s) {
+    // Before the drop the pattern sits on the datum; after it, it rides the marker.
+    const m = markerPositionAt(plan, Math.max(s, plan.arriveS)) ?? plan.datum;
+    const p = plan.pattern;
+    const pts = p.eastM.map((e, k) => offsetPosition(m.lat, m.lon, e, p.northM[k]));
+    L.polyline(pts, {
+      color: SEARCH_COLOURS.helicopter, weight: 1, opacity: 0.35, dashArray: '3 6',
+      className: 'search-planned', interactive: false,
+    }).addTo(g);
+    if (p.area) {
+      const len = p.area.lengthM;
+      const wid = p.area.widthM;
+      const b = (p.area.bearingDeg * Math.PI) / 180;
+      const u = [Math.sin(b), Math.cos(b)];
+      const v = [Math.cos(b), -Math.sin(b)];
+      const corner = (x, y) => offsetPosition(m.lat, m.lon, x * u[0] + y * v[0], x * u[1] + y * v[1]);
+      L.polygon([corner(-len / 2, -wid / 2), corner(len / 2, -wid / 2), corner(len / 2, wid / 2),
+        corner(-len / 2, wid / 2)], {
+        color: SEARCH_COLOURS.helicopter, weight: 1, opacity: 0.5, dashArray: '6 4', fill: false,
+        className: 'search-area', interactive: false,
+      }).addTo(g);
     }
   },
 
