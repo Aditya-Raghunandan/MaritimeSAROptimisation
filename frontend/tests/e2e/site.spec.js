@@ -591,8 +591,8 @@ test('▶ in the Search view never plays the site hours', async ({ page }) => {
 
 /*
   THE DRIFT MODEL LAYS THESE OUT (#75). Parallel Track and Trackline are flown along the
-  predicted drift; the whole pattern is drawn faint ahead of the helicopter, and a
-  Parallel Track's area is outlined.
+  predicted drift; the pattern still to fly is drawn faint ahead of the helicopter (only
+  ahead since #83), and a Parallel Track's area is outlined.
 */
 for (const [kind, area] of [['parallel_track', 1], ['trackline_return', 0]]) {
   test(`a ${kind.replace('_', ' ')} flies to a result, drawn ahead of the helicopter`, async ({ page }) => {
@@ -600,8 +600,9 @@ for (const [kind, area] of [['parallel_track', 1], ['trackline_return', 0]]) {
     await page.click(`.sp-pill:has(input[value="${kind}"])`);
     await page.selectOption('.sp-speed', '600');
     await page.click('.sp-fly');
+    await page.waitForSelector('path.search-planned', { timeout: 10_000 });   // ahead, while it flies
     await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
-    expect(await page.locator('path.search-planned').count()).toBe(1);
+    expect(await page.locator('path.search-planned').count()).toBeLessThanOrEqual(1);
     expect(await page.locator('path.search-area').count()).toBe(area);
     await expect(page.locator('.sp-result')).toHaveText(/datum line|as set/);
   });
@@ -664,6 +665,9 @@ async function spawnCloseUp(page) {
   and its key, shows a key of its own and goes to satellite; zooming out puts it all back.
 */
 test('close up, the Search view draws its own sea and key, and zooming out puts the page back', async ({ page }) => {
+  // CI draws WebGL in software: the sea is slow there until it steps its resolution down,
+  // and a dozen zoom animations take their time. The work is bounded; the limit says so.
+  test.setTimeout(60_000);
   await page.goto('');
   await ready(page);
   await page.click('button[data-preset="search"]');
@@ -673,7 +677,18 @@ test('close up, the Search view draws its own sea and key, and zooming out puts 
 
   await expect(page.locator('#map')).toHaveClass(/closeup-on/);
   await expect(page.locator('.closeup-key')).toBeVisible();
-  await expect(page.locator('.closeup-key')).toHaveText(/Sargassum/);
+  await expect(page.locator('.closeup-key')).toHaveText(/golden weed/i);
+  // Four rows at most (#83): the sea, the weed, night if it is, and that none of it is data.
+  expect(await page.locator('.closeup-key .ck-body > span').count()).toBeLessThanOrEqual(4);
+  // The streak switch (#85): drift by default, and a click changes it. On a short screen
+  // the corner guard folds the key for room, so open it first, as a person would.
+  if (await page.locator('.closeup-key.collapsed').count()) await page.click('.closeup-key .legend-toggle');
+  await expect(page.locator('.closeup-key button[data-flow="drift"]')).toHaveClass(/on/);
+  await page.click('.closeup-key button[data-flow="current"]');
+  await expect(page.locator('.closeup-key button[data-flow="current"]')).toHaveClass(/on/);
+  expect(await page.locator('.closeup-key .ck-body > span').count()).toBeLessThanOrEqual(4);
+  // No arrows at the buoy any more (#83).
+  expect(await page.locator('path.search-why-gap').count()).toBe(0);
   expect(await page.isVisible('.current-legend')).toBe(false);
   // The shader where WebGL runs, the 2-D texture where it does not: one of them is there.
   expect(await page.locator('.closeup-sea, .ocean-canvas').count()).toBeGreaterThan(0);
@@ -681,8 +696,9 @@ test('close up, the Search view draws its own sea and key, and zooming out puts 
   // The compass gives knots beside m/s, so the rough-sea threshold can be checked (#81).
   await expect(page.locator('.search-compass .cp-lines')).toHaveText(/m\/s \(\d+ kt\)/, { timeout: 10_000 });
 
-  // One click at a time: a click during Leaflet's zoom animation is dropped.
-  for (let k = 0; k < 24; k += 1) {
+  // One click at a time: a click during Leaflet's zoom animation is dropped. 14 eighths of a
+  // zoom take 15 below 13.5, where the close-up ends.
+  for (let k = 0; k < 14; k += 1) {
     await page.click('.leaflet-control-zoom-out');
     await page.waitForTimeout(350);
   }

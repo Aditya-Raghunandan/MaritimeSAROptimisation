@@ -206,17 +206,3 @@ export function explainMiss({ targetAt, sample, fromMs, toMs, leeway, undrogued 
     limits: CANNOT_SEE,
   };
 }
-
-/**
- * The buoy's motion and the model's at one moment, for the arrows drawn close up:
- * { at: [lat, lon], actual, model } in m/s, or null where either is unknown.
- */
-export function motionAt({ targetAt, sample, ms, leeway }) {
-  const at = targetAt(ms);
-  if (!at) return null;
-  const actual = buoyVelocityAt(targetAt, ms);
-  const s = sample(ms, at[0], at[1]);
-  if (!actual || !s || !s.current || !s.current.every(Number.isFinite)) return null;
-  const wind = s.wind && s.wind.every(Number.isFinite) ? s.wind : [0, 0];
-  return { at, actual, model: add(s.current, wind, leeway) };
-}

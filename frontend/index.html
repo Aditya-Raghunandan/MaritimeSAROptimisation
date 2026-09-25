@@ -713,8 +713,14 @@
       .closeup-key .ck-water { background: linear-gradient(135deg, #0a3350, #1a6a86 60%, #0a3350); }
       .closeup-key .ck-caps { background: radial-gradient(ellipse 5px 2px at 45% 50%, #ffffff 60%, transparent 100%), #0d3a55; }
       .closeup-key .ck-weed { background: radial-gradient(circle, #e5bd62 0 2.5px, #9a6a1c 3.5px, transparent 4.5px), #0d3a55; }
-      .closeup-key .ck-arrows { height: 3px; vertical-align: middle; background: linear-gradient(90deg, #ffffff 0 33%, #ff5fa2 33% 66%, #ffd166 66%); }
       .closeup-key .ck-night { color: #ffb27a; }
+      .closeup-key .ck-flow { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--ink-2); }
+      .closeup-key .ck-pills { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+      .closeup-key .ck-pills button { font: inherit; font-size: 10.5px; line-height: 1.5; padding: 1px 7px; border: 0;
+        border-radius: 0; background: transparent; color: var(--ink-3); cursor: pointer; }
+      .closeup-key .ck-pills button + button { border-left: 1px solid var(--line); }
+      .closeup-key .ck-pills button.on { background: rgba(255, 255, 255, .12); color: var(--ink); }
+      .closeup-key .ck-pills i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
       .closeup-key .ck-foot { color: var(--ink-3); font-size: 10px; }
       .search-panel .sp-why p { font-size: 11px; color: var(--ink-2); }
       .search-panel .sp-why-facts { display: grid; grid-template-columns: auto 1fr; gap: 0 8px;

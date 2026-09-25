@@ -1,27 +1,33 @@
 /**
- * seaGL.js -- the close-up sea, drawn on the graphics card (issue #79).
+ * seaGL.js -- the close-up sea, drawn on the graphics card (issues #79, #83).
  *
- * One full-screen pass per frame, at reduced resolution: water is smooth, so 60 % of the
- * screen's pixels loses nothing the eye can find, and the pass costs a fraction of one
- * frame on an integrated GPU. Every pixel is placed in metres on the water, so the sea
- * is pinned to the map as it pans, and what it draws is set by closeUp.js:
+ * One full-screen pass per frame, at reduced resolution: water is smooth enough that 60 %
+ * of the screen's pixels loses nothing the eye can find. Every pixel is placed in metres
+ * on the water, so the sea is pinned to the map as it pans.
  *
- *   waves        the trains of `waveComponents`, faded out below a few pixels long so
- *                the sea never shimmers with detail finer than the screen can show;
- *   the water    slow patches carried by the real current, so the water is seen to move;
- *   whitecaps    covering `whitecapFraction` of the sea, breaking and fading over seconds,
- *                drawn along the wind; at night they glow faintly green, as these waters'
- *                plankton do;
- *   light        from the real sun: glitter where a wave faces it, warm at dusk; at night
- *                a moonlit blue with a faint glitter, not black, so the sea still reads;
- *   land         the sea thins out within a current-model cell of the coast, where the
- *                satellite photo underneath is real.
+ * WAVES AT EVERY SCALE (#83). The first version summed a dozen sine trains and faded out
+ * any shorter than a few pixels, so at the zooms a search is watched at the sea went flat
+ * and dark: "I would like that to look like the ocean". Seen from the air, the sea has
+ * texture at every scale at once. So the surface is ten octaves of gradient noise, 2 m to
+ * 1 km, each faded in only while it is at least a few pixels long (no shimmer) and not
+ * wider than the screen. Each octave:
+ *
+ *   - is stretched along its crests and travels with the wind at the deep-water speed of a
+ *     wave that long, c = sqrt(g L / 2 pi), in real time -- two trains 17 deg either side
+ *     of the wind, so crests cross and the surface evolves instead of sliding;
+ *   - is as steep as the wind makes it, strongest near the wind's own peak wavelength
+ *     (closeUp.peakWavelengthM), with a floor so a calm sea still has swell and ripples;
+ *   - is carried by the real current in search time, like everything in the water.
+ *
+ * Shading is what makes it read as water: slopes facing the light are lifted towards
+ * teal, slopes facing away drop to deep blue, steep faces catch the sky, and where a wave
+ * faces the sun there is glitter, in patches. At night it is the same sea, a little dimmer
+ * and cooler, lit by a faint moon, with whitecaps that glow as this water's plankton does; the close-up key
+ * says it is night. Whitecaps cover `whitecapFraction` of the sea (Monahan 1980).
  *
  * `createSea` answers null where WebGL, or high-precision floats in the fragment shader,
  * are missing; closeUpLayer.js then falls back to the 2-D texture of oceanLayer.js.
  */
-
-const WAVES = 12;
 
 const VERT = `
 attribute vec2 aPos;
@@ -34,8 +40,9 @@ uniform float uMpp;
 uniform vec2 uCentre;
 uniform vec2 uFlow;
 uniform float uTime;
-uniform vec4 uWaves[${WAVES}];
 uniform vec2 uWindDir;
+uniform float uWindSpeed;
+uniform float uPeak;
 uniform float uFoam;
 uniform vec3 uSun;
 uniform vec4 uMoon;
@@ -60,70 +67,110 @@ float vnoise(vec2 p) {
              mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
+// A gradient per lattice point from two hashes, not an angle: no sin or cos, which were
+// eight of the pass's costliest instructions per noise sample.
+vec2 grad2(vec2 i) {
+  return vec2(hash21(i), hash21(i + 19.19)) * 2.0 - 1.0;
+}
+
+// Gradient noise with its analytic derivative: (value, d/dx, d/dy).
+vec3 gnoised(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  vec2 ga = grad2(i);
+  vec2 gb = grad2(i + vec2(1.0, 0.0));
+  vec2 gc = grad2(i + vec2(0.0, 1.0));
+  vec2 gd = grad2(i + vec2(1.0, 1.0));
+  float va = dot(ga, f);
+  float vb = dot(gb, f - vec2(1.0, 0.0));
+  float vc = dot(gc, f - vec2(0.0, 1.0));
+  float vd = dot(gd, f - vec2(1.0, 1.0));
+  float k = va - vb - vc + vd;
+  return vec3(va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * k,
+              ga + u.x * (gb - ga) + u.y * (gc - ga) + u.x * u.y * (ga - gb - gc + gd)
+              + du * (u.yx * k + vec2(vb, vc) - va));
+}
+
+vec2 turn(vec2 v, float a) {
+  float c = cos(a);
+  float s = sin(a);
+  return vec2(c * v.x - s * v.y, s * v.x + c * v.y);
+}
+
 void main() {
   vec2 px = gl_FragCoord.xy - 0.5 * uRes;
   vec2 world = uCentre + px * uMpp;       // metres east and north of the scene origin
   vec2 q = world - uFlow;                 // the same point, in the moving water
 
-  // The wave trains: height and slope, each faded out below a few pixels long.
-  vec2 grad = vec2(0.0);
-  float h = 0.0;
-  float hMax = 1e-4;
-  for (int i = 0; i < ${WAVES}; i++) {
-    vec4 w = uWaves[i];
-    float k = length(w.xy);
-    float lod = smoothstep(2.0, 6.5, 6.2831853 / max(k, 1e-5) / uMpp);
-    float ph = dot(w.xy, q) - w.z * uTime;
-    h += w.w * sin(ph) * lod;
-    grad += w.w * cos(ph) * w.xy * lod;
-    hMax += w.w * lod;
+  // The wind sets how steep the sea is; a floor keeps swell and ripples in a calm.
+  float steep = 0.035 + 0.05 * clamp(uWindSpeed / 10.0, 0.0, 1.4);
+
+  vec2 slope = vec2(0.0);
+  for (int o = 0; o < 10; o++) {
+    float lam = 2.0 * pow(2.0, float(o));             // 2 m ... 1024 m
+    float lpx = lam / uMpp;
+    float lod = smoothstep(2.0, 6.0, lpx) * (1.0 - smoothstep(260.0, 700.0, lpx));
+    if (lod <= 0.0) continue;
+    float d = log2(lam / uPeak);
+    float w = 0.3 + 0.7 * exp(-d * d / 5.0);           // most roughness near the peak
+    float c = sqrt(9.81 * lam / 6.2831853);            // deep-water phase speed
+    for (int k = 0; k < 2; k++) {
+      // Crossing trains only where the waves are big enough to see them cross.
+      if (k == 1 && lpx < 14.0) break;
+      float side = k == 0 ? 1.0 : -1.0;
+      vec2 dir = turn(uWindDir, side * 0.3 + 0.07 * float(o));
+      vec2 perp = vec2(dir.y, -dir.x);
+      // Long along the crest, short across it, travelling with the wind.
+      vec2 p = vec2(dot(q, dir) - c * uTime, dot(q, perp) * 0.42) / lam;
+      vec3 n = gnoised(p + vec2(float(o) * 17.13, side * 31.7));
+      vec2 dq = (n.y * dir + n.z * 0.42 * perp) / lam;
+      slope += steep * w * lam * dq * lod;
+    }
   }
-  // Waves come in groups: their height swells and fades over a few hundred metres.
-  float groups = 0.5 + 1.0 * vnoise(q / 520.0 + vec2(uTime * 0.02, 0.0));
-  grad *= groups;
-  h *= groups;
-  // Fine texture that the eye expects on water, a few pixels across at any zoom.
-  vec2 r = q / (uMpp * 5.0) + vec2(uTime * 0.21, -uTime * 0.17);
-  float e = 0.35;
-  vec2 fine = vec2(vnoise(r + vec2(e, 0.0)) - vnoise(r - vec2(e, 0.0)),
-                   vnoise(r + vec2(0.0, e)) - vnoise(r - vec2(0.0, e)));
-  vec3 n = normalize(vec3(-grad * 1.3 - fine * 0.13, 1.0));
+  // Wave groups: the sea's roughness swells and fades over a few hundred metres.
+  slope *= 0.6 + 0.8 * vnoise(q / 640.0 + vec2(uTime * 0.01, 0.0));
+  vec3 n = normalize(vec3(-slope, 1.0));
 
   float day = 1.0 - uNight;
-  vec3 L = normalize(uSun);
-  float sunUp = smoothstep(-0.04, 0.12, L.z);
-  float lowSun = sunUp * (1.0 - smoothstep(0.06, 0.4, L.z));
+  // Night is the same sea, a little dimmer and cooler: it still has to read as water.
+  float bright = mix(0.8, 1.0, day);
+  vec3 tint = mix(vec3(0.86, 0.95, 1.08), vec3(1.0), day);
 
-  // The water: Sargasso blue by day, moonlit blue by night, in slow patches the current carries.
-  vec3 deep = mix(vec3(0.014, 0.040, 0.085), vec3(0.012, 0.135, 0.255), day);
-  vec3 lift = mix(vec3(0.040, 0.095, 0.165), vec3(0.030, 0.300, 0.420), day);
+  // A light that rakes across the waves so their relief shows: the sun, else the moon.
+  vec3 L = uSun.z > 0.0 ? normalize(uSun) : normalize(uMoon.xyz);
+  vec2 rake = length(L.xy) > 1e-3 ? normalize(L.xy) : vec2(0.6, 0.8);
+  float facing = dot(-slope, rake);
+
+  // The water: deep blue in the troughs, teal on the faces towards the light, in slow
+  // patches the current carries.
+  vec3 deep = vec3(0.016, 0.115, 0.200);
+  vec3 lit = vec3(0.070, 0.360, 0.450);
   float m = 0.6 * vnoise(q / 460.0) + 0.4 * vnoise(q / 170.0 + 7.3);
-  vec3 col = mix(deep, lift, 0.12 + 0.24 * m);
-  // Light through the thin tops of the waves.
-  col += lift * 0.30 * clamp(h / hMax, 0.0, 1.0) * (0.35 + 0.65 * day);
+  vec3 col = mix(deep, lit, clamp(0.42 + 2.6 * facing + 0.22 * (m - 0.5), 0.0, 1.0));
 
-  // Slopes that face the sun are lighter; slopes catch the sky.
-  vec3 toSun = normalize(vec3(L.xy, max(L.z, 0.25)));
-  col *= 0.82 + 0.36 * clamp(dot(n, toSun), 0.0, 1.0) * sunUp;
-  vec3 sky = mix(vec3(0.10, 0.14, 0.24), vec3(0.50, 0.68, 0.86), day);
-  sky = mix(sky, vec3(0.95, 0.55, 0.34), lowSun * 0.75);
-  col = mix(col, sky, clamp((1.0 - n.z) * 5.0, 0.0, 0.32));
+  // Steep faces catch the sky.
+  vec3 sky = mix(vec3(0.20, 0.28, 0.42), vec3(0.62, 0.78, 0.92), day);
+  float lowSun = day * (1.0 - smoothstep(0.05, 0.4, uSun.z));
+  sky = mix(sky, vec3(0.95, 0.62, 0.42), lowSun * 0.6);
+  col = mix(col, sky, clamp((1.0 - n.z) * 2.6, 0.0, 0.3));
+  col *= bright * tint;
 
-  // Sun glitter, seen from straight above.
+  // Glitter where a wave faces the light, gathered in patches.
   vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
   float nh = max(dot(n, H), 0.0);
-  float glint = (pow(nh, 420.0) * 2.4 + pow(nh, 40.0) * 0.07) * sunUp;
-  col += mix(vec3(1.0, 0.97, 0.88), vec3(1.0, 0.72, 0.45), lowSun) * glint;
-  // Moonlight at night: a cool, faint glitter, so the waves can still be seen.
-  vec3 M = normalize(uMoon.xyz);
-  float nm = max(dot(n, normalize(M + vec3(0.0, 0.0, 1.0))), 0.0);
-  col += vec3(0.62, 0.72, 0.95) * (pow(nm, 260.0) * 1.1 + pow(nm, 30.0) * 0.05) * uMoon.w;
+  float patchy = 0.35 + 0.65 * smoothstep(0.3, 0.75, vnoise(q / 900.0 + 3.1));
+  float glint = pow(nh, 260.0) * 2.2 * patchy;
+  vec3 sparkle = uSun.z > 0.0
+    ? mix(vec3(1.0, 0.97, 0.9), vec3(1.0, 0.75, 0.5), lowSun) * smoothstep(0.0, 0.1, uSun.z)
+    : vec3(0.62, 0.72, 0.95) * uMoon.w;
+  col += sparkle * glint;
 
-  // Whitecaps: some cells of the water hold one, each breaking and fading over 7 s,
-  // so that on average uFoam of the sea is white. Stretched along the wind.
-  vec2 wd = uWindDir;
-  vec2 wr = vec2(wd.y, -wd.x);
-  vec2 a = vec2(dot(q, wd), dot(q, wr));
+  // Whitecaps: some cells of the water hold one, breaking and fading over 7 s, so that on
+  // average uFoam of the sea is white. Stretched along the wind, trailing foam downwind.
+  vec2 wr = vec2(uWindDir.y, -uWindDir.x);
+  vec2 a = vec2(dot(q, uWindDir), dot(q, wr));
   float cellM = 34.0;
   vec2 cell = floor(a / cellM);
   vec2 cf = fract(a / cellM);
@@ -132,17 +179,15 @@ void main() {
   float r3 = hash21(cell + 41.73);
   float life = fract(uTime / 7.0 + r2);
   float env = smoothstep(0.0, 0.08, life) * (1.0 - smoothstep(0.25, 1.0, life));
-  vec2 c = vec2(0.5) + (vec2(r2, r3) - 0.5) * 0.36;
-  vec2 d = (cf - c) / vec2(0.30, 0.13);
-  d.x *= d.x > 0.0 ? 0.45 : 1.0;          // a streak of foam trails downwind of the break
-  float blob = 1.0 - smoothstep(0.35, 1.0, length(d) / (0.55 + 0.45 * env));
-  float p = clamp(uFoam / 0.045, 0.0, 1.0);
-  float foam = step(r1, p) * blob * env * (0.55 + 0.45 * vnoise(q / 3.5 + uTime * 0.3));
-  // Too small to draw close to the lower zooms: spread it as a sheen instead.
+  vec2 cc = vec2(0.5) + (vec2(r2, r3) - 0.5) * 0.36;
+  vec2 dd = (cf - cc) / vec2(0.30, 0.13);
+  dd.x *= dd.x > 0.0 ? 0.45 : 1.0;
+  float blob = 1.0 - smoothstep(0.35, 1.0, length(dd) / (0.55 + 0.45 * env));
+  float foam = step(r1, clamp(uFoam / 0.045, 0.0, 1.0)) * blob * env
+    * (0.55 + 0.45 * vnoise(q / 3.5 + uTime * 0.3));
   float foamLod = smoothstep(1.6, 4.5, cellM * 0.3 / uMpp);
-  foam = foam * foamLod;
-  vec3 foamCol = mix(vec3(0.30, 0.95, 0.80) * 0.55, vec3(0.94, 0.97, 1.0), day);
-  col = mix(col, foamCol, clamp(foam, 0.0, 1.0));
+  vec3 foamCol = mix(vec3(0.30, 0.95, 0.80) * 0.6, vec3(0.94, 0.97, 1.0), day);
+  col = mix(col, foamCol, clamp(foam * foamLod, 0.0, 1.0));
   col = mix(col, foamCol, uFoam * 0.8 * (1.0 - foamLod));
 
   // Thin out near land, where the photo underneath is the real thing.
@@ -195,7 +240,9 @@ export function createSea(canvas) {
     gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, FRAG));
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
-  } catch {
+  } catch (err) {
+    // Say why, once: a shader that will not compile on some driver falls back silently otherwise.
+    console.warn(err.message);
     return null;
   }
   gl.useProgram(program);
@@ -208,8 +255,8 @@ export function createSea(canvas) {
   gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
   const u = {};
-  for (const name of ['uRes', 'uMpp', 'uCentre', 'uFlow', 'uTime', 'uWaves', 'uWindDir', 'uFoam',
-    'uSun', 'uMoon', 'uNight', 'uFade', 'uLand', 'uLandBox', 'uHasLand']) {
+  for (const name of ['uRes', 'uMpp', 'uCentre', 'uFlow', 'uTime', 'uWindDir', 'uWindSpeed', 'uPeak',
+    'uFoam', 'uSun', 'uMoon', 'uNight', 'uFade', 'uLand', 'uLandBox', 'uHasLand']) {
     u[name] = gl.getUniformLocation(program, name);
   }
 
@@ -225,8 +272,6 @@ export function createSea(canvas) {
   gl.uniform1i(u.uLand, 0);
   let landBox = null;
 
-  const waveData = new Float32Array(WAVES * 4);
-
   return {
     setLand(mask, w, h, box) {
       gl.bindTexture(gl.TEXTURE_2D, land);
@@ -236,6 +281,11 @@ export function createSea(canvas) {
 
     clearLand() { landBox = null; },
 
+    /** Wait for the GPU to finish what it was given: reading one pixel back forces it. */
+    finish() {
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+    },
+
     /** Whether the context was lost (a driver reset); the layer then falls back. */
     lost() { return gl.isContextLost(); },
 
@@ -243,18 +293,17 @@ export function createSea(canvas) {
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
-      waveData.fill(0);
-      p.waves.slice(0, WAVES).forEach((w, i) => waveData.set([w.kx, w.ky, w.omega, w.amp], i * 4));
       gl.uniform2f(u.uRes, canvas.width, canvas.height);
       gl.uniform1f(u.uMpp, p.mpp);
       gl.uniform2f(u.uCentre, p.centre[0], p.centre[1]);
       gl.uniform2f(u.uFlow, p.flow[0], p.flow[1]);
       gl.uniform1f(u.uTime, p.time);
-      gl.uniform4fv(u.uWaves, waveData);
       gl.uniform2f(u.uWindDir, p.windDir[0], p.windDir[1]);
+      gl.uniform1f(u.uWindSpeed, p.windSpeed);
+      gl.uniform1f(u.uPeak, p.peak);
       gl.uniform1f(u.uFoam, p.foam);
       gl.uniform3f(u.uSun, p.sun[0], p.sun[1], p.sun[2]);
-      const moon = p.moon ?? [0, 0, 1, 0];
+      const moon = p.moon ?? [0.5, 0.5, 0.7, 0];
       gl.uniform4f(u.uMoon, moon[0], moon[1], moon[2], moon[3]);
       gl.uniform1f(u.uNight, p.night);
       gl.uniform1f(u.uFade, p.fade);

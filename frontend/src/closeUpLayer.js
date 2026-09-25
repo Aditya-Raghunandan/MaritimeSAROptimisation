@@ -23,8 +23,8 @@
 import L from 'leaflet';
 
 import {
-  WEED_TILE_M, closeUpWeight, floaterStep, isCloseUp, metresPerPixel, nightness, seededRandom,
-  sunPosition, waveComponents, weedRows, whitecapFraction,
+  FLOWS, SEA_RES, WEED_TILE_M, flowVector, nextSeaRes, streakSpeedPx, closeUpWeight, floaterStep, isCloseUp, metresPerPixel, nightness, seededRandom,
+  peakWavelengthM, sunPosition, weedRows, whitecapFraction,
 } from './closeUp.js';
 import { ALPHA } from './drift.js';
 import { OceanLayer } from './oceanLayer.js';
@@ -36,16 +36,18 @@ import { drawSighting } from './wildlifeDraw.js';
 const TO_RAD = Math.PI / 180;
 const TAU = Math.PI * 2;
 
-/** The sea's canvas as a share of the screen's pixels: water is smooth. */
-const SEA_RES = 0.6;
 
 /** The water/land grid the sea is thinned by: this many samples, over the view and more. */
 const LAND_COLS = 40;
 const LAND_ROWS = 28;
 const LAND_PAD = 0.6;
 
-/** Below this many metres a pixel, weed is drawn as clumps; above it, as lines. */
-const WEED_CLUMP_MPP = 5;
+/*
+  Weed only close in, as clumps (#83). Further out a windrow is a few pixels wide, and
+  drawn as a line it read as "orange lines going over" -- taken for current or wind.
+  About zoom 15.5 at these latitudes, so the default follow zoom (15) shows none.
+*/
+const WEED_MAX_MPP = 3.4;
 
 /** A few Sargassum clumps, drawn once and stamped many times. */
 function weedSprites() {
@@ -117,13 +119,14 @@ export const CloseUpLayer = L.Layer.extend({
     this._raf = null;
     this._last = null;
     this._clock = 0;
-    this._waves = null;
-    this._waveKey = '';
     this._windAngle = null;
     this._land = null;
     this._sprites = null;
     this._frameMs = 0;
     this._frames = 0;
+    this._res = SEA_RES;     // the sea's share of the screen's pixels; lowered if it lags
+    this._flow = 'drift';    // which flow the streaks show (#85)
+    this._streaks = [];
     this._tick = this._tick.bind(this);
   },
 
@@ -192,6 +195,17 @@ export const CloseUpLayer = L.Layer.extend({
     if (this._fallback) this._fallback.setConditions({ current, wind, rate });
   },
 
+  /** Streak `kind` ('drift', 'current', 'wind') or none ('off'). */
+  setFlow(kind) {
+    this._flow = FLOWS[kind] ? kind : 'off';
+    this._streaks = [];
+  },
+
+  /** Which flow the streaks show. */
+  flow() {
+    return this._flow;
+  },
+
   /** Whether the view is close up now. */
   isClose() {
     return this._closed;
@@ -256,8 +270,8 @@ export const CloseUpLayer = L.Layer.extend({
     const size = this._map.getSize();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (this._glCanvas) {
-      const w = Math.max(1, Math.round(size.x * SEA_RES));
-      const h = Math.max(1, Math.round(size.y * SEA_RES));
+      const w = Math.max(1, Math.round(size.x * this._res));
+      const h = Math.max(1, Math.round(size.y * this._res));
       if (this._glCanvas.width !== w || this._glCanvas.height !== h) {
         this._glCanvas.width = w;
         this._glCanvas.height = h;
@@ -319,6 +333,7 @@ export const CloseUpLayer = L.Layer.extend({
       this._frameSum = 0;
       this._frameAt = now;
       this._lifeCanvas.dataset.frameMs = this._frameMs.toFixed(2);
+      this._lifeCanvas.dataset.seaRes = this._res.toFixed(2);
     }
   },
 
@@ -379,21 +394,17 @@ export const CloseUpLayer = L.Layer.extend({
     const az = sun.azimuthDeg * TO_RAD;
 
     if (this._sea) {
-      // Rebuilt only when the wind changes by a whole m/s or 10 degrees: a rebuilt sea
-      // is a different sea, and it should not change under the eye every frame.
-      const key = `${Math.round(ws)}|${Math.round((this._windAngle / TO_RAD) / 10)}`;
-      if (key !== this._waveKey) {
-        this._waves = waveComponents(Math.round(ws), Math.round((this._windAngle / TO_RAD) / 10) * 10, this.options.seed);
-        this._waveKey = key;
-      }
+      // The wind is eased like the weed's rows, so the sea's texture turns smoothly too.
+      const eased = this._windSpeed === undefined ? ws : this._windSpeed + (ws - this._windSpeed) * (1 - Math.exp(-dt / 2));
+      this._windSpeed = eased;
       this._landFor(c, size, mpp);
-      this._sea.draw({
-        mpp: mpp / SEA_RES,
+      const seaParams = {
         centre: c,
         flow: waterFlow,
         time: this._clock,
-        waves: this._waves,
         windDir: wdir,
+        windSpeed: eased,
+        peak: Math.max(8, peakWavelengthM(eased)),
         foam: whitecapFraction(ws),
         sun: [Math.sin(az) * Math.cos(el), Math.cos(az) * Math.cos(el), Math.sin(el)],
         // No ephemeris for the moon: a fixed moonlight across the sky from the sun, faint,
@@ -401,7 +412,9 @@ export const CloseUpLayer = L.Layer.extend({
         moon: [-Math.sin(az) * 0.8, -Math.cos(az) * 0.8, 0.6, 0.45 * night],
         night,
         fade,
-      });
+      };
+      if (!this._calibrated) this._calibrate(seaParams, mpp);
+      this._sea.draw({ ...seaParams, mpp: mpp / this._res });
     }
 
     const ctx = this._ctx;
@@ -410,6 +423,8 @@ export const CloseUpLayer = L.Layer.extend({
     ctx.globalAlpha = fade;
     const view = { size, c, mpp };
     this._drawWeed(ctx, view, weedFlow, wdir, night);
+    ctx.globalAlpha = fade;
+    this._drawStreaks(ctx, view, dt);
     ctx.globalAlpha = fade;
     this._drawWildlife(ctx, view, dt, zoom, waterFlow, wdir, night, el, az);
   },
@@ -446,6 +461,33 @@ export const CloseUpLayer = L.Layer.extend({
     this._land = { box, pending: known === 0, at: now };
   },
 
+  /**
+   * Once, when the sea is first drawn: time three frames forced to finish on the GPU, and
+   * step the resolution down while one costs more than 8 ms (closeUp.nextSeaRes). Cost,
+   * not frame rate, so a throttled pane or a 30 fps cap cannot make a fast machine blurry.
+   */
+  _calibrate(params, mpp) {
+    this._calibrated = true;
+    for (let step = 0; step < 4; step += 1) {
+      this._sea.draw({ ...params, mpp: mpp / this._res });
+      this._sea.finish();
+      const times = [];
+      for (let k = 0; k < 3; k += 1) {
+        const t0 = performance.now();
+        this._sea.draw({ ...params, mpp: mpp / this._res });
+        this._sea.finish();
+        times.push(performance.now() - t0);
+      }
+      times.sort((a, b) => a - b);
+      const res = nextSeaRes(this._res, times[1]);
+      this._lifeCanvas.dataset.seaMs = times[1].toFixed(2);
+      if (res === this._res) break;
+      this._res = res;
+      this._resize();
+    }
+    this._lifeCanvas.dataset.seaRes = this._res.toFixed(2);
+  },
+
   _toScreen(view, x, y) {
     return [view.size.x / 2 + (x - view.c[0]) / view.mpp, view.size.y / 2 - (y - view.c[1]) / view.mpp];
   },
@@ -458,51 +500,23 @@ export const CloseUpLayer = L.Layer.extend({
     const x1 = c[0] - flow[0] + (size.x * mpp) / 2 + reach;
     const y0 = c[1] - flow[1] - (size.y * mpp) / 2 - reach;
     const y1 = c[1] - flow[1] + (size.y * mpp) / 2 + reach;
+    if (mpp > WEED_MAX_MPP) return;
     const perp = [wdir[1], -wdir[0]];
-    const asLines = mpp > WEED_CLUMP_MPP;
-    const dim = 1 - 0.6 * night;
-    if (asLines) {
-      ctx.strokeStyle = `rgba(${Math.round(205 * dim)},${Math.round(152 * dim)},${Math.round(58 * dim)},0.55)`;
-      ctx.lineWidth = Math.max(1.3, 5 / mpp);
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-    } else {
-      ctx.globalAlpha *= dim;
-    }
+    ctx.globalAlpha *= 1 - 0.5 * night;
     for (let tx = Math.floor(x0 / WEED_TILE_M); tx <= Math.floor(x1 / WEED_TILE_M); tx += 1) {
       for (let ty = Math.floor(y0 / WEED_TILE_M); ty <= Math.floor(y1 / WEED_TILE_M); ty += 1) {
         for (const row of weedRows(tx, ty)) {
           const cx = row.x + flow[0];
           const cy = row.y + flow[1];
-          if (asLines) {
-            const [ax, ay] = this._toScreen(view, cx - (wdir[0] * row.lengthM) / 2, cy - (wdir[1] * row.lengthM) / 2);
-            const [bx, by] = this._toScreen(view, cx + (wdir[0] * row.lengthM) / 2, cy + (wdir[1] * row.lengthM) / 2);
-            ctx.moveTo(ax, ay);
-            ctx.lineTo(bx, by);
-            continue;
-          }
-          // A faint band of scattered weed along the row, so it reads as a windrow and not
-          // a line of beads, then the clumps along it, bunched and ragged.
-          const [ax, ay] = this._toScreen(view, cx - (wdir[0] * row.lengthM) / 2, cy - (wdir[1] * row.lengthM) / 2);
-          const [bx, by] = this._toScreen(view, cx + (wdir[0] * row.lengthM) / 2, cy + (wdir[1] * row.lengthM) / 2);
-          const band = ctx.globalAlpha;
-          ctx.globalAlpha = band * 0.28;
-          ctx.strokeStyle = '#b8862b';
-          ctx.lineWidth = Math.max(1.2, (row.widthM * 0.6) / mpp);
-          ctx.lineCap = 'round';
-          ctx.beginPath();
-          ctx.moveTo(ax, ay);
-          ctx.lineTo(bx, by);
-          ctx.stroke();
-          ctx.globalAlpha = band;
+          // Clumps along the row, bunched and ragged, with gaps: a windrow is patchy.
           const rand = seededRandom(row.seed);
           const step = Math.max(row.clumpM * 1.1, 2.2 * mpp);
           const n = Math.max(2, Math.floor(row.lengthM / step));
           for (let k = 0; k < n; k += 1) {
-            if (rand() < 0.3) continue;                 // gaps: a windrow is patchy
+            if (rand() < 0.45) continue;                // gaps: a windrow is patchy
             const f = k / (n - 1) - 0.5;
             const along = f * row.lengthM + (rand() - 0.5) * step * 1.4;
-            const across = (rand() - 0.5) * row.widthM * 1.6 * (1 - 3 * f * f);
+            const across = (rand() - 0.5) * row.widthM * 3 * (1 - 3 * f * f);
             const [sx, sy] = this._toScreen(view, cx + wdir[0] * along + perp[0] * across,
               cy + wdir[1] * along + perp[1] * across);
             const px = Math.min(18, Math.max(2.2, (row.clumpM * (0.6 + 0.9 * rand()) * 1.8) / mpp));
@@ -512,7 +526,68 @@ export const CloseUpLayer = L.Layer.extend({
         }
       }
     }
-    if (asLines) ctx.stroke();
+  },
+
+  /**
+   * Streaks of the chosen flow (#85): dense, tapered like comets, pinned to the water so
+   * they stay right while the map follows the helicopter. They run at a speed that shows
+   * how strong the flow is, as the site's other particles do, not at the playback clock.
+   */
+  _drawStreaks(ctx, view, dt) {
+    const f = FLOWS[this._flow];
+    if (!f) return;
+    const [u, v] = flowVector(this._flow, this._current, this._wind, ALPHA);
+    const speed = Math.hypot(u, v);
+    const pxps = streakSpeedPx(speed, f.refMs);
+    if (pxps <= 0) return;
+    const { size, c, mpp } = view;
+    const dir = [u / speed, v / speed];
+    const want = Math.round((size.x * size.y) / 3400);
+    const spawn = (s) => {
+      s.x = c[0] + (Math.random() - 0.5) * size.x * mpp;
+      s.y = c[1] + (Math.random() - 0.5) * size.y * mpp;
+      s.age = 0;
+      s.life = 1.6 + Math.random() * 2.4;
+      return s;
+    };
+    while (this._streaks.length < want) {
+      const s = spawn({});
+      s.age = Math.random() * s.life;
+      this._streaks.push(s);
+    }
+    this._streaks.length = Math.min(this._streaks.length, want);
+    const step = pxps * mpp * dt;
+    const tail = Math.min(46, pxps * 0.32);                 // px
+    const sdx = dir[0];
+    const sdy = -dir[1];
+    const heads = [[], []];                                 // fading in or out, and full
+    for (const s of this._streaks) {
+      s.age += dt;
+      s.x += dir[0] * step;
+      s.y += dir[1] * step;
+      const [hx, hy] = this._toScreen(view, s.x, s.y);
+      if (s.age > s.life || hx < -60 || hy < -60 || hx > size.x + 60 || hy > size.y + 60) {
+        spawn(s);
+        continue;
+      }
+      const fade = Math.min(1, s.age / 0.4, (s.life - s.age) / 0.6);
+      heads[fade > 0.55 ? 1 : 0].push([hx, hy]);
+    }
+    const [r, g, b] = f.rgb;
+    ctx.lineCap = 'round';
+    ctx.lineWidth = f.width;
+    // Three segments from tail to head, fainter towards the tail, in two strengths.
+    for (const [bucket, strength] of [[0, 0.45], [1, 1]]) {
+      for (const [from, to, a] of [[1, 0.66, 0.16], [0.66, 0.33, 0.34], [0.33, 0, 0.7]]) {
+        ctx.strokeStyle = `rgba(${r},${g},${b},${(a * strength).toFixed(3)})`;
+        ctx.beginPath();
+        for (const [hx, hy] of heads[bucket]) {
+          ctx.moveTo(hx - sdx * tail * from, hy - sdy * tail * from);
+          ctx.lineTo(hx - sdx * tail * to, hy - sdy * tail * to);
+        }
+        ctx.stroke();
+      }
+    }
   },
 
   /** An animal now and then, pinned to the water where it appeared. */
