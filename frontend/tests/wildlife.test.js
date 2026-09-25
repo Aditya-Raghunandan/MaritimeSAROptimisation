@@ -5,7 +5,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { seededRandom } from '../src/closeUp.js';
-import { MIN_GAP_S, SPECIES, Wildlife, pickSpecies } from '../src/wildlife.js';
+import {
+  MIN_GAP_S, SPECIES, ShipTraffic, Wildlife, pickSpecies, planShip, segmentDistance,
+} from '../src/wildlife.js';
 
 /** Run the scheduler for `seconds` of real time and return every sighting. */
 function watch(seconds, { seed = 1, month = 2, dt = 0.1 } = {}) {
@@ -80,5 +82,61 @@ describe('summon', () => {
     const s = w.step(0.1, { month: 6 });
     expect(s.kind).toBe('humpback');
     expect(w.summon('kraken')).toBeNull();
+  });
+});
+
+describe('planShip and ShipTraffic (#86)', () => {
+  const W = 1440;
+  const H = 756;
+
+  it('lays every lane along the top or bottom edge, never through the middle 60 %', () => {
+    const rand = seededRandom(21);
+    for (let k = 0; k < 500; k += 1) {
+      const lane = planShip({ width: W, height: H, rand });
+      for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+        const y = lane.a[1] + f * (lane.b[1] - lane.a[1]);
+        expect(y < 0.2 || y > 0.8).toBe(true);
+      }
+      expect(Math.abs(lane.b[0] - lane.a[0])).toBeGreaterThan(1);     // it crosses the view
+    }
+  });
+
+  it('keeps clear of the buoy and the helicopter, taking the other edge if it must', () => {
+    const rand = seededRandom(22);
+    const buoyAtTop = [W * 0.5, H * 0.13];
+    for (let k = 0; k < 200; k += 1) {
+      const lane = planShip({ width: W, height: H, avoid: [buoyAtTop], rand });
+      expect(lane.edge).toBe('bottom');
+      expect(segmentDistance(buoyAtTop, [lane.a[0] * W, lane.a[1] * H], [lane.b[0] * W, lane.b[1] * H]))
+        .toBeGreaterThanOrEqual(80);
+    }
+  });
+
+  it('refuses when both edges are taken', () => {
+    expect(planShip({ width: W, height: H, avoid: [[700, 100], [700, 660]], rand: seededRandom(3) })).toBeNull();
+  });
+
+  it('is rare, and one at a time', () => {
+    const traffic = new ShipTraffic({ seed: 5 });
+    const seen = [];
+    for (let t = 0; t < 3600; t += 0.1) {
+      const s = traffic.step(0.1, { width: W, height: H, avoid: [] });
+      if (s) seen.push({ ...s });
+    }
+    expect(seen.length).toBeGreaterThanOrEqual(3);
+    expect(seen.length).toBeLessThanOrEqual(15);
+    expect(seen[0].bornS).toBeGreaterThanOrEqual(60);
+    for (let k = 1; k < seen.length; k += 1) {
+      expect(seen[k].bornS).toBeGreaterThanOrEqual(seen[k - 1].bornS + seen[k - 1].durationS);
+    }
+  });
+
+  it('waits and tries again while no edge is free', () => {
+    const traffic = new ShipTraffic({ seed: 6 });
+    traffic.summon();
+    expect(traffic.step(0.1, { width: W, height: H, avoid: [[700, 100], [700, 660]] })).toBeNull();
+    expect(traffic.step(0.1, { width: W, height: H, avoid: [] })).toBeNull();      // not yet
+    for (let t = 0; t < 16; t += 0.5) traffic.step(0.5, { width: W, height: H, avoid: [] });
+    expect(traffic.active).not.toBeNull();
   });
 });

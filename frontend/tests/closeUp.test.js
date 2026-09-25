@@ -1,13 +1,13 @@
 /**
  * The rules of the close-up view (issue #79): when it is on, where the sun is, what the
- * wind does to the sea, and how floating weed moves.
+ * wind does to the sea, and how anything floating moves.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import {
   CLOSE_ZOOM, closeUpWeight, floaterStep, isCloseUp, metresPerPixel, nightness, peakWavelengthM,
-  FLOWS, SEA_RES, SEA_RES_MIN, WEED_TILE_M, flowVector, nextSeaRes, seededRandom, streakSpeedPx, sunPosition, toKnots, weedRows, whitecapFraction,
+  FLOWS, SEA_RES, SEA_RES_MIN, flowVector, nextSeaRes, seededRandom, streakSpeedPx, sunPosition, toKnots, whitecapFraction,
 } from '../src/closeUp.js';
 import { stepPosition } from '../src/pointDrift.js';
 
@@ -137,25 +137,7 @@ describe('what the wind does to the sea', () => {
   });
 });
 
-describe('floating weed', () => {
-  it('lays out the same windrows for the same water, inside their tile', () => {
-    expect(weedRows(3, -7)).toEqual(weedRows(3, -7));
-    for (let tx = -5; tx < 5; tx += 1) {
-      for (const row of weedRows(tx, 2)) {
-        expect(row.x).toBeGreaterThanOrEqual(tx * WEED_TILE_M);
-        expect(row.x).toBeLessThan((tx + 1) * WEED_TILE_M);
-        expect(row.lengthM).toBeGreaterThan(0);
-      }
-    }
-  });
-
-  it('leaves most of the sea without weed, so it comes in patches', () => {
-    let empty = 0;
-    for (let tx = 0; tx < 40; tx += 1) for (let ty = 0; ty < 40; ty += 1) if (weedRows(tx, ty).length === 0) empty += 1;
-    expect(empty / 1600).toBeGreaterThan(0.55);
-    expect(empty / 1600).toBeLessThan(0.75);
-  });
-
+describe('floaterStep', () => {
   it('moves exactly as the drift model moves a person: current + 2 % of wind', () => {
     const current = [0.3, -0.1];
     const wind = [-9.6, 0];

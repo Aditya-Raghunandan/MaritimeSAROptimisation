@@ -49,7 +49,7 @@ import { SearchLayer } from './searchLayer.js';
 import { SearchPanel, speedLabel } from './searchPanel.js';
 import {
   ManualFlight, TARGETS, datumErrorM, detect, formatDuration, formatElapsed, freePlan, headingFromKeys,
-  helicopterAt, keyDirection, planSearch, searchPath,
+  helicopterAt, keyDirection, markerPositionAt, planSearch, searchPath,
 } from './searchRun.js';
 import { explainMiss } from './whyMissed.js';
 
@@ -179,6 +179,7 @@ export function createSearchView(deps) {
       current: at && at.current ? at.current : null, wind: at && at.wind ? at.wind : null, rate: 0, timeMs: ms,
     });
     here = { wind: at && at.wind ? at.wind : null };
+    closeUp.setAvoid(target ? [[target.lkp.lat, target.lkp.lon]] : []);
     updateKey();
   }
   map.on('moveend', idleConditions);
@@ -504,6 +505,16 @@ export function createSearchView(deps) {
     const current = at && at.current ? at.current : null;
     const wind = at && at.wind ? at.wind : null;
     compass.update({ heading: h.heading, current, wind });
+    // What a passing ship keeps clear of (#86): the helicopter, the buoy, the marker, the datum.
+    const avoid = [[h.lat, h.lon]];
+    const buoyNow = targetAt ? targetAt(ms) : null;
+    if (buoyNow) avoid.push(buoyNow);
+    if (!plan.free) {
+      avoid.push([plan.datum.lat, plan.datum.lon], [plan.lkp.lat, plan.lkp.lon]);
+      const mk = markerPositionAt(plan, s);
+      if (mk) avoid.push([mk.lat, mk.lon]);
+    }
+    closeUp.setAvoid(avoid);
     closeUp.setConditions({ current, wind, rate: anim.state === 'playing' ? anim.rate : 0, timeMs: ms });
     here = { wind };
     updateKey();

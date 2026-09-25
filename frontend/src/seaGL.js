@@ -25,6 +25,12 @@
  * and cooler, lit by a faint moon, with whitecaps that glow as this water's plankton does; the close-up key
  * says it is night. Whitecaps cover `whitecapFraction` of the sea (Monahan 1980).
  *
+ * GUSTS AND CLOUD SHADOWS (#86) make the wind visible without a line on the map. Gusts are
+ * patches of rougher, darker water racing downwind at about the wind's own speed, as a gust
+ * looks from above. Cloud shadows drift at about cloud height's wind, faster than at the
+ * surface; no data says where the clouds are, but which way and how fast they go is the real
+ * wind. Shadows fall only by daylight, and there is no glitter in the shade.
+ *
  * `createSea` answers null where WebGL, or high-precision floats in the fragment shader,
  * are missing; closeUpLayer.js then falls back to the 2-D texture of oceanLayer.js.
  */
@@ -107,6 +113,13 @@ void main() {
   // The wind sets how steep the sea is; a floor keeps swell and ripples in a calm.
   float steep = 0.035 + 0.05 * clamp(uWindSpeed / 10.0, 0.0, 1.4);
 
+  // Gusts: rougher patches, long along the wind, racing downwind; none in a calm.
+  vec2 across = vec2(uWindDir.y, -uWindDir.x);
+  vec2 gw = world - uWindDir * (uWindSpeed * 1.2 + 1.0) * uTime;
+  vec2 ga = vec2(dot(gw, uWindDir) * 0.4, dot(gw, across));
+  float gust = smoothstep(0.56, 0.84, 0.65 * vnoise(ga / 170.0) + 0.35 * vnoise(ga / 60.0 + 3.7))
+    * clamp((uWindSpeed - 1.0) / 4.0, 0.0, 1.0);
+
   vec2 slope = vec2(0.0);
   for (int o = 0; o < 10; o++) {
     float lam = 2.0 * pow(2.0, float(o));             // 2 m ... 1024 m
@@ -126,7 +139,9 @@ void main() {
       vec2 p = vec2(dot(q, dir) - c * uTime, dot(q, perp) * 0.42) / lam;
       vec3 n = gnoised(p + vec2(float(o) * 17.13, side * 31.7));
       vec2 dq = (n.y * dir + n.z * 0.42 * perp) / lam;
-      slope += steep * w * lam * dq * lod;
+      // A gust roughens the short waves, not the swell.
+      float rough = lam <= 32.0 ? 1.0 + 1.6 * gust : 1.0;
+      slope += steep * w * rough * lam * dq * lod;
     }
   }
   // Wave groups: the sea's roughness swells and fades over a few hundred metres.
@@ -156,12 +171,20 @@ void main() {
   sky = mix(sky, vec3(0.95, 0.62, 0.42), lowSun * 0.6);
   col = mix(col, sky, clamp((1.0 - n.z) * 2.6, 0.0, 0.3));
   col *= bright * tint;
+  col *= 1.0 - 0.14 * gust;
+
+  // Cloud shadows, drifting with the wind at about cloud height: faster than at the surface.
+  vec2 cw = (world - uWindDir * (uWindSpeed * 1.7 + 2.0) * uTime) / 2600.0;
+  cw += 0.35 * vec2(vnoise(cw * 1.9 + 11.0), vnoise(cw * 1.9 + 23.0));
+  float cloud = 0.55 * vnoise(cw) + 0.3 * vnoise(cw * 2.3 + 5.1) + 0.15 * vnoise(cw * 5.2 + 9.7);
+  float shade = smoothstep(0.5, 0.66, cloud) * smoothstep(-0.02, 0.1, uSun.z);
+  col *= 1.0 - 0.32 * shade;
 
   // Glitter where a wave faces the light, gathered in patches.
   vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
   float nh = max(dot(n, H), 0.0);
   float patchy = 0.35 + 0.65 * smoothstep(0.3, 0.75, vnoise(q / 900.0 + 3.1));
-  float glint = pow(nh, 260.0) * 2.2 * patchy;
+  float glint = pow(nh, 260.0) * 2.2 * patchy * (1.0 - shade);
   vec3 sparkle = uSun.z > 0.0
     ? mix(vec3(1.0, 0.97, 0.9), vec3(1.0, 0.75, 0.5), lowSun) * smoothstep(0.0, 0.1, uSun.z)
     : vec3(0.62, 0.72, 0.95) * uMoon.w;

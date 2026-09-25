@@ -69,8 +69,8 @@ export const CloseUpKey = L.Control.extend({
     const wind = s.force === null || s.force === undefined ? 'the wind' : `the wind, force ${s.force}`;
     const rows = [
       `<span class="ck-flow">Streaks <span class="ck-pills">${pills}</span></span>`,
-      `<span>The sea moves with the current; its waves${s.whitecaps > 0 ? ' and whitecaps' : ''} follow ${wind}; `
-        + 'golden weed, close in, drifts like a person.</span>',
+      `<span>The sea moves with the current; its waves${s.whitecaps > 0 ? ', whitecaps' : ''} and gusts follow ${wind}, `
+        + 'and cloud shadows drift with it.</span>',
     ];
     if (Number.isFinite(s.sunElevationDeg) && s.sunElevationDeg < -6) {
       rows.push('<span class="ck-night">Night here: the sweep width assumes daylight, so finding is easier than for real.</span>');

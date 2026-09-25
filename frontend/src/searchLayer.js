@@ -31,6 +31,7 @@ import L from 'leaflet';
 
 import { isCloseUp, metresPerPixel as mpp } from './closeUp.js';
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
+import { placeLabels } from './labels.js';
 import { offsetAt, offsetPosition } from './patterns.js';
 import { formatDuration, helicopterAt, markerPositionAt, searchPath } from './searchRun.js';
 
@@ -67,19 +68,45 @@ const HELI_SVG = `
 /**
  * A small label beside a point on the map, never in the way of a click: a dark chip in
  * the point's colour, so it reads over any basemap (italic white text on a halo did not).
- * `anchor` is where the chip's corner sits relative to the point, as Leaflet counts it.
+ * `anchor` is where the chip's corner sits relative to the point, as Leaflet counts it;
+ * labels.js chooses it so no two chips overlap (#86).
  */
-function tag(latlng, text, colour, cls = '', anchor = [-11, 10]) {
+function tag(latlng, html, colour, cls, anchor) {
   return L.marker(latlng, {
     icon: L.divIcon({
       className: `search-tag ${cls}`,
-      html: `<span style="color:${colour}">${text}</span>`,
+      html: `<span style="color:${colour}">${html}</span>`,
       iconSize: null,
       iconAnchor: anchor,
     }),
     interactive: false,
     keyboard: false,
   });
+}
+
+/*
+  A chip's size without drawing it: its text measured in the chip's own fonts, plus its
+  padding and borders (index.html, .search-tag span: 600 10.5px, line-height 1.3, padding
+  2px 7px 2px 6px, a 1 px border and a 2 px left rule; a second line in 500 10px).
+*/
+let measure = null;
+const widths = new Map();
+// Measured before the web font has loaded, a width is the fallback font's: start again once
+// it has, and the chips' own measured sizes (below) take over after the first draw anyway.
+if (typeof document !== 'undefined' && document.fonts) document.fonts.ready.then(() => widths.clear());
+function textWidth(text, font) {
+  const key = `${font}|${text}`;
+  if (widths.has(key)) return widths.get(key);
+  if (!measure) measure = document.createElement('canvas').getContext('2d');
+  const family = getComputedStyle(document.documentElement).getPropertyValue('--font').trim() || 'Inter, sans-serif';
+  measure.font = `${font} ${family}`;
+  const w = measure.measureText(text).width;
+  widths.set(key, w);
+  return w;
+}
+function chipSize(text, sub) {
+  const w = Math.max(textWidth(text, '600 10.5px'), sub ? textWidth(sub, '500 10px') : 0);
+  return [Math.ceil(w + 16), sub ? 34 : 20];
 }
 
 export const SearchLayer = L.Layer.extend({
@@ -92,6 +119,8 @@ export const SearchLayer = L.Layer.extend({
     this._base = null;
     this._lkp = null;
     this._flight = null;
+    this._labelsAt = {};     // id -> the spot each label used last frame (labels.js)
+    this._drawn = new Map(); // label text -> its chip's size as actually drawn, [w, h]
   },
 
   onAdd(map) {
@@ -144,7 +173,74 @@ export const SearchLayer = L.Layer.extend({
     this.setPlan(null, null, null);
   },
 
+  /** A label to place once everything is drawn, so no two overlap (#86). */
+  _label(id, latlng, text, colour, priority, cls = '', sub = null) {
+    this._pending.push({ id, latlng, text, sub, colour, priority, cls });
+  },
+
+  /** A marker's footprint, px: labels keep off it. */
+  _occupy(latlng, w, h = w) {
+    const p = this._map.latLngToContainerPoint(latlng);
+    this._obstacles.push({ x: p.x - w / 2, y: p.y - h / 2, w, h });
+  },
+
   _render() {
+    this._pending = [];
+    this._obstacles = [];
+    this._draw();
+    this._placeLabels();
+  },
+
+  /**
+   * The panels over the map -- the Search panel, the presets, the drifter list, the legends,
+   * the compass -- as boxes in map pixels: a label under one is as unread as one under
+   * another label (the last known position hid under the Search panel).
+   */
+  _panelBoxes() {
+    const c = this._map.getContainer().getBoundingClientRect();
+    const boxes = [];
+    for (const el of this._map.getContainer().querySelectorAll('.leaflet-control')) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) boxes.push({ x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height });
+    }
+    return boxes;
+  },
+
+  _placeLabels() {
+    const size = this._map.getSize();
+    const items = this._pending.map((l) => {
+      const p = this._map.latLngToContainerPoint(l.latlng);
+      const key = `${l.text}|${l.sub ?? ''}`;
+      const [w, h] = this._drawn.get(key) ?? chipSize(l.text, l.sub);
+      return { ...l, key, x: p.x, y: p.y, w, h };
+    });
+    // The predicted drift's label (priority 5) is the one to spare: its dotted path says it.
+    const at = placeLabels(items, [...this._obstacles, ...this._panelBoxes()], { x: 0, y: 0, w: size.x, h: size.y },
+      this._labelsAt, 5);
+    this._labelsAt = {};
+    for (const l of items) {
+      const spot = at[l.id];
+      this._labelsAt[l.id] = spot.index;
+      if (spot.hidden) continue;
+      const html = l.sub ? `${l.text}<small>${l.sub}</small>` : l.text;
+      const marker = tag(l.latlng, html, l.colour, l.cls, [-spot.dx, -spot.dy]).addTo(this._group);
+      // The chip as drawn is the truth: remember its size, and if the estimate was short,
+      // place everything again with it (once per text, so this settles at once).
+      const span = marker.getElement() && marker.getElement().firstElementChild;
+      if (span && !this._drawn.has(l.key)) {
+        const r = span.getBoundingClientRect();
+        this._drawn.set(l.key, [Math.ceil(r.width), Math.ceil(r.height)]);
+        if (r.width > l.w + 1 || r.height > l.h + 1) this._replace = true;
+      }
+    }
+    if (this._replace) {
+      this._replace = false;
+      for (const m of this._group.getLayers()) if (m.options.icon && /search-tag/.test(m.options.icon.options.className)) this._group.removeLayer(m);
+      this._placeLabels();
+    }
+  },
+
+  _draw() {
     const g = this._group;
     g.clearLayers();
     const plan = this._plan;
@@ -156,6 +252,7 @@ export const SearchLayer = L.Layer.extend({
         icon: L.divIcon({ className: 'search-base', html: 'BASE', iconSize: [38, 16] }),
         interactive: false,
       }).addTo(g);
+      this._occupy([base.lat, base.lon], 40, 18);
     }
     const lkp = plan ? plan.lkp : this._lkp;
     if (lkp) {
@@ -163,8 +260,8 @@ export const SearchLayer = L.Layer.extend({
         radius: 6, color: SEARCH_COLOURS.target, weight: 1.5, fill: false, dashArray: '2 3',
         className: 'search-lkp', interactive: false,
       }).addTo(g);
-      // To the left: the buoy is usually still near it, and its own label goes right.
-      tag([lkp.lat, lkp.lon], 'last known position', SEARCH_COLOURS.target, 'search-tag-left').addTo(g);
+      this._occupy([lkp.lat, lkp.lon], 14);
+      this._label('lkp', [lkp.lat, lkp.lon], 'last known position', SEARCH_COLOURS.target, 4);
     }
     if (!plan) return;
 
@@ -181,8 +278,8 @@ export const SearchLayer = L.Layer.extend({
         radius: 5, color: '#121211', weight: 1, fillColor: SEARCH_COLOURS.target, fillOpacity: 1,
         className: 'search-target', interactive: false,
       }).addTo(g);
-      // Below and right: the found ring and the helicopter sit on the point itself.
-      tag(t, 'real buoy', SEARCH_COLOURS.target, '', [-15, -9]).addTo(g);
+      this._occupy(t, 12);
+      this._label('buoy', t, 'real buoy', SEARCH_COLOURS.target, 1);
     }
 
     const r = this._flight ? this._flight.result() : this._result;
@@ -193,6 +290,7 @@ export const SearchLayer = L.Layer.extend({
           radius: 12, color: SEARCH_COLOURS.found, weight: 2.5, fill: false,
           className: 'search-found', interactive: false,
         }).addTo(g);
+        this._occupy(at, 28);
       }
     }
 
@@ -207,6 +305,7 @@ export const SearchLayer = L.Layer.extend({
       interactive: false,
       zIndexOffset: 1000,
     }).addTo(g);
+    this._occupy([h.lat, h.lon], 26);
   },
 
   /**
@@ -223,8 +322,8 @@ export const SearchLayer = L.Layer.extend({
       className: 'search-predicted', interactive: false,
     }).addTo(g);
     const mid = pts[Math.floor(pts.length / 2)];
-    tag(mid, `predicted drift · ${formatDuration(plan.arriveS)}`, SEARCH_COLOURS.datum,
-      'search-tag-predicted').addTo(g);
+    this._label('predicted', mid, `predicted drift · ${formatDuration(plan.arriveS)}`, SEARCH_COLOURS.datum,
+      5, 'search-tag-predicted');
   },
 
   /** Where the buoy really went, from the report to now: the trace the prediction is judged by. */
@@ -260,9 +359,9 @@ export const SearchLayer = L.Layer.extend({
     // the error line ran into the found ring (screenshots, 25 Sep).
     const truth = s >= plan.arriveS && this._targetAt ? this._targetAt(plan.dropMs) : null;
     const miss = truth ? this._map.distance([datum.lat, datum.lon], truth) : null;
-    tag([datum.lat, datum.lon], 'datum · where drift predicts it'
-      + (miss === null ? '' : `<small>${formatDistance(miss)} from where the buoy really was</small>`),
-    SEARCH_COLOURS.datum, 'search-tag-datum').addTo(g);
+    this._occupy([datum.lat, datum.lon], 16);
+    this._label('datum', [datum.lat, datum.lon], 'datum · where drift predicts it', SEARCH_COLOURS.datum, 2,
+      'search-tag-datum', miss === null ? null : `${formatDistance(miss)} from where the buoy really was`);
 
     if (s < plan.arriveS) return;
     if (truth) {
@@ -284,8 +383,8 @@ export const SearchLayer = L.Layer.extend({
         radius: 4, color: '#121211', weight: 1, fillColor: SEARCH_COLOURS.marker, fillOpacity: 1,
         className: 'search-marker', interactive: false,
       }).addTo(g);
-      // Above its point: dropped on the datum, it starts on top of the datum's own label.
-      tag([now.lat, now.lon], 'marker', SEARCH_COLOURS.marker, '', [-11, 30]).addTo(g);
+      this._occupy([now.lat, now.lon], 10);
+      this._label('marker', [now.lat, now.lon], 'marker', SEARCH_COLOURS.marker, 3);
     }
   },
 
