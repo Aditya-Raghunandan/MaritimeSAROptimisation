@@ -9,9 +9,9 @@ import { describe, expect, it } from 'vitest';
 import { SWEEP_WIDTH_M } from '../src/geo.js';
 import { M_PER_DEG_LAT, offsetPosition } from '../src/patterns.js';
 import { M_PER_DEG, constantSampler } from '../src/pointDrift.js';
-import { NM_M } from '../src/platform.js';
+import { NM_M, searchEffortM2, sectorRadiusM } from '../src/platform.js';
 import {
-  ManualFlight, bearingOf, closestApproach, datumErrorM, detect, formatElapsed, freePlan,
+  ManualFlight, bearingOf, closestApproach, datumErrorM, detect, formatDuration, formatElapsed, freePlan,
   headingFromKeys, helicopterAt, keyDirection, markerPositionAt, planSearch, searchPath,
 } from '../src/searchRun.js';
 
@@ -78,6 +78,55 @@ describe('planSearch', () => {
     const sample = () => (calls++ < 3 ? { current: [1, 0], wind: [0, 0] } : { current: null, reason: 'reached land' });
     const plan = planSearch({ base: baseWest(20), lkp: LKP, reportMs: REPORT, sample, firstBearingDeg: 0 });
     expect(plan.notes.join(' ')).toMatch(/land/);
+  });
+});
+
+/*
+  THE DATUM LINE (#75). Current east for the first hour, then north: the buoy's net drift
+  (LKP to datum) points east-north-east while the current AT the datum points north, so the
+  two layout rules give different bearings and the test can tell them apart.
+*/
+describe('Parallel Track and Trackline, laid along the predicted drift', () => {
+  const turning = (ms) => ({ current: ms < REPORT + 3600e3 ? [1, 0] : [0, 1], wind: [0, 0] });
+  const plan = (patternKind, extra = {}) => planSearch({
+    base: baseWest(100), lkp: LKP, reportMs: REPORT, sample: turning, patternKind, ...extra,
+  });
+
+  it('orients both along the datum line, not along the drift at the datum', () => {
+    const square = plan('expanding_square');
+    expect(square.firstBearingDeg).toBeCloseTo(0, 6);
+    for (const kind of ['parallel_track', 'trackline_return']) {
+      const p = plan(kind);
+      expect(p.datumLine.bearingDeg).toBeGreaterThan(60);
+      expect(p.firstBearingDeg).toBeCloseTo(p.datumLine.bearingDeg, 9);
+      expect(p.bearingSource).toMatch(/datum line/);
+    }
+  });
+
+  it('runs the trackline from the last known position, through the datum, and as far beyond', () => {
+    const p = plan('trackline_return');
+    expect(p.datumLine.lengthM).toBeGreaterThan(sectorRadiusM());   // so the line, not the floor
+    expect(p.patternArgs.halfLengthM).toBeCloseTo(p.datumLine.lengthM, 9);
+  });
+
+  it('gives the parallel track the area one window covers, drawn along the same line', () => {
+    const p = plan('parallel_track');
+    expect(p.pattern.area.bearingDeg).toBeCloseTo(p.datumLine.bearingDeg, 9);
+    expect(p.pattern.area.lengthM).toBeCloseTo(Math.sqrt(searchEffortM2()), 6);
+  });
+
+  it('falls back to the drift at the datum, and a minute each way, when the buoy barely moved', () => {
+    const p = planSearch({
+      base: baseWest(100), lkp: LKP, reportMs: REPORT, sample: constantSampler([0, 0]),
+      patternKind: 'trackline_return',
+    });
+    expect(p.datumLine.lengthM).toBeLessThan(50);
+    expect(p.bearingSource).not.toMatch(/datum line/);
+    expect(p.patternArgs.halfLengthM).toBeCloseTo(sectorRadiusM(), 9);
+  });
+
+  it('lets an explicit first bearing win', () => {
+    expect(plan('parallel_track', { firstBearingDeg: 200 }).firstBearingDeg).toBe(200);
   });
 });
 
@@ -184,6 +233,15 @@ describe('helpers', () => {
   it('formats elapsed time for the read-out', () => {
     expect(formatElapsed(65)).toBe('T+1:05');
     expect(formatElapsed(4620)).toBe('T+1:17:00');
+  });
+
+  it('says a duration in words for a sentence', () => {
+    expect(formatDuration(8285)).toBe('2 h 18 min');
+    expect(formatDuration(7200)).toBe('2 h');
+    expect(formatDuration(1314)).toBe('21 min 54 s');
+    expect(formatDuration(600)).toBe('10 min');
+    expect(formatDuration(39.4)).toBe('39 s');
+    expect(formatDuration(-5)).toBe('0 s');
   });
 });
 

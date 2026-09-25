@@ -282,6 +282,20 @@ export function formatElapsed(s) {
   return h > 0 ? `T${sign}${h}:${mm}:${ss}` : `T${sign}${m}:${ss}`;
 }
 
+/**
+ * "2 h 18 min", "21 min 54 s", "39 s": a length of time said in words, for sentences.
+ * The clock form above is for the time bar; in a sentence "2:18:05" read as a time of day.
+ */
+export function formatDuration(s) {
+  const a = Math.max(0, Math.round(s));
+  const h = Math.floor(a / 3600);
+  const m = Math.floor((a % 3600) / 60);
+  const sec = a % 60;
+  if (h > 0) return m > 0 ? `${h} h ${m} min` : `${h} h`;
+  if (m > 0) return sec > 0 ? `${m} min ${sec} s` : `${m} min`;
+  return `${sec} s`;
+}
+
 /* ---------------------------------------------------------------------------------------
    Flown by hand (#68)
 --------------------------------------------------------------------------------------- */

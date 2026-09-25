@@ -27,11 +27,19 @@
         --warm:      #eb6834;   /* the wind ramp's anchor hue */
         --drift:     #04c951;   /* DRIFT_RAMP[2] -- the resultant's own hue */
         --pending:   #6f6f66;
+        /*
+          One typeface, everywhere (#76). The page said system-ui, but Leaflet sets its own
+          font on the map, so every panel over the map was Helvetica or Arial beside a
+          Segoe UI header. Inter is drawn for dense data screens and is bundled with the
+          site, so it looks the same on every machine and works offline.
+        */
+        --font: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
       }
       * { box-sizing: border-box; }
       html, body { height: 100%; margin: 0; }
       body {
-        font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+        font: 13px/1.45 var(--font);
+        -webkit-font-smoothing: antialiased;
         color: var(--ink);
         background: var(--surface-0);
         display: grid;
@@ -262,16 +270,6 @@
         text-align: center;
       }
       .tier-control { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); }
-      #span {
-        font: inherit;
-        padding: 4px 8px;
-        border: 1px solid var(--line);
-        border-radius: 5px;
-        background: var(--surface-2);
-        color: var(--ink-2);
-        cursor: pointer;
-      }
-      #span:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink); }
       #span:disabled { opacity: .55; cursor: default; }
       #ring-controls { display: inline-flex; align-items: center; gap: 6px; }
       #ring-controls button { min-width: 30px; padding: 4px 8px; }
@@ -651,18 +649,21 @@
       .search-panel details p { margin-top: 4px; font-size: 11px; color: var(--ink-3); }
       .sp-keywrap .sp-key { margin-top: 4px; }
       .sp-dash { display: inline-block; width: 14px; height: 0; border-top: 2px dotted #ffffff; vertical-align: middle; margin-right: 4px; }
-      .search-tag-predicted span { font-weight: 500; font-style: italic; }
+      .search-tag-predicted span { font-weight: 500; }
       .search-panel kbd {
-        font: 10px/1 system-ui, sans-serif; border: 1px solid var(--line); border-bottom-width: 2px;
+        font: 600 10px/1 var(--font); border: 1px solid var(--line); border-bottom-width: 2px;
         border-radius: 3px; padding: 1px 4px; margin: 0 1px; color: var(--ink); background: var(--surface-2);
       }
-      .search-tag { background: none; border: none; white-space: nowrap; font-size: 10.5px; font-weight: 600;
-        text-shadow: 0 0 3px #000, 0 0 4px #000; pointer-events: none; }
-      /* Left of its point and a little down, so it does not sit on the marker's label. */
-      .search-tag-error span {
-        font-weight: 500; font-style: italic; display: inline-block;
-        transform: translate(calc(-100% - 22px), 9px);
+      /* Map labels are chips (#76): legible over any basemap, and nothing in italics. */
+      .search-tag { background: none; border: none; white-space: nowrap; pointer-events: none; }
+      .search-tag span {
+        display: inline-block; font: 600 10.5px/1.3 var(--font); letter-spacing: .1px;
+        padding: 2px 7px 2px 6px; border-radius: 4px; background: rgba(18, 18, 17, .84);
+        border: 1px solid rgba(255, 255, 255, .08); border-left: 2px solid currentColor;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
       }
+      /* A second line inside a chip: the datum's error, once the helicopter is there. */
+      .search-tag small { display: block; font-size: 10px; font-weight: 500; color: var(--ink-2); }
       /*
         A laptop's 768 px: the optional help lines give way, and the gaps tighten, so the
         set-up still fits without scrolling. Both lines stay reachable -- the pattern's as
@@ -675,21 +676,28 @@
         .search-panel h4 { font-size: 11.5px; }
         .sp-tab { padding: 3px 8px; }
         .sp-drogue { font-size: 10.5px; }
+        .search-panel { line-height: 1.32; }
       }
-      /* The compass (#73): top-right, under the layer control. */
+      /* The compass (#73), bottom-right on top of the legends: rose beside its read-out (#76). */
       .search-compass {
-        background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
-        width: 188px; font-size: 10.5px; color: var(--ink-2); box-shadow: 0 4px 16px rgba(0, 0, 0, .35);
-        display: flex; flex-direction: column; align-items: center; gap: 3px;
+        background: rgba(26, 26, 25, .94); border: 1px solid var(--line); border-radius: 8px;
+        padding: 7px 10px 7px 7px; width: 292px; font-size: 11px; color: var(--ink-2);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, .35); display: flex; align-items: center; gap: 10px;
       }
-      .search-compass .cp-lines { align-self: stretch; display: flex; flex-direction: column; gap: 1px; }
-      .search-compass .cp-caveat { color: #ffb27a; font-size: 10px; align-self: stretch; }
+      .search-compass svg { flex: none; }
+      .search-compass .cp-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+      .search-compass .cp-lines { display: flex; flex-direction: column; gap: 1px; color: var(--ink);
+        font-variant-numeric: tabular-nums; line-height: 1.35; }
+      .search-compass .cp-caveat { color: #ffb27a; font-size: 10px; }
       .search-compass .cp-caveat[hidden] { display: none; }
-      .search-compass .cp-key { color: var(--ink-3); font-size: 9.5px; }
-      .search-compass .cp-key i { display: inline-block; width: 9px; height: 3px; margin: 0 3px 0 5px; vertical-align: middle; }
+      .search-compass .cp-key { display: flex; flex-wrap: wrap; gap: 1px 10px; color: var(--ink-3); font-size: 10px; }
+      .search-compass .cp-key i { display: inline-block; width: 10px; height: 3px; margin-right: 4px;
+        vertical-align: middle; border-radius: 1px; }
       .sp-follow { display: flex; gap: 6px; align-items: center; color: var(--ink-2); font-size: 11.5px; cursor: pointer; }
       .sp-follow input { accent-color: #ff6b35; }
-      .sp-drogue { color: #9ad1ff !important; }
+      /* The drogue note: a quiet aside ruled in the buoy's drogue colour, not a blue shout (#76). */
+      .sp-drogue { color: var(--ink-2) !important; border-left: 2px solid #ff5fa2; padding-left: 7px; line-height: 1.4; }
+      .sp-drogue[data-kind="drogued"] { border-left-color: #dfe7ef; }
       .sp-drogue[hidden] { display: none; }
       .sp-wave { display: inline-block; width: 14px; height: 6px; margin-right: 4px; vertical-align: middle;
         background: repeating-linear-gradient(90deg, rgba(210, 240, 255, .6) 0 3px, transparent 3px 6px); border-radius: 3px; }
@@ -728,7 +736,7 @@
       .sp-pill input:focus-visible + span { outline: 2px solid #ff6b35; outline-offset: -2px; }
       .sp-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
       .sp-actions .sp-speed { flex-basis: 100%; }
-      .sp-speed { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; font: inherit; }
+      .sp-speed { color: var(--ink); }
       .sp-phase { color: var(--ink); font-variant-numeric: tabular-nums; min-height: 1em; }
       .sp-result p { margin: 4px 0 0; color: var(--ink-2); }
       .sp-ok { color: #5cff9d; }
@@ -743,6 +751,65 @@
       }
       .search-heli { background: none; border: none; }
       .search-heli > div { width: 26px; height: 26px; transform-origin: 50% 50%; }
+
+      /* What the search chose, once it flies: a short labelled list, not a run-on line (#76). */
+      .sp-facts { display: grid; grid-template-columns: auto 1fr; gap: 1px 12px; margin: 0; font-size: 11.5px; }
+      .sp-facts dt { color: var(--ink-3); }
+      .sp-facts dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 0; }
+
+      /*
+        Leaflet's own controls, in the site's colours (#76). They were Leaflet's white
+        defaults -- a white zoom bar, a white layer button, a white scale bar -- the only
+        light things on a dark page, and so the first things the eye went to.
+      */
+      #map { font-family: var(--font); }
+      #map .leaflet-bar, #map .leaflet-control-layers {
+        border: 1px solid var(--line); border-radius: 7px; box-shadow: 0 2px 10px rgba(0, 0, 0, .45);
+      }
+      #map .leaflet-bar { overflow: hidden; }
+      #map .leaflet-bar a, #map .leaflet-bar a:hover, #map .leaflet-bar a:focus {
+        background: rgba(26, 26, 25, .94); color: var(--ink-2); border-bottom: 1px solid var(--line);
+      }
+      #map .leaflet-bar a:hover { background: var(--surface-2); color: var(--ink); }
+      #map .leaflet-bar a:last-child { border-bottom: none; }
+      #map .leaflet-bar a.leaflet-disabled, #map .leaflet-bar a.leaflet-disabled:hover { background: rgba(26, 26, 25, .94); color: #55554f; }
+      #map .leaflet-control-layers { background: rgba(26, 26, 25, .96); color: var(--ink-2); }
+      #map .leaflet-control-layers-toggle, #map.leaflet-retina .leaflet-control-layers-toggle {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c3c2b7' stroke-width='1.6' stroke-linejoin='round'%3E%3Cpath d='M12 3.5 2.5 8.5 12 13.5l9.5-5z'/%3E%3Cpath d='m2.5 12.5 9.5 5 9.5-5'/%3E%3Cpath d='m2.5 16.5 9.5 5 9.5-5'/%3E%3C/svg%3E"); background-size: 22px 22px;
+      }
+      #map.leaflet-touch .leaflet-control-layers-toggle { width: 40px; height: 40px; }
+      #map .leaflet-control-layers-expanded { padding: 8px 12px 6px 9px; color: var(--ink-2); }
+      #map .leaflet-control-layers label:hover { color: var(--ink); }
+      #map .leaflet-control-layers input { accent-color: var(--accent); }
+      #map .leaflet-control-layers-separator { border-top-color: var(--line); }
+      #map .leaflet-control-scale-line {
+        background: rgba(18, 18, 17, .8); color: var(--ink-2); border: 1.5px solid var(--ink-3); border-top: none;
+        font: 500 10.5px/1.5 var(--font); font-variant-numeric: tabular-nums; padding: 0 6px;
+        text-shadow: none;
+      }
+      #map .leaflet-control-attribution {
+        background: rgba(18, 18, 17, .74); color: var(--ink-3); font-size: 10px; padding: 1px 7px;
+        border-top-left-radius: 5px;
+      }
+      #map .leaflet-control-attribution a { color: var(--ink-2); }
+
+      /* Dropdowns drawn like the buttons beside them, with one chevron, in every browser. */
+      select {
+        appearance: none; -webkit-appearance: none; font: inherit; color: var(--ink-2); cursor: pointer;
+        background: var(--surface-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23c3c2b7' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 9px center / 10px 6px;
+        border: 1px solid var(--line); border-radius: 5px; padding: 4px 28px 4px 9px;
+      }
+      select:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink); }
+      select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+      select option { background: var(--surface-1); color: var(--ink); }
+
+      /* The north arrow sits beside the scale bar: the bottom-left corner is one row. */
+      .leaflet-bottom.leaflet-left { display: flex; align-items: flex-end; }
+      .north-arrow {
+        width: 26px; height: 32px; display: flex; align-items: center; justify-content: center;
+        background: rgba(18, 18, 17, .8); border: 1px solid var(--line); border-radius: 6px;
+        color: var(--ink); box-shadow: 0 2px 8px rgba(0, 0, 0, .35); cursor: default;
+      }
     </style>
   </head>
   <body>

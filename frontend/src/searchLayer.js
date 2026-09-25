@@ -30,7 +30,7 @@ import L from 'leaflet';
 
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
 import { offsetPosition } from './patterns.js';
-import { formatElapsed, helicopterAt, markerPositionAt, searchPath } from './searchRun.js';
+import { formatDuration, helicopterAt, markerPositionAt, searchPath } from './searchRun.js';
 
 /** How often the buoy's real path is sampled for drawing, in seconds. */
 const TRACE_STEP_S = 300;
@@ -63,14 +63,18 @@ const HELI_SVG = `
   <rect x="-0.9" y="3.5" width="1.8" height="7" fill="${SEARCH_COLOURS.helicopter}" stroke="#121211" stroke-width=".6"/>
 </svg>`;
 
-/** A small text label beside a point on the map, never in the way of a click. */
-function tag(latlng, text, colour, cls = '') {
+/**
+ * A small label beside a point on the map, never in the way of a click: a dark chip in
+ * the point's colour, so it reads over any basemap (italic white text on a halo did not).
+ * `anchor` is where the chip's corner sits relative to the point, as Leaflet counts it.
+ */
+function tag(latlng, text, colour, cls = '', anchor = [-11, 10]) {
   return L.marker(latlng, {
     icon: L.divIcon({
       className: `search-tag ${cls}`,
       html: `<span style="color:${colour}">${text}</span>`,
       iconSize: null,
-      iconAnchor: [-10, 7],
+      iconAnchor: anchor,
     }),
     interactive: false,
     keyboard: false,
@@ -176,7 +180,8 @@ export const SearchLayer = L.Layer.extend({
         radius: 5, color: '#121211', weight: 1, fillColor: SEARCH_COLOURS.target, fillOpacity: 1,
         className: 'search-target', interactive: false,
       }).addTo(g);
-      tag(t, 'real buoy', SEARCH_COLOURS.target).addTo(g);
+      // Below and right: the found ring and the helicopter sit on the point itself.
+      tag(t, 'real buoy', SEARCH_COLOURS.target, '', [-15, -9]).addTo(g);
     }
 
     const r = this._flight ? this._flight.result() : this._result;
@@ -217,7 +222,7 @@ export const SearchLayer = L.Layer.extend({
       className: 'search-predicted', interactive: false,
     }).addTo(g);
     const mid = pts[Math.floor(pts.length / 2)];
-    tag(mid, `predicted drift, ${formatElapsed(plan.arriveS).slice(2)}`, SEARCH_COLOURS.datum,
+    tag(mid, `predicted drift · ${formatDuration(plan.arriveS)}`, SEARCH_COLOURS.datum,
       'search-tag-predicted').addTo(g);
   },
 
@@ -249,20 +254,21 @@ export const SearchLayer = L.Layer.extend({
       radius: 7, color: SEARCH_COLOURS.datum, weight: 1.5, fill: false, dashArray: '3 3',
       className: 'search-datum', interactive: false,
     }).addTo(g);
-    tag([datum.lat, datum.lon], 'datum: where drift predicts it', SEARCH_COLOURS.datum).addTo(g);
+    // How wrong the prediction was: the datum against where the buoy really was on arrival.
+    // Said in the datum's own label, once there is an answer: a second label halfway along
+    // the error line ran into the found ring (screenshots, 26 Sep).
+    const truth = s >= plan.arriveS && this._targetAt ? this._targetAt(plan.dropMs) : null;
+    const miss = truth ? this._map.distance([datum.lat, datum.lon], truth) : null;
+    tag([datum.lat, datum.lon], 'datum · where drift predicts it'
+      + (miss === null ? '' : `<small>${formatDistance(miss)} from where the buoy really was</small>`),
+    SEARCH_COLOURS.datum, 'search-tag-datum').addTo(g);
 
     if (s < plan.arriveS) return;
-
-    // How wrong the prediction was: the datum against where the buoy really was on arrival.
-    const truth = this._targetAt ? this._targetAt(plan.dropMs) : null;
     if (truth) {
-      const miss = this._map.distance([datum.lat, datum.lon], truth);
       L.polyline([[datum.lat, datum.lon], truth], {
         color: SEARCH_COLOURS.datum, weight: 1.2, opacity: 0.8, dashArray: '1 4',
         className: 'search-datum-error', interactive: false,
       }).addTo(g);
-      const mid = [(datum.lat + truth[0]) / 2, (datum.lon + truth[1]) / 2];
-      tag(mid, `datum error ${formatDistance(miss)}`, SEARCH_COLOURS.datum, 'search-tag-error').addTo(g);
     }
 
     const m = plan.marker;
@@ -277,7 +283,8 @@ export const SearchLayer = L.Layer.extend({
         radius: 4, color: '#121211', weight: 1, fillColor: SEARCH_COLOURS.marker, fillOpacity: 1,
         className: 'search-marker', interactive: false,
       }).addTo(g);
-      tag([now.lat, now.lon], 'marker', SEARCH_COLOURS.marker).addTo(g);
+      // Above its point: dropped on the datum, it starts on top of the datum's own label.
+      tag([now.lat, now.lon], 'marker', SEARCH_COLOURS.marker, '', [-11, 30]).addTo(g);
     }
   },
 

@@ -101,7 +101,7 @@ export const SearchPanel = L.Control.extend({
 
         <div class="sp-pane" data-pane="search">
           <div class="sp-summary" hidden>
-            <p class="sp-summary-text"></p>
+            <dl class="sp-summary-text sp-facts"></dl>
             <button type="button" class="sp-edit">Change the set-up</button>
           </div>
           <div class="sp-setup">
@@ -202,8 +202,8 @@ export const SearchPanel = L.Control.extend({
     if (!this._root || !this._mapRef) return;
     const map = this._mapRef.getContainer().getBoundingClientRect();
     const top = this._body.getBoundingClientRect().top;
-    // 40 px short of the bottom: the map's scale bar lives in that corner.
-    this._body.style.maxHeight = `${Math.max(140, map.bottom - top - 40)}px`;
+    // 44 px short of the bottom: the north arrow and the scale bar live in that corner.
+    this._body.style.maxHeight = `${Math.max(140, map.bottom - top - 44)}px`;
   },
 
   /** 'search' or 'fly'. */
@@ -225,16 +225,26 @@ export const SearchPanel = L.Control.extend({
     return this._els.follow.checked;
   },
 
-  /** A line under step 4 about the chosen buoy's drogue, or nothing. */
-  setDrogueHint(text) {
+  /** A line under step 4 about the chosen buoy's drogue, or nothing; `kind` colours its rule. */
+  setDrogueHint(text, kind = null) {
     this._els.drogue.hidden = !text;
     this._els.drogue.textContent = text ?? '';
+    if (kind) this._els.drogue.dataset.kind = kind;
     this.fit();
   },
 
-  /** Fold the four steps into one line while a search flies. */
-  collapseSetup(text) {
-    this._els.summaryText.textContent = text;
+  /** Fold the four steps into a short list of what was chosen, while a search flies. */
+  collapseSetup(facts) {
+    const dl = this._els.summaryText;
+    dl.replaceChildren();
+    for (const [k, v] of facts) {
+      const dt = document.createElement('dt');
+      dt.textContent = k;
+      const dd = document.createElement('dd');
+      dd.textContent = v;
+      // A space between them, so the list still reads as text: "Buoy 3002...".
+      dl.append(dt, ' ', dd, ' ');
+    }
     this._els.summary.hidden = false;
     this._els.setup.hidden = true;
     this.fit();
