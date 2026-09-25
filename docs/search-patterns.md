@@ -65,7 +65,7 @@ t, glat, glon = ground_track(pattern, marker)           # every waypoint, plus e
 - `transit_time_s` refuses a datum beyond the H-60's 300 NM radius of action.
 - `marker_track` without a forcing backend raises; a still marker is `MarkerTrack.fixed`.
 
-## On the site (issues #64, #68, #69, #71, #73, #75, #76, #79, #80, #81, #83, #85)
+## On the site (issues #64, #68, #69, #71, #73, #75, #76, #79, #80, #81, #83, #85, #86)
 
 The **Search** preset flies the same doctrine against a real buoy. The panel, top-left, has two
 tabs: **Coast Guard search** and **Fly it yourself**. It is built to fit a 1366 × 768 screen
@@ -161,8 +161,17 @@ things move, and the view shows those:
 |---|---|---|
 | the whole textured surface, and its whitecaps | the real current | search time |
 | waves and whitecaps | set by the wind: roughness peaking at the Pierson–Moskowitz wavelength, whitecap cover from Monahan & O'Muircheartaigh (1980), about 1 % of the sea at 10 m/s | real time |
-| Sargassum, in windrows along the wind (Langmuir cells), from about zoom 15.5 | current + 2 % of wind: the drift model's own step (`floaterStep`) | search time |
+| gusts: rougher, darker patches of water | downwind at about the wind's speed (#86) | real time |
+| cloud shadows, by daylight, with no glitter in the shade | downwind at about cloud height's wind, 1.7 × the surface wind + 2 m/s; where the clouds are is decoration (#86) | real time |
 | now and then an animal: flying fish, dolphins, a turtle, a humpback (December to April only) | its own swimming, carried by the water | real time |
+| rarely a ship (#86), a container ship or a tanker, with its wake; navigation lights at night | a lane along the top or bottom edge of the view only | real time |
+
+The Sargassum windrows of #79 were removed in #86: drawn small they read as dotted lines,
+and the drift streaks already show where a floating thing goes. **The ship** never crosses
+the middle of the view: its lane lies within the top or bottom fifth, at least 40 px plus
+0.6 of its length clear of the helicopter, the buoy, the marker, the datum and the last known
+position along its whole length, and it leaves early if one of them comes that near
+(`wildlife.planShip`, tested). With both edges taken, no ship comes.
 
 - **The sea** (#83) is ten octaves of gradient noise, 2 m to 1 km, each drawn only while it is a
   few pixels to a screen long, so there is texture at every zoom and no shimmer. Octaves are
@@ -190,7 +199,15 @@ things move, and the view shows those:
   while the map follows the helicopter.
 - **The key** is at most four short rows: the streak switch, what moves the sea, whether it is
   night, and that none of it is data.
-- **Speed.** The sea is one WebGL pass at 60 % of the screen's pixels; weed and animals are a
+- **Labels never overlap** (#86, `labels.js`). Each label is placed, most important first
+  (real buoy, datum, marker, last known position, predicted drift), at the first of 32 spots
+  round its point that is clear of every label already placed, every marker and every panel
+  over the map; it keeps last frame's spot while that is clear, so labels do not flicker. If
+  the predicted drift's label finds no clear spot it steps aside for the frame: its dotted
+  path is still drawn. Chips are sized as actually drawn. A browser test scrubs a whole
+  search checking every moment.
+- **Speed.** The sea is one WebGL pass at 60 % of the screen's pixels; streaks, animals and
+  ships are a
   2-D canvas. Measured 25 Sep at 1440×900 on the development laptop (#83's sea): one whole
   close-up frame, forced to finish on the GPU (`readPixels`), takes a median 0.6–0.9 ms and at
   worst 1.7 ms at zooms 13.75–16, against a 16 ms frame. **When the sea first appears it
@@ -201,9 +218,9 @@ things move, and the view shows those:
   throttle frames in background panes, and Safari's low-power mode caps pages at 30 fps.
   Where WebGL is missing, #73's 2-D texture stands in.
 
-Waves, weed and animals are drawn for the eye and never feed detection; animals are not to
-scale, like the helicopter icon. `window.__closeUp.summon('dolphins')` calls one up in the
-development build.
+Waves, clouds, gusts, animals and ships are drawn for the eye and never feed detection;
+animals and ships are not to scale, like the helicopter icon. In the development build
+`window.__closeUp.summon('dolphins')` calls up an animal and `window.__closeUp.summonShip()` a ship.
 
 **Why it left the prediction** (#80, `whyMissed.js`). After a search the result says why the buoy
 did not go where the model said. The buoy's own motion (from its positions) is compared with the

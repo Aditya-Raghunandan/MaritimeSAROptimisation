@@ -105,3 +105,95 @@ export class Wildlife {
     return this.active;
   }
 }
+
+/* ------------------------------------------------------------------ ships (#86) */
+
+/** The first ship after a minute or two close up, then about one every four minutes. */
+export const SHIP_FIRST_S = [60, 120];
+export const SHIP_GAP_S = { mean: 240, min: 120 };
+
+/** Distance from point p to the segment a-b, px. */
+export function segmentDistance(p, a, b) {
+  const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+  const len2 = dx * dx + dy * dy;
+  const k = len2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2)) : 0;
+  return Math.hypot(p[0] - (a[0] + k * dx), p[1] - (a[1] + k * dy));
+}
+
+/**
+ * A lane for a passing ship (#86): straight along the top or the bottom edge of the view,
+ * never through the middle, and at least `margin` px clear of every point in `avoid` (the
+ * buoy, the helicopter, the marker, the datum) along its whole length. Null when both
+ * edges are taken. `a` and `b` are fractions of the view, so a resize keeps the lane on
+ * its edge; the ship enters and leaves off screen.
+ */
+export function planShip({ width, height, avoid = [], rand = Math.random, margin = 80 }) {
+  const edges = rand() < 0.5 ? ['top', 'bottom'] : ['bottom', 'top'];
+  for (const edge of edges) {
+    const fy = edge === 'top' ? 0.1 + 0.07 * rand() : 0.83 + 0.07 * rand();
+    const tilt = (rand() - 0.5) * 0.04;
+    const ltr = rand() < 0.5;
+    const a = [ltr ? -0.12 : 1.12, fy - tilt / 2];
+    const b = [ltr ? 1.12 : -0.12, fy + tilt / 2];
+    const A = [a[0] * width, a[1] * height];
+    const B = [b[0] * width, b[1] * height];
+    if (avoid.every((p) => segmentDistance(p, A, B) >= margin)) return { edge, a, b };
+  }
+  return null;
+}
+
+/**
+ * The ship scheduler, in real seconds like the animals: rare, one at a time, and only when
+ * an edge is free -- otherwise it tries again a little later.
+ */
+export class ShipTraffic {
+  constructor({ seed = 20260926 } = {}) {
+    this._rand = seededRandom(seed);
+    this.clock = 0;
+    this.active = null;
+    this._next = between(this._rand, SHIP_FIRST_S);
+  }
+
+  rest() {
+    this.active = null;
+    this._next = this.clock + between(this._rand, SHIP_FIRST_S);
+  }
+
+  /** A ship at the next step, if an edge is free. */
+  summon() {
+    this.active = null;
+    this._next = this.clock;
+  }
+
+  /** End the ship on screen `inS` seconds from now: it is leaving early. */
+  leave(inS = 1.5) {
+    if (this.active) this.active.durationS = Math.min(this.active.durationS, this.clock - this.active.bornS + inS);
+  }
+
+  step(dtS, view) {
+    this.clock += Math.max(0, dtS);
+    if (this.active) {
+      if (this.clock - this.active.bornS < this.active.durationS) return null;
+      this.active = null;
+      const extra = -Math.log(1 - this._rand() * 0.999) * (SHIP_GAP_S.mean - SHIP_GAP_S.min);
+      this._next = this.clock + SHIP_GAP_S.min + extra;
+      return null;
+    }
+    if (this.clock < this._next) return null;
+    const lane = planShip({ ...view, rand: this._rand });
+    if (!lane) {
+      this._next = this.clock + 15;
+      return null;
+    }
+    const crossS = between(this._rand, [50, 70]);
+    this.active = {
+      ...lane,
+      crossS,               // how long the crossing takes; durationS shrinks if it leaves early
+      kind: this._rand() < 0.6 ? 'container' : 'tanker',
+      bornS: this.clock,
+      durationS: crossS,
+      seed: Math.floor(this._rand() * 2 ** 31),
+    };
+    return this.active;
+  }
+}

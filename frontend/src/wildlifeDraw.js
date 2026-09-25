@@ -619,3 +619,164 @@ export function drawSighting(ctx, sighting, ageS, view) {
   dry(ctx);
   ctx.restore();
 }
+
+/* ------------------------------------------------------------------ a passing ship (#86) */
+
+function hullPath(ctx, L, B) {
+  ctx.beginPath();
+  ctx.moveTo(0, -L / 2);
+  ctx.bezierCurveTo(B * 0.45, -L * 0.43, B / 2, -L * 0.32, B / 2, -L * 0.2);
+  ctx.lineTo(B / 2, L * 0.45);
+  ctx.quadraticCurveTo(B / 2, L / 2, B * 0.36, L / 2);
+  ctx.lineTo(-B * 0.36, L / 2);
+  ctx.quadraticCurveTo(-B / 2, L / 2, -B / 2, L * 0.45);
+  ctx.lineTo(-B / 2, -L * 0.2);
+  ctx.bezierCurveTo(-B / 2, -L * 0.32, -B * 0.45, -L * 0.43, 0, -L / 2);
+  ctx.closePath();
+}
+
+const BOXES = ['#b5462f', '#2f6db3', '#3d8c5a', '#c9a227', '#d6d6d2', '#7a3b8f', '#d9772b', '#3a8fa0'];
+
+/**
+ * A ship seen from above, bow up the screen before rotation: its wake -- a widening band
+ * of churned water and the Kelvin V at 19.5 deg -- then its shadow, hull, deck, cargo and
+ * bridge. At night the hull goes dark and the navigation lights show: red to port, green
+ * to starboard, white on the masts. `view` gives its screen position and heading (radians,
+ * 0 = up), its length L in px, the fade, the night and the sun's screen direction.
+ */
+export function drawShip(ctx, ship, ageS, view) {
+  const { x, y, heading, L, fade, night, sun } = view;
+  const B = L * 0.15;
+  const rand = seededRandom(ship.seed);
+  const dim = night > 0.5 ? 0.35 : 1;
+  const glow = glowColour(night);
+  ctx.save();
+  ctx.globalAlpha = fade;
+  ctx.translate(x, y);
+  ctx.rotate(heading);
+
+  // The wake: churned water, brightest at the stern, widening and breaking up behind it
+  // over about three lengths -- soft-edged, not a beam.
+  const w = ctx.createLinearGradient(0, L * 0.45, 0, L * 3.4);
+  w.addColorStop(0, glow.replace('A', (0.34 * (night > 0.5 ? 0.8 : 1)).toFixed(3)));
+  w.addColorStop(0.3, glow.replace('A', '0.1'));
+  w.addColorStop(1, glow.replace('A', '0'));
+  ctx.fillStyle = w;
+  ctx.beginPath();
+  ctx.moveTo(-B * 0.4, L * 0.46);
+  ctx.lineTo(B * 0.4, L * 0.46);
+  ctx.quadraticCurveTo(B * 0.9, L * 1.8, B * 1.1, L * 3.4);
+  ctx.lineTo(-B * 1.1, L * 3.4);
+  ctx.quadraticCurveTo(-B * 0.9, L * 1.8, -B * 0.4, L * 0.46);
+  ctx.closePath();
+  underwater(ctx, Math.max(2, B * 0.25));
+  ctx.fill();
+  dry(ctx);
+  // Foam in it, in clumps that drift back and fade: what makes it read as water.
+  ctx.fillStyle = glow.replace('A', '0.55');
+  for (let k = 0; k < 70; k += 1) {
+    const f = (rand() + ageS * 0.06) % 1;
+    const along = L * (0.48 + 2.9 * f);
+    const across = (rand() - 0.5) * B * (0.7 + 1.5 * f);
+    ctx.globalAlpha = fade * 0.55 * (1 - f) * (1 - f);
+    ctx.beginPath();
+    ctx.ellipse(across, along, Math.max(0.7, B * (0.05 + 0.08 * rand())), Math.max(0.5, B * 0.035), rand() * 3, 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = fade;
+  // The Kelvin V from the bow shoulders.
+  const k = Math.tan((19.5 * Math.PI) / 180);
+  ctx.lineWidth = Math.max(0.7, L * 0.006);
+  for (const sgn of [-1, 1]) {
+    const g = ctx.createLinearGradient(0, -L * 0.35, 0, L * 2.4);
+    g.addColorStop(0, glow.replace('A', '0.2'));
+    g.addColorStop(1, glow.replace('A', '0'));
+    ctx.strokeStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(sgn * B * 0.3, -L * 0.38);
+    ctx.lineTo(sgn * (B * 0.3 + k * L * 2.8), L * 2.4);
+    ctx.stroke();
+  }
+  // Bow wave.
+  ctx.strokeStyle = glow.replace('A', '0.55');
+  ctx.lineWidth = Math.max(0.8, L * 0.012);
+  ctx.beginPath();
+  ctx.moveTo(-B * 0.55, -L * 0.3);
+  ctx.quadraticCurveTo(0, -L * 0.58, B * 0.55, -L * 0.3);
+  ctx.stroke();
+
+  // Its shadow on the water, away from the sun.
+  if (sun.up > 0.05) {
+    ctx.save();
+    ctx.translate(-sun.dx * L * 0.05, -sun.dy * L * 0.05);
+    underwater(ctx, 2);
+    ctx.fillStyle = `rgba(0,12,24,${(0.4 * sun.up).toFixed(3)})`;
+    hullPath(ctx, L, B);
+    ctx.fill();
+    dry(ctx);
+    ctx.restore();
+  }
+
+  // Hull and deck.
+  ctx.fillStyle = `rgb(${Math.round(34 * dim)},${Math.round(40 * dim)},${Math.round(48 * dim)})`;
+  hullPath(ctx, L, B);
+  ctx.fill();
+  ctx.save();
+  ctx.scale(0.86, 0.95);
+  ctx.fillStyle = ship.kind === 'tanker'
+    ? `rgb(${Math.round(138 * dim)},${Math.round(48 * dim)},${Math.round(38 * dim)})`
+    : `rgb(${Math.round(84 * dim)},${Math.round(96 * dim)},${Math.round(104 * dim)})`;
+  hullPath(ctx, L, B);
+  ctx.fill();
+  ctx.restore();
+
+  if (ship.kind === 'tanker') {
+    // Pipes down the middle, and the manifold across it.
+    ctx.strokeStyle = `rgba(${Math.round(220 * dim)},${Math.round(210 * dim)},${Math.round(190 * dim)},0.8)`;
+    ctx.lineWidth = Math.max(0.6, B * 0.05);
+    ctx.beginPath();
+    ctx.moveTo(0, -L * 0.36);
+    ctx.lineTo(0, L * 0.28);
+    ctx.moveTo(-B * 0.36, -L * 0.02);
+    ctx.lineTo(B * 0.36, -L * 0.02);
+    ctx.stroke();
+  } else {
+    // Stacks of containers, bay after bay.
+    const bayH = L * 0.043;
+    for (let yb = -L * 0.36; yb < L * 0.26; yb += bayH * 1.12) {
+      for (let s = -2; s <= 2; s += 1) {
+        const c = BOXES[Math.floor(rand() * BOXES.length)];
+        ctx.globalAlpha = fade * dim;
+        ctx.fillStyle = c;
+        ctx.fillRect(s * B * 0.17 - B * 0.08, yb, B * 0.16, bayH);
+      }
+    }
+    ctx.globalAlpha = fade;
+  }
+  // The bridge, aft, white; a funnel behind it.
+  ctx.fillStyle = `rgb(${Math.round(232 * dim)},${Math.round(232 * dim)},${Math.round(228 * dim)})`;
+  ctx.fillRect(-B * 0.46, L * 0.29, B * 0.92, L * 0.09);
+  ctx.fillStyle = `rgba(20,24,28,${0.8 * dim + 0.2})`;
+  ctx.fillRect(-B * 0.4, L * 0.3, B * 0.8, L * 0.012);
+  ctx.fillRect(-B * 0.12, L * 0.4, B * 0.24, L * 0.035);
+
+  // Navigation lights at night: red to port, green to starboard, white on the masts.
+  if (night > 0.5) {
+    const light = (lx, ly, colour, r) => {
+      ctx.save();
+      ctx.shadowColor = colour;
+      ctx.shadowBlur = r * 4;
+      ctx.fillStyle = colour;
+      ctx.beginPath();
+      ctx.arc(lx, ly, r, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    };
+    const r = Math.max(1.3, L * 0.012);
+    light(-B / 2, -L * 0.05, '#ff3b3b', r);
+    light(B / 2, -L * 0.05, '#3bff7a', r);
+    light(0, -L * 0.3, '#fff6d8', r);
+    light(0, L * 0.33, '#fff6d8', r);
+  }
+  ctx.restore();
+}

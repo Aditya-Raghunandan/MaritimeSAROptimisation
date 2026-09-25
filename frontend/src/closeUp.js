@@ -9,7 +9,7 @@
  *   the water     its texture and whitecaps are carried by the current;
  *   the wind      sets the waves (their scale, from Pierson-Moskowitz) and how much of
  *                 the sea is white (Monahan & O'Muircheartaigh 1980);
- *   floating weed drifts at current + 2 % of wind: the drift model (D002), made visible.
+ *   the drift     the streaks' default, current + 2 % of wind: the drift model (D002).
  *
  * The light follows the real sun at that time and place, so a search at night looks
  * like night. Everything here is pure, so it is tested without a browser; seaGL.js and
@@ -166,34 +166,6 @@ export function seededRandom(seed) {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-/** The side of one square of floating weed's own frame, metres. */
-export const WEED_TILE_M = 700;
-
-/**
- * The Sargassum windrows in one tile of the weed's frame, as { x, y, lengthM, widthM,
- * clumpM, seed } with the centre in metres. Wind over the sea sets up Langmuir cells --
- * counter-rotating rolls lying along the wind -- that sweep floating weed into lines
- * parallel to it, so the drawing lays each row along the wind. Deterministic by tile, so
- * the same water always carries the same weed.
- */
-export function weedRows(tx, ty) {
-  const rand = seededRandom(((tx * 73856093) ^ (ty * 19349663) ^ 0x5bd1e995) >>> 0);
-  const r = rand();
-  const n = r < 0.65 ? 0 : r < 0.93 ? 1 : 2;
-  const rows = [];
-  for (let k = 0; k < n; k += 1) {
-    rows.push({
-      x: (tx + rand()) * WEED_TILE_M,
-      y: (ty + rand()) * WEED_TILE_M,
-      lengthM: 70 + 330 * rand(),
-      widthM: 3 + 9 * rand(),
-      clumpM: 2 + 4 * rand(),
-      seed: Math.floor(rand() * 2 ** 31),
-    });
-  }
-  return rows;
 }
 
 /**

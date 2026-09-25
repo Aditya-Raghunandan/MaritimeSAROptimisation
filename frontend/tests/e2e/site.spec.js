@@ -677,7 +677,7 @@ test('close up, the Search view draws its own sea and key, and zooming out puts 
 
   await expect(page.locator('#map')).toHaveClass(/closeup-on/);
   await expect(page.locator('.closeup-key')).toBeVisible();
-  await expect(page.locator('.closeup-key')).toHaveText(/golden weed/i);
+  await expect(page.locator('.closeup-key')).toHaveText(/cloud shadows/i);
   // Four rows at most (#83): the sea, the weed, night if it is, and that none of it is data.
   expect(await page.locator('.closeup-key .ck-body > span').count()).toBeLessThanOrEqual(4);
   // The streak switch (#85): drift by default, and a click changes it. On a short screen
@@ -746,3 +746,35 @@ for (const size of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }])
     expect(await panelOverflow(page)).toBeLessThanOrEqual(1);
   });
 }
+
+/*
+  LABELS NEVER OVERLAP (#86). When the buoy, the marker and the datum bunch up, their chips
+  used to land on each other. Scrub through a whole search and check every moment.
+*/
+test('the search labels never sit on each other, at any moment of a search', async ({ page }) => {
+  test.setTimeout(60_000);
+  await readySearch(page);
+  await page.selectOption('.sp-speed', '600');
+  await page.click('.sp-fly');
+  await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
+  const hits = await page.evaluate(async () => {
+    const s = document.querySelector('input[type=range]');
+    const max = Number(s.max);
+    const found = [];
+    for (let f = 0; f <= 1.0001; f += 0.05) {
+      s.value = String(Math.round(max * f));
+      s.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 50));
+      const r = [...document.querySelectorAll('.search-tag span')].map((e) => e.getBoundingClientRect());
+      for (let i = 0; i < r.length; i += 1) {
+        for (let j = i + 1; j < r.length; j += 1) {
+          const a = r[i];
+          const b = r[j];
+          if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) found.push(f.toFixed(2));
+        }
+      }
+    }
+    return found;
+  });
+  expect(hits).toEqual([]);
+});
