@@ -31,15 +31,33 @@ describe('compassReadout', () => {
     expect(r.lines[2]).toMatch(/from E · Force 3/);
   });
 
-  it('carries the Addendum caveat above 15 kt, and not below', () => {
+  it('carries the rough-sea caveat above 15 kt, and not below', () => {
     expect(compassReadout({ wind: [7, 0] }).caveat).toBeNull();          // 13.6 kt
-    expect(compassReadout({ wind: [8, 0] }).caveat).toMatch(/Table H-10/); // 15.6 kt
+    expect(compassReadout({ wind: [8, 0] }).caveat).toMatch(/half as far/); // 15.6 kt
   });
 
   it('shows a dash for anything not yet loaded', () => {
     const r = compassReadout({});
     expect(r.lines).toEqual(['Heading —', 'Current —', 'Wind —']);
     expect(compassReadout({ current: [NaN, 1] }).current).toBeNull();
+  });
+});
+
+describe('the rough-sea caveat in plain words (#81)', () => {
+  it('gives the wind in knots too, so "15 kt" can be checked against it', () => {
+    expect(compassReadout({ wind: [-9.6, 0] }).lines[2]).toMatch(/^Wind 9\.6 m\/s \(19 kt\) from E/);
+  });
+
+  it('says what it means for the search, with no table number on its face', () => {
+    const r = compassReadout({ wind: [9.6, 0] });
+    expect(r.caveat).toMatch(/whitecaps hide a person/);
+    expect(r.caveat).toMatch(/easier than it would really be/);
+    expect(r.caveat).not.toMatch(/Table|H-10|kt/);
+  });
+
+  it('keeps the citation for the tooltip', () => {
+    expect(compassReadout({ wind: [9.6, 0] }).caveatSource).toMatch(/Table H-10/);
+    expect(compassReadout({ wind: [5, 0] }).caveatSource).toBeNull();
   });
 });
 
