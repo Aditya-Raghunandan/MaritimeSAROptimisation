@@ -24,7 +24,7 @@ import L from 'leaflet';
 
 import {
   WEED_TILE_M, closeUpWeight, floaterStep, isCloseUp, metresPerPixel, nightness, seededRandom,
-  sunPosition, waveComponents, weedRows, whitecapFraction,
+  peakWavelengthM, sunPosition, weedRows, whitecapFraction,
 } from './closeUp.js';
 import { ALPHA } from './drift.js';
 import { OceanLayer } from './oceanLayer.js';
@@ -44,8 +44,12 @@ const LAND_COLS = 40;
 const LAND_ROWS = 28;
 const LAND_PAD = 0.6;
 
-/** Below this many metres a pixel, weed is drawn as clumps; above it, as lines. */
-const WEED_CLUMP_MPP = 5;
+/*
+  Weed only close in, as clumps (#83). Further out a windrow is a few pixels wide, and
+  drawn as a line it read as "orange lines going over" -- taken for current or wind.
+  About zoom 15.5 at these latitudes, so the default follow zoom (15) shows none.
+*/
+const WEED_MAX_MPP = 3.4;
 
 /** A few Sargassum clumps, drawn once and stamped many times. */
 function weedSprites() {
@@ -117,8 +121,6 @@ export const CloseUpLayer = L.Layer.extend({
     this._raf = null;
     this._last = null;
     this._clock = 0;
-    this._waves = null;
-    this._waveKey = '';
     this._windAngle = null;
     this._land = null;
     this._sprites = null;
@@ -379,21 +381,18 @@ export const CloseUpLayer = L.Layer.extend({
     const az = sun.azimuthDeg * TO_RAD;
 
     if (this._sea) {
-      // Rebuilt only when the wind changes by a whole m/s or 10 degrees: a rebuilt sea
-      // is a different sea, and it should not change under the eye every frame.
-      const key = `${Math.round(ws)}|${Math.round((this._windAngle / TO_RAD) / 10)}`;
-      if (key !== this._waveKey) {
-        this._waves = waveComponents(Math.round(ws), Math.round((this._windAngle / TO_RAD) / 10) * 10, this.options.seed);
-        this._waveKey = key;
-      }
+      // The wind is eased like the weed's rows, so the sea's texture turns smoothly too.
+      const eased = this._windSpeed === undefined ? ws : this._windSpeed + (ws - this._windSpeed) * (1 - Math.exp(-dt / 2));
+      this._windSpeed = eased;
       this._landFor(c, size, mpp);
       this._sea.draw({
         mpp: mpp / SEA_RES,
         centre: c,
         flow: waterFlow,
         time: this._clock,
-        waves: this._waves,
         windDir: wdir,
+        windSpeed: eased,
+        peak: Math.max(8, peakWavelengthM(eased)),
         foam: whitecapFraction(ws),
         sun: [Math.sin(az) * Math.cos(el), Math.cos(az) * Math.cos(el), Math.sin(el)],
         // No ephemeris for the moon: a fixed moonlight across the sky from the sun, faint,
@@ -458,51 +457,23 @@ export const CloseUpLayer = L.Layer.extend({
     const x1 = c[0] - flow[0] + (size.x * mpp) / 2 + reach;
     const y0 = c[1] - flow[1] - (size.y * mpp) / 2 - reach;
     const y1 = c[1] - flow[1] + (size.y * mpp) / 2 + reach;
+    if (mpp > WEED_MAX_MPP) return;
     const perp = [wdir[1], -wdir[0]];
-    const asLines = mpp > WEED_CLUMP_MPP;
-    const dim = 1 - 0.6 * night;
-    if (asLines) {
-      ctx.strokeStyle = `rgba(${Math.round(205 * dim)},${Math.round(152 * dim)},${Math.round(58 * dim)},0.55)`;
-      ctx.lineWidth = Math.max(1.3, 5 / mpp);
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-    } else {
-      ctx.globalAlpha *= dim;
-    }
+    ctx.globalAlpha *= 1 - 0.5 * night;
     for (let tx = Math.floor(x0 / WEED_TILE_M); tx <= Math.floor(x1 / WEED_TILE_M); tx += 1) {
       for (let ty = Math.floor(y0 / WEED_TILE_M); ty <= Math.floor(y1 / WEED_TILE_M); ty += 1) {
         for (const row of weedRows(tx, ty)) {
           const cx = row.x + flow[0];
           const cy = row.y + flow[1];
-          if (asLines) {
-            const [ax, ay] = this._toScreen(view, cx - (wdir[0] * row.lengthM) / 2, cy - (wdir[1] * row.lengthM) / 2);
-            const [bx, by] = this._toScreen(view, cx + (wdir[0] * row.lengthM) / 2, cy + (wdir[1] * row.lengthM) / 2);
-            ctx.moveTo(ax, ay);
-            ctx.lineTo(bx, by);
-            continue;
-          }
-          // A faint band of scattered weed along the row, so it reads as a windrow and not
-          // a line of beads, then the clumps along it, bunched and ragged.
-          const [ax, ay] = this._toScreen(view, cx - (wdir[0] * row.lengthM) / 2, cy - (wdir[1] * row.lengthM) / 2);
-          const [bx, by] = this._toScreen(view, cx + (wdir[0] * row.lengthM) / 2, cy + (wdir[1] * row.lengthM) / 2);
-          const band = ctx.globalAlpha;
-          ctx.globalAlpha = band * 0.28;
-          ctx.strokeStyle = '#b8862b';
-          ctx.lineWidth = Math.max(1.2, (row.widthM * 0.6) / mpp);
-          ctx.lineCap = 'round';
-          ctx.beginPath();
-          ctx.moveTo(ax, ay);
-          ctx.lineTo(bx, by);
-          ctx.stroke();
-          ctx.globalAlpha = band;
+          // Clumps along the row, bunched and ragged, with gaps: a windrow is patchy.
           const rand = seededRandom(row.seed);
           const step = Math.max(row.clumpM * 1.1, 2.2 * mpp);
           const n = Math.max(2, Math.floor(row.lengthM / step));
           for (let k = 0; k < n; k += 1) {
-            if (rand() < 0.3) continue;                 // gaps: a windrow is patchy
+            if (rand() < 0.45) continue;                // gaps: a windrow is patchy
             const f = k / (n - 1) - 0.5;
             const along = f * row.lengthM + (rand() - 0.5) * step * 1.4;
-            const across = (rand() - 0.5) * row.widthM * 1.6 * (1 - 3 * f * f);
+            const across = (rand() - 0.5) * row.widthM * 3 * (1 - 3 * f * f);
             const [sx, sy] = this._toScreen(view, cx + wdir[0] * along + perp[0] * across,
               cy + wdir[1] * along + perp[1] * across);
             const px = Math.min(18, Math.max(2.2, (row.clumpM * (0.6 + 0.9 * rand()) * 1.8) / mpp));
@@ -512,7 +483,6 @@ export const CloseUpLayer = L.Layer.extend({
         }
       }
     }
-    if (asLines) ctx.stroke();
   },
 
   /** An animal now and then, pinned to the water where it appeared. */

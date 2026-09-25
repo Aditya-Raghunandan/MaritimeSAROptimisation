@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CLOSE_ZOOM, closeUpWeight, floaterStep, isCloseUp, metresPerPixel, nightness, peakWavelengthM,
-  WEED_TILE_M, seededRandom, sunPosition, toKnots, waveComponents, weedRows, whitecapFraction,
+  WEED_TILE_M, seededRandom, sunPosition, toKnots, weedRows, whitecapFraction,
 } from '../src/closeUp.js';
 import { stepPosition } from '../src/pointDrift.js';
 
@@ -95,24 +95,7 @@ describe('what the wind does to the sea', () => {
     expect(peakWavelengthM(0)).toBeGreaterThan(0);
   });
 
-  it('builds waves that obey deep-water dispersion and mostly run with the wind', () => {
-    const waves = waveComponents(9.6, 270, 7);
-    expect(waves).toHaveLength(12);
-    for (const w of waves) {
-      const k = Math.hypot(w.kx, w.ky);
-      expect(w.omega).toBeCloseTo(Math.sqrt(9.81 * k), 9);
-      expect(w.amp).toBeGreaterThan(0);
-    }
-    // The six wind waves point within 45 deg of where the wind blows (towards 270).
-    for (const w of waves.slice(0, 6)) {
-      const dir = (Math.atan2(w.kx, w.ky) * 180) / Math.PI;
-      const off = Math.abs((((dir - 270) % 360) + 540) % 360 - 180);
-      expect(off).toBeLessThan(45);
-    }
-  });
-
-  it('is the same sea for the same seed', () => {
-    expect(waveComponents(8, 90, 3)).toEqual(waveComponents(8, 90, 3));
+  it('repeats a seeded random sequence', () => {
     expect(seededRandom(5)()).toBe(seededRandom(5)());
   });
 });
@@ -129,11 +112,11 @@ describe('floating weed', () => {
     }
   });
 
-  it('leaves about half the sea without weed, so it comes in patches', () => {
+  it('leaves most of the sea without weed, so it comes in patches', () => {
     let empty = 0;
     for (let tx = 0; tx < 40; tx += 1) for (let ty = 0; ty < 40; ty += 1) if (weedRows(tx, ty).length === 0) empty += 1;
-    expect(empty / 1600).toBeGreaterThan(0.4);
-    expect(empty / 1600).toBeLessThan(0.6);
+    expect(empty / 1600).toBeGreaterThan(0.55);
+    expect(empty / 1600).toBeLessThan(0.75);
   });
 
   it('moves exactly as the drift model moves a person: current + 2 % of wind', () => {

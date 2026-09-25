@@ -7,7 +7,7 @@
  * DOES differ close up is how three things move, so the view shows those:
  *
  *   the water     its texture and whitecaps are carried by the current;
- *   the wind      sets the waves (their length, from Pierson-Moskowitz) and how much of
+ *   the wind      sets the waves (their scale, from Pierson-Moskowitz) and how much of
  *                 the sea is white (Monahan & O'Muircheartaigh 1980);
  *   floating weed drifts at current + 2 % of wind: the drift model (D002), made visible.
  *
@@ -113,41 +113,6 @@ export function seededRandom(seed) {
   };
 }
 
-/**
- * The wave trains the sea is drawn from, as { kx, ky, omega, amp }: wavenumber (rad/m,
- * east and north), angular frequency (rad/s, deep water, omega^2 = g k) and height (m).
- *
- * Six wind waves spread within 40 deg of the way the wind blows, around the peak
- * wavelength; three long swells a little off the wind, of different lengths and angles --
- * the open ocean always has swell, though no data here says from where, so it is
- * decoration, and one train alone draws stripes where three draw wave groups; and three
- * short ripples in any direction for the texture the eye expects close in. Heights are a
- * steepness times the wavelength, so a longer wave is taller and every wave is about as
- * sloped.
- */
-export function waveComponents(windMs, towardsDeg, seed = 1) {
-  const rand = seededRandom(seed);
-  const lp = peakWavelengthM(windMs);
-  const calm = Math.min(1, (windMs || 0) / 6);
-  const out = [];
-  const add = (lengthM, dirDeg, steep) => {
-    const k = (2 * Math.PI) / lengthM;
-    const a = dirDeg * TO_RAD;
-    out.push({ kx: k * Math.sin(a), ky: k * Math.cos(a), omega: Math.sqrt(G * k), amp: (steep * lengthM) / (2 * Math.PI) });
-  };
-  const spread = [-38, -21, -8, 7, 19, 34];
-  const ratio = [0.62, 0.85, 1.0, 0.74, 0.5, 0.36];
-  for (let i = 0; i < 6; i += 1) {
-    add(lp * ratio[i] * (0.9 + 0.2 * rand()), towardsDeg + spread[i] + (rand() - 0.5) * 6, 0.02 + 0.06 * calm);
-  }
-  const swellFrom = towardsDeg + 20 + 25 * rand();
-  add(115 + 20 * rand(), swellFrom - 26, 0.007);
-  add(160 + 30 * rand(), swellFrom + 2, 0.008);
-  add(215 + 35 * rand(), swellFrom + 23, 0.006);
-  for (let i = 0; i < 3; i += 1) add(0.9 + 2.5 * rand(), rand() * 360, 0.03 + 0.03 * calm);
-  return out;
-}
-
 /** The side of one square of floating weed's own frame, metres. */
 export const WEED_TILE_M = 700;
 
@@ -161,7 +126,7 @@ export const WEED_TILE_M = 700;
 export function weedRows(tx, ty) {
   const rand = seededRandom(((tx * 73856093) ^ (ty * 19349663) ^ 0x5bd1e995) >>> 0);
   const r = rand();
-  const n = r < 0.5 ? 0 : r < 0.85 ? 1 : 2;
+  const n = r < 0.65 ? 0 : r < 0.93 ? 1 : 2;
   const rows = [];
   for (let k = 0; k < n; k += 1) {
     rows.push({

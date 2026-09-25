@@ -591,8 +591,8 @@ test('▶ in the Search view never plays the site hours', async ({ page }) => {
 
 /*
   THE DRIFT MODEL LAYS THESE OUT (#75). Parallel Track and Trackline are flown along the
-  predicted drift; the whole pattern is drawn faint ahead of the helicopter, and a
-  Parallel Track's area is outlined.
+  predicted drift; the pattern still to fly is drawn faint ahead of the helicopter (only
+  ahead since #83), and a Parallel Track's area is outlined.
 */
 for (const [kind, area] of [['parallel_track', 1], ['trackline_return', 0]]) {
   test(`a ${kind.replace('_', ' ')} flies to a result, drawn ahead of the helicopter`, async ({ page }) => {
@@ -600,8 +600,9 @@ for (const [kind, area] of [['parallel_track', 1], ['trackline_return', 0]]) {
     await page.click(`.sp-pill:has(input[value="${kind}"])`);
     await page.selectOption('.sp-speed', '600');
     await page.click('.sp-fly');
+    await page.waitForSelector('path.search-planned', { timeout: 10_000 });   // ahead, while it flies
     await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
-    expect(await page.locator('path.search-planned').count()).toBe(1);
+    expect(await page.locator('path.search-planned').count()).toBeLessThanOrEqual(1);
     expect(await page.locator('path.search-area').count()).toBe(area);
     await expect(page.locator('.sp-result')).toHaveText(/datum line|as set/);
   });
@@ -673,7 +674,11 @@ test('close up, the Search view draws its own sea and key, and zooming out puts 
 
   await expect(page.locator('#map')).toHaveClass(/closeup-on/);
   await expect(page.locator('.closeup-key')).toBeVisible();
-  await expect(page.locator('.closeup-key')).toHaveText(/Sargassum/);
+  await expect(page.locator('.closeup-key')).toHaveText(/Golden weed/);
+  // Four rows at most (#83): the sea, the weed, night if it is, and that none of it is data.
+  expect(await page.locator('.closeup-key .ck-body > span').count()).toBeLessThanOrEqual(4);
+  // No arrows at the buoy any more (#83).
+  expect(await page.locator('path.search-why-gap').count()).toBe(0);
   expect(await page.isVisible('.current-legend')).toBe(false);
   // The shader where WebGL runs, the 2-D texture where it does not: one of them is there.
   expect(await page.locator('.closeup-sea, .ocean-canvas').count()).toBeGreaterThan(0);

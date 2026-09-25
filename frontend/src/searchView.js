@@ -30,15 +30,13 @@
  * CLOSE UP (#79, #80). From zoom 13.5 the view is the close-up (closeUpLayer.js): a sea
  * drawn for the moment and the place, Sargassum drifting as the model drifts a person, now
  * and then an animal; the page swaps to satellite and a key of its own (main.js). At the
- * real buoy it draws what the model said, what the buoy did, and the gap; the result says
- * in words why the buoy left the prediction (whyMissed.js).
+ * end the result says in words why the buoy left the prediction (whyMissed.js).
  *
  * Everything that decides anything is in searchRun.js, closeUp.js and whyMissed.js and is
  * tested there; this file only sequences it, loads data and animates.
  */
 
 import { beaufort } from './beaufort.js';
-import { isCloseUp } from './closeUp.js';
 import { CloseUpKey } from './closeUpKey.js';
 import { CloseUpLayer } from './closeUpLayer.js';
 import { Compass } from './compass.js';
@@ -53,7 +51,7 @@ import {
   ManualFlight, TARGETS, datumErrorM, detect, formatDuration, formatElapsed, freePlan, headingFromKeys,
   helicopterAt, keyDirection, planSearch, searchPath,
 } from './searchRun.js';
-import { explainMiss, motionAt } from './whyMissed.js';
+import { explainMiss } from './whyMissed.js';
 
 /** Forcing to load past the report: launch, a 300 NM transit, the window, and slack. */
 const LOOKAHEAD_MS = 4 * 3600 * 1000;
@@ -138,7 +136,7 @@ export function createSearchView(deps) {
   let datumErr = null;
   let targetAt = null;
   let why = null;              // why the buoy left the prediction, once a search is flown
-  let here = { wind: null, motion: false };
+  let here = { wind: null };
   const held = new Set();
   const anim = { s: 0, raf: null, last: null, drawn: 0, moment: 0, state: 'idle', zoomed: false, rate: 0 };
 
@@ -166,12 +164,6 @@ export function createSearchView(deps) {
 
   /* ---------------------------------------------------------------- close up */
 
-  /** The share of wind the model gives the target: the plan's, or the panel's choice. */
-  function leewayNow() {
-    if (plan && Number.isFinite(plan.targetLeeway)) return plan.targetLeeway;
-    return TARGETS[panel.choices().targetKind].leeway;
-  }
-
   /** With no search loaded, the sea still needs the forcing where the view is looking. */
   function idleConditions() {
     if (plan || !map.hasLayer(layer)) return;
@@ -181,7 +173,7 @@ export function createSearchView(deps) {
     closeUp.setConditions({
       current: at && at.current ? at.current : null, wind: at && at.wind ? at.wind : null, rate: 0, timeMs: ms,
     });
-    here = { wind: at && at.wind ? at.wind : null, motion: false };
+    here = { wind: at && at.wind ? at.wind : null };
     updateKey();
   }
   map.on('moveend', idleConditions);
@@ -193,7 +185,6 @@ export function createSearchView(deps) {
       force: here.wind ? beaufort(Math.hypot(here.wind[0], here.wind[1])).force : null,
       whitecaps: d.whitecaps,
       sunElevationDeg: d.sunElevationDeg === null ? null : Math.round(d.sunElevationDeg),
-      arrows: here.motion,
       sighting: d.sighting,
     });
   }
@@ -204,7 +195,7 @@ export function createSearchView(deps) {
     // Short, so the panel still fits when it is open (#71): the full sentence is in
     // whyMissed.js and the docs, and what it cannot see is the summary's tooltip.
     const rows = why.table.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
-    const tip = `Zoom in on the buoy to see it as arrows. ${why.limits}`;
+    const tip = why.limits;
     return `<details class="sp-why"><summary title="${tip}">How we can tell</summary>`
       + `<dl class="sp-why-facts">${rows}</dl><p>${why.cause}</p></details>`;
   }
@@ -487,10 +478,6 @@ export function createSearchView(deps) {
   function render(s, force = false) {
     const now = performance.now();
     const ms = plan.reportMs + s * 1000;
-    // Close up, the buoy's motion against the model's, drawn at the buoy (#80).
-    const motion = isCloseUp(map.getZoom())
-      ? motionAt({ targetAt, sample: sampleHere, ms, leeway: leewayNow() }) : null;
-    layer.setMotion(motion);
     layer.setTime(s);
     // A helicopter flown by hand crosses a screen in a few minutes: follow it close up,
     // or at least keep it clear of the panel on the left and the legends on the right.
@@ -512,7 +499,7 @@ export function createSearchView(deps) {
     const wind = at && at.wind ? at.wind : null;
     compass.update({ heading: h.heading, current, wind });
     closeUp.setConditions({ current, wind, rate: anim.state === 'playing' ? anim.rate : 0, timeMs: ms });
-    here = { wind, motion: Boolean(motion) };
+    here = { wind };
     updateKey();
     timeBar.update(s, label(s), anim.state === 'playing');
     if (force || now - anim.moment >= MOMENT_MS) {

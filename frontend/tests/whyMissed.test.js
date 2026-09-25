@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { constantSampler, M_PER_DEG } from '../src/pointDrift.js';
 import {
-  CLOSE_MS, buoyVelocityAt, cellSize, explainMiss, motionAt, velocityBetween,
+  CLOSE_MS, buoyVelocityAt, cellSize, explainMiss, velocityBetween,
 } from '../src/whyMissed.js';
 
 const T0 = Date.UTC(2023, 2, 10, 0, 0);
@@ -125,18 +125,9 @@ describe('explainMiss', () => {
   });
 });
 
-describe('cellSize and motionAt', () => {
+describe('cellSize', () => {
   it('sizes the current model cell by latitude', () => {
     expect(cellSize(28.6)).toBe('7.8 × 4.4 km');
     expect(cellSize(0)).toBe('8.9 × 4.4 km');
-  });
-
-  it('pairs the buoy\'s motion with the model\'s where the buoy is', () => {
-    const m = motionAt({
-      targetAt: steadyBuoy([0.3, 0.1]), sample: constantSampler([0.1, 0.1], [10, 0]), ms: T0 + HOUR, leeway: 0.02,
-    });
-    expect(m.actual[0]).toBeCloseTo(0.3, 3);
-    expect(m.model[0]).toBeCloseTo(0.1 + 0.2, 9);
-    expect(m.model[1]).toBeCloseTo(0.1, 9);
   });
 });

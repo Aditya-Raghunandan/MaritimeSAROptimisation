@@ -65,7 +65,7 @@ t, glat, glon = ground_track(pattern, marker)           # every waypoint, plus e
 - `transit_time_s` refuses a datum beyond the H-60's 300 NM radius of action.
 - `marker_track` without a forcing backend raises; a still marker is `MarkerTrack.fixed`.
 
-## On the site (issues #64, #68, #69, #71, #73, #75, #76, #79, #80, #81)
+## On the site (issues #64, #68, #69, #71, #73, #75, #76, #79, #80, #81, #83)
 
 The **Search** preset flies the same doctrine against a real buoy. The panel, top-left, has two
 tabs: **Coast Guard search** and **Fly it yourself**. It is built to fit a 1366 × 768 screen
@@ -159,27 +159,35 @@ things move, and the view shows those:
 
 | What | Moves with | Clock |
 |---|---|---|
-| the water's slow patches and its whitecaps | the real current | search time |
-| waves and whitecaps | set by the wind: peak wavelength from Pierson–Moskowitz, whitecap cover from Monahan & O'Muircheartaigh (1980), about 1 % of the sea at 10 m/s | real time |
-| Sargassum, in windrows along the wind (Langmuir cells) | current + 2 % of wind: the drift model's own step (`floaterStep`) | search time |
+| the whole textured surface, and its whitecaps | the real current | search time |
+| waves and whitecaps | set by the wind: roughness peaking at the Pierson–Moskowitz wavelength, whitecap cover from Monahan & O'Muircheartaigh (1980), about 1 % of the sea at 10 m/s | real time |
+| Sargassum, in windrows along the wind (Langmuir cells), from about zoom 15.5 | current + 2 % of wind: the drift model's own step (`floaterStep`) | search time |
 | now and then an animal: flying fish, dolphins, a turtle, a humpback (December to April only) | its own swimming, carried by the water | real time |
 
-- **Light** follows the real sun at that moment and place. A night search is dark blue with a
-  faint moon glitter, and the close-up key says the sweep width is a daylight figure.
+- **The sea** (#83) is ten octaves of gradient noise, 2 m to 1 km, each drawn only while it is a
+  few pixels to a screen long, so there is texture at every zoom and no shimmer. Octaves are
+  stretched along their crests and travel with the wind at the deep-water speed of a wave that
+  long. Faces towards the light are teal, faces away deep blue, with sun glitter in patches.
+  The first version faded out every wave under a few pixels and went flat and dark at the
+  zooms a search is watched at.
+- **Light** follows the real sun at that moment and place. At night it is the same sea, a
+  little dimmer and cooler, with a faint moon glitter; the close-up key says the sweep width is
+  a daylight figure.
 - **The page around it** changes while close up: the basemap goes to satellite (real near a
   coast; offshore the drawn sea covers it), the colour rasters hide (one flat value at that
   scale), and the *Close up* key replaces the Surface current key. Zooming out restores the
   basemap the viewer had.
 - **Near land** the sea thins out within a current-model cell of the coast, where the
   satellite photo is the real thing.
-- **The swept strip** stays at true width but is fainter close up, so the sea shows through.
+- **The swept strip** stays at true width but is fainter close up, so the sea shows through,
+  and the faint dashed plan shows only the part of the pattern still to fly (#83).
+- **The key** is at most four short rows: what moves the sea, what the golden weed is, whether
+  it is night, and that none of it is data.
 - **Speed.** The sea is one WebGL pass at 60 % of the screen's pixels; weed and animals are a
-  2-D canvas. Measured 25 Sep at 1440×900 on the development laptop, in the Search view
-  close up: 0.1–0.2 ms of script per frame; median frame 8.3 ms (the display's 120 Hz), 95th
-  percentile 8.5 ms. One 4-second run had no frame over 13 ms; two others each had a single
-  1-second gap, taken to be the test browser's pane being hidden rather than the drawing, since
-  the median did not move. To be re-measured on a visible screen. Where WebGL is missing, #73's
-  2-D texture stands in.
+  2-D canvas. Measured 25 Sep at 1440×900 on the development laptop (#83's sea): one whole
+  close-up frame, forced to finish on the GPU (`readPixels`), takes a median 0.6–0.9 ms and at
+  worst 1.7 ms at zooms 13.75–16, against a 16 ms frame. Where WebGL is missing, #73's 2-D
+  texture stands in.
 
 Waves, weed and animals are drawn for the eye and never feed detection; animals are not to
 scale, like the helicopter icon. `window.__closeUp.summon('dolphins')` calls one up in the
@@ -200,8 +208,9 @@ clue:
 
 The panel shows three lines (buoy, model, missing) and the cause; the summary's tooltip says what
 it cannot see: the waves' own push on anything floating, tides, and the difference between the
-surface current and the current 15 m down. Close up, arrows at the real buoy show 15 minutes of
-the model's motion (white), the buoy's (pink) and the gap (amber). It is a clue, not a proof.
+surface current and the current 15 m down. It is a clue, not a proof. (#80 also drew three
+arrows at the buoy close up; #83 removed them. They were not read as intended, and the buoy's
+pink path against the white predicted drift already shows the same thing on the map.)
 
 **The drogue** (#73, reworded in #76). When a buoy is chosen, step 4 says whether it still had
 its drogue at the report time, and what a drogue is: the underwater sail, 15 m down, that keeps a
