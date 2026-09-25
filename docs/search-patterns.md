@@ -1,9 +1,10 @@
 # The doctrinal search (`sar.search`)
 
-Closes #44 and #63, and covers the geometry of #48. Three modules:
+Closes #44, #63 and #75, and covers the geometry of #48. Three modules:
 
 - **The helicopter's numbers** (`platform`).
-- **The two Coast Guard patterns** (`patterns`).
+- **The four Coast Guard patterns** (`patterns`): Expanding Square, Sector Search, Parallel Track
+  and Trackline Return.
 - **Where the search starts and where its marker drifts** (`datum`).
 
 **Why each number and rule is what it is** is [ADR003](ADR003.md), cited to the USCG Addendum
@@ -14,8 +15,10 @@ Closes #44 and #63, and covers the geometry of #48. Three modules:
 The helicopter launches within 30 minutes of the call and flies out at 125 kt. It flies to the
 **datum**, the last known position pushed on by the current and the target's leeway for as long as
 that took. There it drops a **marker**, which drifts with the water current. Then it flies an
-**Expanding Square** or a **Sector Search** at 90 kt *relative to the marker* for the 45-minute
-window, seeing everything within 92.6 m of its track.
+**Expanding Square**, a **Sector Search**, a **Parallel Track** or a **Trackline** at 90 kt
+*relative to the marker* for the 45-minute window, seeing everything within 92.6 m of its track.
+The last two are laid out by the drift model's prediction: along the line from the last known
+position to the datum (ADR003 rows 12–14).
 
 ## Running it
 
@@ -23,6 +26,8 @@ window, seeing everything within 92.6 m of its track.
 python -m sar.search.platform                    # every constant, its source, one window
 python -m sar.search.patterns expanding-square --first-bearing 45
 python -m sar.search.patterns sector --first-bearing 45 --duration-min 18
+python -m sar.search.patterns parallel --first-bearing 30              # the Z = W x V x T square
+python -m sar.search.patterns trackline --first-bearing 30 --half-length-m 6000
 python -m sar.search.datum --lat 26.5 --lon -79.0 --start 2019-06-01T06:00 \
     --elapsed-min 77 --constant-current 1.8 0.0 --constant-wind 5.0 5.0
 ```
@@ -52,14 +57,15 @@ t, glat, glon = ground_track(pattern, marker)           # every waypoint, plus e
 
 ## Guards
 
-- A spacing, radius, speed, duration or `every_s` that is not a positive number raises
-  `ValueError`.
+- A spacing, radius, length, width, half-length, speed, duration or `every_s` that is not a
+  positive number raises `ValueError`.
+- A Parallel Track area narrower or shorter than one track spacing raises.
 - Asking a pattern or a marker track for a time outside it raises.
 - A marker track with fewer than two strictly increasing times, or mismatched arrays, raises.
 - `transit_time_s` refuses a datum beyond the H-60's 300 NM radius of action.
 - `marker_track` without a forcing backend raises; a still marker is `MarkerTrack.fixed`.
 
-## On the site (issues #64, #68, #69, #71, #73)
+## On the site (issues #64, #68, #69, #71, #73, #75, #76)
 
 The **Search** preset flies the same doctrine against a real buoy. The panel, top-left, has two
 tabs: **Coast Guard search** and **Fly it yourself**. It is built to fit a 1366 × 768 screen
@@ -73,7 +79,12 @@ The first tab asks the Coast Guard's questions in order:
    missing. Its position then is the last known position (LKP). Once it is chosen, the list gets
    out of the way; *Choose another buoy* brings it back.
 2. **Where does the helicopter start?** Place the base with a click.
-3. **How does the Coast Guard search?** Expanding Square or Sector Search.
+3. **How does the Coast Guard search?** Square, Sector, Parallel or Trackline (#75). The last
+   two are laid out by the prediction:
+   - the **Trackline** runs along the predicted drift, from the last known position, through the
+     datum, and as far again beyond it;
+   - the **Parallel Track** covers the square one window can search (Z = W × V × T, 4.81 km a
+     side), centred on the datum, with its tracks along the predicted drift.
 4. **Where will it be when they arrive?** Either *with the current only* (a drifter buoy) or
    *current + 2 % of the wind* (a person). **This sets the
    datum**, where the helicopter is sent and which way the first leg runs. It does not give the
@@ -85,13 +96,15 @@ Then **Fly the search**:
 2. It drops a marker there.
 3. It flies the pattern about the marker at 90 kt.
 
-The map labels every mark: *last known position*, *datum: where drift predicts it*, *marker* and
-*real buoy*. It draws three lines that tell the story:
+The map labels every mark with a small chip: *last known position*, *datum · where drift predicts
+it*, *marker* and *real buoy*. The rest of the pattern is drawn faint ahead of the helicopter, and
+a Parallel Track's area is outlined (#75). It draws three lines that tell the story:
 - the **predicted drift**, white dots from the last known position to the datum, labelled with how
   long it covers;
 - **where the buoy really went**, a pink line that grows as the search plays;
-- the **datum error**, dotted, from the datum to where the buoy really was on arrival. The marker is dropped at the datum, not on the buoy, because the Coast Guard does
-not know where the buoy is. That gap is the drift model's error, and it is what this project
+- the **datum error**, dotted, from the datum to where the buoy really was on arrival; the datum's
+  label then says how far that was. The marker is dropped at the datum, not on the buoy, because
+  the Coast Guard does not know where the buoy is. That gap is the drift model's error, and it is what this project
 measures.
 
 The strip the helicopter sees is drawn at its true 185.2 m. The map allows zoom 13 while the view
@@ -99,8 +112,8 @@ is open so the strip can be seen.
 
 **One clock.** While a search is loaded it owns the time bar at the bottom:
 - the slider scrubs it, and Play or Space plays and pauses it;
-- the label gives the time since the call, the phase and the playback rate (e.g. "45 s per
-  second");
+- the label gives the time since the call as T+h:mm:ss (its tooltip says so), the phase and
+  the playback rate (e.g. "45 s per second"); the panel says the same time in words;
 - a band under the slider marks *call to launch*, *flying out* and *on scene*;
 - the site clock follows the search moment, so the header time, the wind and current fields, and
   the buoy all show the same instant.
@@ -121,7 +134,8 @@ Replay*. In the Search view, the time bar's ▶ and Space do exactly the same, a
 the site's hours there. *Change the set-up* clears the loaded search, because a new set-up is a new
 search.
 
-**The compass** (#73, top right, while a search or flight is loaded) shows:
+**The compass** (#73; bottom right above the legends since #76, while a search or flight is
+loaded) shows:
 - north;
 - the helicopter's heading (orange);
 - the current (cyan) and the wind (amber) where the helicopter is, each pointing the way it is
@@ -138,9 +152,10 @@ allows zoom 16, where the strip is about 90 px wide. From zoom 13.5 a **sea text
 
 It is decoration only and never an input to detection.
 
-**The drogue** (#73). When a buoy is chosen, step 4 says whether it still had its drogue at the
-report time. A drogued buoy follows the water, so *current only* fits it. An undrogued one feels
-the wind more, but less than a person.
+**The drogue** (#73, reworded in #76). When a buoy is chosen, step 4 says whether it still had
+its drogue at the report time, and what a drogue is: the underwater sail, 15 m down, that keeps a
+buoy with the water. A drogued buoy follows the water, so *current only* fits it. An undrogued one
+feels the wind too, but less than a person.
 
 | Browser module | Mirrors | Held to Python by |
 |---|---|---|
