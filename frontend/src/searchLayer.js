@@ -256,7 +256,7 @@ export const SearchLayer = L.Layer.extend({
     }).addTo(g);
     // How wrong the prediction was: the datum against where the buoy really was on arrival.
     // Said in the datum's own label, once there is an answer: a second label halfway along
-    // the error line ran into the found ring (screenshots, 26 Sep).
+    // the error line ran into the found ring (screenshots, 25 Sep).
     const truth = s >= plan.arriveS && this._targetAt ? this._targetAt(plan.dropMs) : null;
     const miss = truth ? this._map.distance([datum.lat, datum.lon], truth) : null;
     tag([datum.lat, datum.lon], 'datum · where drift predicts it'
