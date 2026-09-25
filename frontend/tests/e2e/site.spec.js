@@ -585,7 +585,8 @@ test('▶ in the Search view never plays the site hours', async ({ page }) => {
   await page.waitForTimeout(900);
   expect(await page.textContent('#stamp')).toBe(before);
   await expect(page.locator('#status')).toHaveText(/flies the search/);
-  expect(await page.locator('canvas.ocean-canvas').count()).toBe(1);
+  // The close-up's canvas is part of the Search view (#79; the 2-D sea of #73 before it).
+  expect(await page.locator('canvas.closeup-life').count()).toBe(1);
 });
 
 /*
@@ -644,5 +645,88 @@ for (const size of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }])
     await page.waitForSelector('.search-compass');
     await page.waitForTimeout(300);
     expect(await cornerOverlap(page), 'search').toBeLessThanOrEqual(0);
+  });
+}
+
+/** Spawn a helicopter to fly by hand: the view follows it close up, at zoom 15. */
+async function spawnCloseUp(page) {
+  await page.click('button[data-preset="search"]');
+  await page.waitForTimeout(500);
+  await page.click('.sp-tab[data-tab="fly"]');
+  await page.click('.sp-spawn');
+  const box = await page.locator('#map').boundingBox();
+  await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.5);
+  await page.waitForSelector('.search-heli', { timeout: 5_000 });
+}
+
+/*
+  CLOSE UP (#79). From zoom 13.5 the Search view draws its own sea, hides the colour field
+  and its key, shows a key of its own and goes to satellite; zooming out puts it all back.
+*/
+test('close up, the Search view draws its own sea and key, and zooming out puts the page back', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="search"]');
+  await page.waitForTimeout(500);
+  const legendBefore = await page.isVisible('.current-legend');
+  await spawnCloseUp(page);
+
+  await expect(page.locator('#map')).toHaveClass(/closeup-on/);
+  await expect(page.locator('.closeup-key')).toBeVisible();
+  await expect(page.locator('.closeup-key')).toHaveText(/Sargassum/);
+  expect(await page.isVisible('.current-legend')).toBe(false);
+  // The shader where WebGL runs, the 2-D texture where it does not: one of them is there.
+  expect(await page.locator('.closeup-sea, .ocean-canvas').count()).toBeGreaterThan(0);
+  await expect(page.locator('.leaflet-control-attribution')).toHaveText(/Maxar/);
+  // The compass gives knots beside m/s, so the rough-sea threshold can be checked (#81).
+  await expect(page.locator('.search-compass .cp-lines')).toHaveText(/m\/s \(\d+ kt\)/, { timeout: 10_000 });
+
+  // One click at a time: a click during Leaflet's zoom animation is dropped.
+  for (let k = 0; k < 24; k += 1) {
+    await page.click('.leaflet-control-zoom-out');
+    await page.waitForTimeout(350);
+  }
+  await page.waitForTimeout(800);
+  await expect(page.locator('#map')).not.toHaveClass(/closeup-on/);
+  expect(await page.locator('.closeup-key').count()).toBe(0);
+  expect(await page.isVisible('.current-legend')).toBe(legendBefore);
+  await expect(page.locator('.leaflet-control-attribution')).not.toHaveText(/Maxar/);
+});
+
+for (const size of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
+  test(`close up, the right-hand controls still do not overlap at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('');
+    await ready(page);
+    await spawnCloseUp(page);
+    await expect(page.locator('.closeup-key')).toBeVisible();
+    await page.waitForTimeout(300);
+    expect(await cornerOverlap(page)).toBeLessThanOrEqual(0);
+  });
+}
+
+/* WHY IT MISSED (#80): the result says why the buoy left the prediction, with the reasoning folded. */
+test('the result says why the buoy left the prediction', async ({ page }) => {
+  await readySearch(page);
+  await page.selectOption('.sp-speed', '600');
+  await page.click('.sp-fly');
+  await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
+  await expect(page.locator('.sp-result')).toHaveText(/Why it left the prediction/);
+  await page.click('.sp-why summary');
+  await expect(page.locator('.sp-why')).toHaveText(/Buoy.*Model.*Missing/s);
+  await expect(page.locator('.sp-why summary')).toHaveAttribute('title', /15 m down/);
+});
+
+/* Open or closed, the reasoning must not make the panel scroll (#71, #80). */
+for (const size of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
+  test(`the reasoning fits in the panel when opened at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await readySearch(page);
+    await page.selectOption('.sp-speed', '600');
+    await page.click('.sp-fly');
+    await expect(page.locator('.sp-result')).toHaveText(/Why it left the prediction/, { timeout: 25_000 });
+    await page.click('.sp-why summary');
+    await page.waitForTimeout(200);
+    expect(await panelOverflow(page)).toBeLessThanOrEqual(1);
   });
 }
