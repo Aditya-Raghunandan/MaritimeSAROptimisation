@@ -677,6 +677,8 @@
         .sp-tab { padding: 3px 8px; }
         .sp-drogue { font-size: 10.5px; }
         .search-panel { line-height: 1.32; }
+        .search-panel .sp-why-facts { margin-top: 1px; line-height: 1.25; }
+        .search-panel .sp-why p { margin-top: 1px; line-height: 1.25; }
       }
       /* The compass (#73), bottom-right on top of the legends: rose beside its read-out (#76). */
       .search-compass {
@@ -693,6 +695,34 @@
       .search-compass .cp-key { display: flex; flex-wrap: wrap; gap: 1px 10px; color: var(--ink-3); font-size: 10px; }
       .search-compass .cp-key i { display: inline-block; width: 10px; height: 3px; margin-right: 4px;
         vertical-align: middle; border-radius: 1px; }
+      /* The Addendum citation lives in the caveat's tooltip (#81): say that it is there. */
+      .search-compass .cp-caveat[title]:not([title=""]) {
+        cursor: help; text-decoration: underline dotted rgba(255, 178, 122, .45); text-underline-offset: 2px;
+      }
+      /*
+        Close up (#79): the drawn sea and its life under the search's marks, the colour rasters
+        hidden (one flat value at that scale), and the Surface current key replaced by the
+        close-up key, the compass's width so the stack stays one column.
+      */
+      .closeup-sea, .closeup-life { position: absolute; left: 0; top: 0; pointer-events: none; }
+      .closeup-on .leaflet-raster-layer { visibility: hidden; }
+      .closeup-on .current-legend { display: none; }
+      .closeup-key { width: 292px; }
+      .closeup-key .ck-body { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; line-height: 1.35; }
+      .closeup-key .ck-sw { display: inline-block; width: 16px; height: 9px; margin-right: 6px; vertical-align: -1px; border-radius: 2px; }
+      .closeup-key .ck-water { background: linear-gradient(135deg, #0a3350, #1a6a86 60%, #0a3350); }
+      .closeup-key .ck-caps { background: radial-gradient(ellipse 5px 2px at 45% 50%, #ffffff 60%, transparent 100%), #0d3a55; }
+      .closeup-key .ck-weed { background: radial-gradient(circle, #e5bd62 0 2.5px, #9a6a1c 3.5px, transparent 4.5px), #0d3a55; }
+      .closeup-key .ck-arrows { height: 3px; vertical-align: middle; background: linear-gradient(90deg, #ffffff 0 33%, #ff5fa2 33% 66%, #ffd166 66%); }
+      .closeup-key .ck-night { color: #ffb27a; }
+      .closeup-key .ck-foot { color: var(--ink-3); font-size: 10px; }
+      .search-panel .sp-why p { font-size: 11px; color: var(--ink-2); }
+      .search-panel .sp-why-facts { display: grid; grid-template-columns: auto 1fr; gap: 0 8px;
+        margin-top: 4px; font-size: 11px; font-variant-numeric: tabular-nums; }
+      .search-panel .sp-why-facts dt { color: var(--ink-3); }
+      .search-panel .sp-why-facts dd { color: var(--ink-2); margin: 0; }
+      /* Open, the reasoning takes the datum line's place: the Missing row says the same. */
+      .search-panel .sp-result:has(.sp-why[open]) p:has(> .sp-datum-line) { display: none; }
       .sp-follow { display: flex; gap: 6px; align-items: center; color: var(--ink-2); font-size: 11.5px; cursor: pointer; }
       .sp-follow input { accent-color: #ff6b35; }
       /* The drogue note: a quiet aside ruled in the buoy's drogue colour, not a blue shout (#76). */

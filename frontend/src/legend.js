@@ -61,7 +61,8 @@ export const WindLegend = L.Control.extend({
   },
 
   onAdd() {
-    const box = L.DomUtil.create('div', 'wind-legend');
+    // `className` marks one legend for the page to find: close up hides the current's (#79).
+    const box = L.DomUtil.create('div', `wind-legend ${this.options.className ?? ''}`.trim());
     // Otherwise dragging across the key pans the map underneath it.
     L.DomEvent.disableClickPropagation(box);
     L.DomEvent.disableScrollPropagation(box);

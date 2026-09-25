@@ -157,7 +157,7 @@ export const SearchPanel = L.Control.extend({
             <span><i class="sp-dash"></i>predicted drift, ending at the datum</span>
             <span><i class="sp-sw" style="background:${SEARCH_COLOURS.target}"></i>where the buoy really went</span>
             <span><i class="sp-dot" style="background:${SEARCH_COLOURS.marker}"></i>marker: drifts with the current</span>
-            <span><i class="sp-wave"></i>close up: the sea moves with the real current, whitecaps by wind force (decoration only)</span>
+            <span><i class="sp-wave"></i>close up: a drawn sea, drifting weed and the odd animal; the Close up key says what each is</span>
           </div>
         </details>
       </div>`;
@@ -320,6 +320,8 @@ export const SearchPanel = L.Control.extend({
 
   setResult(html) {
     this._els.result.innerHTML = html;
+    // A result can carry its own folded reasoning (#80); opening it must refit the panel.
+    for (const d of this._els.result.querySelectorAll('details')) d.addEventListener('toggle', () => this.fit());
     this.fit();
     // The answer is what the search was for; bring it into view if the panel is scrolled.
     if (html) this._els.result.scrollIntoView({ block: 'nearest' });
