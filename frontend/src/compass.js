@@ -84,5 +84,7 @@ export const Compass = L.Control.extend({
     const caveat = this._root.querySelector('.cp-caveat');
     caveat.hidden = !r.caveat;
     caveat.textContent = r.caveat ?? '';
+    // The citation, for whoever wants it, off the face of the compass (#81).
+    caveat.title = r.caveatSource ?? '';
   },
 });

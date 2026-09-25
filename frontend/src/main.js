@@ -690,7 +690,7 @@ async function start() {
     // Its own key, shown only while a current layer is on. Two legends stacked
     // permanently would take a quarter of the map to explain a layer that is
     // off by default.
-    bindLegend(currentLegend({ maxSpeed: cMax }),
+    bindLegend(currentLegend({ maxSpeed: cMax, className: 'current-legend' }),
       () => [currentRaster, currentQuiver, currentParticles]);
 
     overlays[entry(`${current.layer.label} — colour`, 'how fast, painted; land left blank')] = currentRaster;
@@ -847,6 +847,46 @@ async function start() {
     (`searchBar`, below): one clock for the search, the fields and the buoy (#69).
   */
   let searchView = null;
+  /*
+    CLOSE UP (#79). From zoom 13.5 the Search view draws a sea of its own, and the page
+    around it changes to suit: the basemap goes to satellite, because near a coast that
+    photo is the real thing and offshore the drawn sea covers it; the colour rasters are
+    hidden, being one flat value at that scale; and the Surface current key gives way to
+    the close-up key. Leaving close up puts back the basemap the viewer had -- unless they
+    chose another by hand while close up, which is theirs to keep.
+  */
+  const closeUpChrome = (() => {
+    let on = false;
+    let before = null;
+    let switching = false;
+    let active = BASEMAPS[DEFAULT_BASEMAP];
+    map.on('baselayerchange', (e) => {
+      if (switching) return;
+      active = e.layer;
+      if (on) before = null;
+    });
+    const swap = (to) => {
+      if (!to || to === active) return;
+      switching = true;
+      map.removeLayer(active);
+      map.addLayer(to);
+      switching = false;
+      active = to;
+    };
+    return {
+      enter() {
+        on = true;
+        map.getContainer().classList.add('closeup-on');
+        if (active !== BASEMAPS.Satellite) { before = active; swap(BASEMAPS.Satellite); }
+      },
+      exit() {
+        on = false;
+        map.getContainer().classList.remove('closeup-on');
+        if (before) swap(before);
+        before = null;
+      },
+    };
+  })();
   if (drifterLayer && resultantSource) {
     // Epoch ms to the nearest frame of the wind tier in use, which a span change swaps.
     const frameOf = (ms) => {
@@ -873,6 +913,16 @@ async function start() {
       },
       setMoment: (ms) => clock.setTime(new Date(ms)),
       setStatus,
+      // Sea, land, or not known yet, at the site's moment: the close-up sea thins out
+      // where the current model has land within a cell.
+      waterAt: (lat, lon) => {
+        const f = frameOf(clock.t.getTime());
+        if (f === null || !resultantSource.isResident(f)) return null;
+        const s = resultantSource.sampleAt(f, lat, lon);
+        if (s.onLand) return false;
+        return s.current ? true : null;
+      },
+      closeUp: closeUpChrome,
     });
     overlays[entry('Search — Coast Guard helicopter', 'fly a pattern to find a buoy')] = searchView.layer;
   }

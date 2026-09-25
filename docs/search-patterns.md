@@ -65,7 +65,7 @@ t, glat, glon = ground_track(pattern, marker)           # every waypoint, plus e
 - `transit_time_s` refuses a datum beyond the H-60's 300 NM radius of action.
 - `marker_track` without a forcing backend raises; a still marker is `MarkerTrack.fixed`.
 
-## On the site (issues #64, #68, #69, #71, #73, #75, #76)
+## On the site (issues #64, #68, #69, #71, #73, #75, #76, #79, #80, #81)
 
 The **Search** preset flies the same doctrine against a real buoy. The panel, top-left, has two
 tabs: **Coast Guard search** and **Fly it yourself**. It is built to fit a 1366 × 768 screen
@@ -141,16 +141,67 @@ loaded) shows:
 - the current (cyan) and the wind (amber) where the helicopter is, each pointing the way it is
   going.
 
-Its readout gives the speeds, where the wind comes from, and the Beaufort force. Above 15 kt it
-adds the Addendum's caveat that the sweep width would be halved (Table H-10, limitation L19); this
-view does not apply that.
+Its readout gives the speeds, where the wind comes from (in m/s and knots, since #81), and the
+Beaufort force. Above 15 kt it says, in plain words, that whitecaps hide a person, so the Coast
+Guard assumes spotters see half as far to each side, and that this view does not, so finding is
+easier here than it would really be (limitation L19). The Addendum citation (Table H-10: ×0.5 over
+15 kt or 3 ft seas, ×0.25 over 25 kt) is the caveat's tooltip.
 
-**Close up** (#73). Flying yourself follows the helicopter at zoom 15 by default; the Search view
-allows zoom 16, where the strip is about 90 px wide. From zoom 13.5 a **sea texture** is drawn.
-- **Wave marks** lie across the wind and ride the real current, sped up by the playback rate.
-- **Whitecaps** follow the Beaufort force.
+**Close up** (#79, replacing #73's texture). Flying yourself follows the helicopter at zoom 15 by
+default; the Search view allows zoom 16, where the strip is about 90 px wide. From zoom 13 the view
+fades into a close-up of its own, fully on from 13.5 (`closeUp.js` has the rules, `closeUpLayer.js`
+draws them).
 
-It is decoration only and never an input to detection.
+*Why not arrows or streaks close up.* At the 1 km scale bar the screen is about 17 km wide: two
+current cells (0.08° × 0.04°, about 8 × 4.5 km) and less than one wind cell. The forcing is the
+same everywhere on screen, so arrows would all run parallel. What differs close up is how three
+things move, and the view shows those:
+
+| What | Moves with | Clock |
+|---|---|---|
+| the water's slow patches and its whitecaps | the real current | search time |
+| waves and whitecaps | set by the wind: peak wavelength from Pierson–Moskowitz, whitecap cover from Monahan & O'Muircheartaigh (1980), about 1 % of the sea at 10 m/s | real time |
+| Sargassum, in windrows along the wind (Langmuir cells) | current + 2 % of wind: the drift model's own step (`floaterStep`) | search time |
+| now and then an animal: flying fish, dolphins, a turtle, a humpback (December to April only) | its own swimming, carried by the water | real time |
+
+- **Light** follows the real sun at that moment and place. A night search is dark blue with a
+  faint moon glitter, and the close-up key says the sweep width is a daylight figure.
+- **The page around it** changes while close up: the basemap goes to satellite (real near a
+  coast; offshore the drawn sea covers it), the colour rasters hide (one flat value at that
+  scale), and the *Close up* key replaces the Surface current key. Zooming out restores the
+  basemap the viewer had.
+- **Near land** the sea thins out within a current-model cell of the coast, where the
+  satellite photo is the real thing.
+- **The swept strip** stays at true width but is fainter close up, so the sea shows through.
+- **Speed.** The sea is one WebGL pass at 60 % of the screen's pixels; weed and animals are a
+  2-D canvas. Measured 25 Sep at 1440×900 on the development laptop, in the Search view
+  close up: 0.1–0.2 ms of script per frame; median frame 8.3 ms (the display's 120 Hz), 95th
+  percentile 8.5 ms. One 4-second run had no frame over 13 ms; two others each had a single
+  1-second gap, taken to be the test browser's pane being hidden rather than the drawing, since
+  the median did not move. To be re-measured on a visible screen. Where WebGL is missing, #73's
+  2-D texture stands in.
+
+Waves, weed and animals are drawn for the eye and never feed detection; animals are not to
+scale, like the helicopter icon. `window.__closeUp.summon('dolphins')` calls one up in the
+development build.
+
+**Why it left the prediction** (#80, `whyMissed.js`). After a search the result says why the buoy
+did not go where the model said. The buoy's own motion (from its positions) is compared with the
+model's (current + the target's share of wind) at the same places and times, along the buoy's
+real path. The difference is what the model is missing, and its direction against the wind is the
+clue:
+
+| The gap | Verdict |
+|---|---|
+| under 0.03 m/s | the model had it about right |
+| along the wind, downwind | the wind pushed harder than the model allows; the windage that would have fitted is given |
+| along the wind, upwind, drogued buoy, wind in the model | a drogued buoy barely feels the wind: *current only* fits it better |
+| across the wind, or the wind under 2 m/s | the water moved differently from the ocean model: an eddy smaller than a cell, or out of place |
+
+The panel shows three lines (buoy, model, missing) and the cause; the summary's tooltip says what
+it cannot see: the waves' own push on anything floating, tides, and the difference between the
+surface current and the current 15 m down. Close up, arrows at the real buoy show 15 minutes of
+the model's motion (white), the buoy's (pink) and the gap (amber). It is a clue, not a proof.
 
 **The drogue** (#73, reworded in #76). When a buoy is chosen, step 4 says whether it still had
 its drogue at the report time, and what a drogue is: the underwater sail, 15 m down, that keeps a

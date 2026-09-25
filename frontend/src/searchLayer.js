@@ -22,12 +22,15 @@
  *   swept strip  the path flown, drawn at its TRUE width, 185.2 m, re-scaled on zoom
  *   helicopter   an icon at the current moment, pointing along its heading
  *   real buoy    where the buoy actually was at this moment
+ *   why arrows   close up only (#80): at the real buoy, 15 minutes of the model's motion,
+ *                of the buoy's, and the gap between them -- what the model is missing
  *
  * A helicopter spawned by hand (#68) has no base, datum or marker: only its own path.
  */
 
 import L from 'leaflet';
 
+import { isCloseUp, metresPerPixel as mpp } from './closeUp.js';
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
 import { offsetPosition } from './patterns.js';
 import { formatDuration, helicopterAt, markerPositionAt, searchPath } from './searchRun.js';
@@ -49,9 +52,12 @@ export const SEARCH_COLOURS = {
 };
 
 /** Web Mercator metres per screen pixel at a latitude and (fractional) zoom. */
-export function metresPerPixel(lat, zoom) {
-  return (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (256 * 2 ** zoom);
-}
+export const metresPerPixel = mpp;
+
+/** The arrows at the buoy show this much motion, seconds (#80). */
+export const WHY_ARROW_S = 900;
+/** The gap between the model's motion and the buoy's, drawn close up (#80). */
+export const WHY_COLOUR = '#ffd166';
 
 const HELI_SVG = `
 <svg viewBox="-12 -12 24 24" width="26" height="26" aria-hidden="true">
@@ -91,6 +97,7 @@ export const SearchLayer = L.Layer.extend({
     this._base = null;
     this._lkp = null;
     this._flight = null;
+    this._motion = null;
   },
 
   onAdd(map) {
@@ -139,7 +146,16 @@ export const SearchLayer = L.Layer.extend({
     if (this._map) this._render();
   },
 
+  /**
+   * The buoy's motion and the model's at this moment, { at, actual, model } in m/s, or
+   * null. Drawn close up only, as arrows (#80).
+   */
+  setMotion(motion) {
+    this._motion = motion;
+  },
+
   clear() {
+    this._motion = null;
     this.setPlan(null, null, null);
   },
 
@@ -194,6 +210,8 @@ export const SearchLayer = L.Layer.extend({
         }).addTo(g);
       }
     }
+
+    this._renderWhy(g);
 
     const h = this._helicopter(plan, s, r);
     L.marker([h.lat, h.lon], {
@@ -316,14 +334,54 @@ export const SearchLayer = L.Layer.extend({
     }
   },
 
+  /**
+   * Close up, at the real buoy: where the model says it is drifting (white), where it is
+   * really going (pink), and the gap from the one to the other (amber) -- 15 minutes of
+   * each, at map scale, so their lengths compare directly (#80).
+   */
+  _renderWhy(g) {
+    const m = this._motion;
+    if (!m || !isCloseUp(this._map.getZoom())) return;
+    const [lat, lon] = m.at;
+    const tipOf = (v) => offsetPosition(lat, lon, v[0] * WHY_ARROW_S, v[1] * WHY_ARROW_S);
+    const model = tipOf(m.model);
+    const actual = tipOf(m.actual);
+    const head = 8 * metresPerPixel(lat, this._map.getZoom());
+    const arrow = (from, to, colour, cls, dash = null) => {
+      L.polyline([from, to], {
+        color: colour, weight: 2.2, opacity: 0.95, dashArray: dash, className: cls, interactive: false,
+      }).addTo(g);
+      const dy = (to[0] - from[0]) * 111195;
+      const dx = (to[1] - from[1]) * 111195 * Math.cos((lat * Math.PI) / 180);
+      const len = Math.hypot(dx, dy);
+      if (len < head) return;
+      const ux = dx / len;
+      const uy = dy / len;
+      for (const s of [-1, 1]) {
+        const c = Math.cos(0.45);
+        const sn = Math.sin(0.45) * s;
+        const bx = -(ux * c - uy * sn) * head;
+        const by = -(uy * c + ux * sn) * head;
+        L.polyline([to, offsetPosition(to[0], to[1], bx, by)], {
+          color: colour, weight: 2.2, opacity: 0.95, className: cls, interactive: false,
+        }).addTo(g);
+      }
+    };
+    arrow([lat, lon], model, SEARCH_COLOURS.datum, 'search-why-model', '4 3');
+    arrow([lat, lon], actual, SEARCH_COLOURS.target, 'search-why-buoy');
+    arrow(model, actual, WHY_COLOUR, 'search-why-gap');
+  },
+
   /** The swept strip at true width, and the track down its middle. */
   _renderFlown(g, plan, s) {
     const flown = this._flight ? this._flight.pathUpTo(s) : this._flownUpTo(s);
     if (flown.length < 2) return;
     const zoom = this._map.getZoom();
     const px = SWEEP_WIDTH_M / metresPerPixel(flown[0][0], zoom);
+    // Still at true width close up, but fainter: side by side the strips cover the whole
+    // pattern, and at 0.28 that was an orange block over the sea it was searching (#79).
     L.polyline(flown, {
-      color: SEARCH_COLOURS.helicopter, weight: Math.max(px, 1), opacity: 0.28,
+      color: SEARCH_COLOURS.helicopter, weight: Math.max(px, 1), opacity: isCloseUp(zoom) ? 0.13 : 0.28,
       lineCap: 'butt', lineJoin: 'miter', className: 'search-strip', interactive: false,
     }).addTo(g);
     L.polyline(flown, {
