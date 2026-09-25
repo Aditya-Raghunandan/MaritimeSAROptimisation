@@ -281,6 +281,11 @@ export function createSea(canvas) {
 
     clearLand() { landBox = null; },
 
+    /** Wait for the GPU to finish what it was given: reading one pixel back forces it. */
+    finish() {
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+    },
+
     /** Whether the context was lost (a driver reset); the layer then falls back. */
     lost() { return gl.isContextLost(); },
 

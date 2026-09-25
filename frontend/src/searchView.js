@@ -108,7 +108,12 @@ export function createSearchView(deps) {
   const { map, setStatus, timeBar } = deps;
   const layer = new SearchLayer();
   const compass = new Compass();
-  const key = new CloseUpKey();
+  const key = new CloseUpKey({
+    onFlow: (kind) => {
+      closeUp.setFlow(kind);
+      updateKey();
+    },
+  });
   const closeUp = new CloseUpLayer({
     waterAt: deps.waterAt ?? null,
     onEnter: () => {
@@ -182,6 +187,7 @@ export function createSearchView(deps) {
     if (!key._map) return;
     const d = closeUp.describe();
     key.update({
+      flow: closeUp.flow(),
       force: here.wind ? beaufort(Math.hypot(here.wind[0], here.wind[1])).force : null,
       whitecaps: d.whitecaps,
       sunElevationDeg: d.sunElevationDeg === null ? null : Math.round(d.sunElevationDeg),

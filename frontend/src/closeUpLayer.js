@@ -23,7 +23,7 @@
 import L from 'leaflet';
 
 import {
-  WEED_TILE_M, closeUpWeight, floaterStep, isCloseUp, metresPerPixel, nightness, seededRandom,
+  FLOWS, SEA_RES, WEED_TILE_M, flowVector, nextSeaRes, streakSpeedPx, closeUpWeight, floaterStep, isCloseUp, metresPerPixel, nightness, seededRandom,
   peakWavelengthM, sunPosition, weedRows, whitecapFraction,
 } from './closeUp.js';
 import { ALPHA } from './drift.js';
@@ -36,8 +36,6 @@ import { drawSighting } from './wildlifeDraw.js';
 const TO_RAD = Math.PI / 180;
 const TAU = Math.PI * 2;
 
-/** The sea's canvas as a share of the screen's pixels: water is smooth. */
-const SEA_RES = 0.6;
 
 /** The water/land grid the sea is thinned by: this many samples, over the view and more. */
 const LAND_COLS = 40;
@@ -126,6 +124,9 @@ export const CloseUpLayer = L.Layer.extend({
     this._sprites = null;
     this._frameMs = 0;
     this._frames = 0;
+    this._res = SEA_RES;     // the sea's share of the screen's pixels; lowered if it lags
+    this._flow = 'drift';    // which flow the streaks show (#85)
+    this._streaks = [];
     this._tick = this._tick.bind(this);
   },
 
@@ -194,6 +195,17 @@ export const CloseUpLayer = L.Layer.extend({
     if (this._fallback) this._fallback.setConditions({ current, wind, rate });
   },
 
+  /** Streak `kind` ('drift', 'current', 'wind') or none ('off'). */
+  setFlow(kind) {
+    this._flow = FLOWS[kind] ? kind : 'off';
+    this._streaks = [];
+  },
+
+  /** Which flow the streaks show. */
+  flow() {
+    return this._flow;
+  },
+
   /** Whether the view is close up now. */
   isClose() {
     return this._closed;
@@ -258,8 +270,8 @@ export const CloseUpLayer = L.Layer.extend({
     const size = this._map.getSize();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (this._glCanvas) {
-      const w = Math.max(1, Math.round(size.x * SEA_RES));
-      const h = Math.max(1, Math.round(size.y * SEA_RES));
+      const w = Math.max(1, Math.round(size.x * this._res));
+      const h = Math.max(1, Math.round(size.y * this._res));
       if (this._glCanvas.width !== w || this._glCanvas.height !== h) {
         this._glCanvas.width = w;
         this._glCanvas.height = h;
@@ -321,6 +333,7 @@ export const CloseUpLayer = L.Layer.extend({
       this._frameSum = 0;
       this._frameAt = now;
       this._lifeCanvas.dataset.frameMs = this._frameMs.toFixed(2);
+      this._lifeCanvas.dataset.seaRes = this._res.toFixed(2);
     }
   },
 
@@ -385,8 +398,7 @@ export const CloseUpLayer = L.Layer.extend({
       const eased = this._windSpeed === undefined ? ws : this._windSpeed + (ws - this._windSpeed) * (1 - Math.exp(-dt / 2));
       this._windSpeed = eased;
       this._landFor(c, size, mpp);
-      this._sea.draw({
-        mpp: mpp / SEA_RES,
+      const seaParams = {
         centre: c,
         flow: waterFlow,
         time: this._clock,
@@ -400,7 +412,9 @@ export const CloseUpLayer = L.Layer.extend({
         moon: [-Math.sin(az) * 0.8, -Math.cos(az) * 0.8, 0.6, 0.45 * night],
         night,
         fade,
-      });
+      };
+      if (!this._calibrated) this._calibrate(seaParams, mpp);
+      this._sea.draw({ ...seaParams, mpp: mpp / this._res });
     }
 
     const ctx = this._ctx;
@@ -409,6 +423,8 @@ export const CloseUpLayer = L.Layer.extend({
     ctx.globalAlpha = fade;
     const view = { size, c, mpp };
     this._drawWeed(ctx, view, weedFlow, wdir, night);
+    ctx.globalAlpha = fade;
+    this._drawStreaks(ctx, view, dt);
     ctx.globalAlpha = fade;
     this._drawWildlife(ctx, view, dt, zoom, waterFlow, wdir, night, el, az);
   },
@@ -443,6 +459,33 @@ export const CloseUpLayer = L.Layer.extend({
     }
     this._sea.setLand(mask, LAND_COLS, LAND_ROWS, box);
     this._land = { box, pending: known === 0, at: now };
+  },
+
+  /**
+   * Once, when the sea is first drawn: time three frames forced to finish on the GPU, and
+   * step the resolution down while one costs more than 8 ms (closeUp.nextSeaRes). Cost,
+   * not frame rate, so a throttled pane or a 30 fps cap cannot make a fast machine blurry.
+   */
+  _calibrate(params, mpp) {
+    this._calibrated = true;
+    for (let step = 0; step < 4; step += 1) {
+      this._sea.draw({ ...params, mpp: mpp / this._res });
+      this._sea.finish();
+      const times = [];
+      for (let k = 0; k < 3; k += 1) {
+        const t0 = performance.now();
+        this._sea.draw({ ...params, mpp: mpp / this._res });
+        this._sea.finish();
+        times.push(performance.now() - t0);
+      }
+      times.sort((a, b) => a - b);
+      const res = nextSeaRes(this._res, times[1]);
+      this._lifeCanvas.dataset.seaMs = times[1].toFixed(2);
+      if (res === this._res) break;
+      this._res = res;
+      this._resize();
+    }
+    this._lifeCanvas.dataset.seaRes = this._res.toFixed(2);
   },
 
   _toScreen(view, x, y) {
@@ -481,6 +524,68 @@ export const CloseUpLayer = L.Layer.extend({
             ctx.drawImage(this._sprites[Math.floor(rand() * this._sprites.length)], sx - px / 2, sy - px / 2, px, px);
           }
         }
+      }
+    }
+  },
+
+  /**
+   * Streaks of the chosen flow (#85): dense, tapered like comets, pinned to the water so
+   * they stay right while the map follows the helicopter. They run at a speed that shows
+   * how strong the flow is, as the site's other particles do, not at the playback clock.
+   */
+  _drawStreaks(ctx, view, dt) {
+    const f = FLOWS[this._flow];
+    if (!f) return;
+    const [u, v] = flowVector(this._flow, this._current, this._wind, ALPHA);
+    const speed = Math.hypot(u, v);
+    const pxps = streakSpeedPx(speed, f.refMs);
+    if (pxps <= 0) return;
+    const { size, c, mpp } = view;
+    const dir = [u / speed, v / speed];
+    const want = Math.round((size.x * size.y) / 3400);
+    const spawn = (s) => {
+      s.x = c[0] + (Math.random() - 0.5) * size.x * mpp;
+      s.y = c[1] + (Math.random() - 0.5) * size.y * mpp;
+      s.age = 0;
+      s.life = 1.6 + Math.random() * 2.4;
+      return s;
+    };
+    while (this._streaks.length < want) {
+      const s = spawn({});
+      s.age = Math.random() * s.life;
+      this._streaks.push(s);
+    }
+    this._streaks.length = Math.min(this._streaks.length, want);
+    const step = pxps * mpp * dt;
+    const tail = Math.min(46, pxps * 0.32);                 // px
+    const sdx = dir[0];
+    const sdy = -dir[1];
+    const heads = [[], []];                                 // fading in or out, and full
+    for (const s of this._streaks) {
+      s.age += dt;
+      s.x += dir[0] * step;
+      s.y += dir[1] * step;
+      const [hx, hy] = this._toScreen(view, s.x, s.y);
+      if (s.age > s.life || hx < -60 || hy < -60 || hx > size.x + 60 || hy > size.y + 60) {
+        spawn(s);
+        continue;
+      }
+      const fade = Math.min(1, s.age / 0.4, (s.life - s.age) / 0.6);
+      heads[fade > 0.55 ? 1 : 0].push([hx, hy]);
+    }
+    const [r, g, b] = f.rgb;
+    ctx.lineCap = 'round';
+    ctx.lineWidth = f.width;
+    // Three segments from tail to head, fainter towards the tail, in two strengths.
+    for (const [bucket, strength] of [[0, 0.45], [1, 1]]) {
+      for (const [from, to, a] of [[1, 0.66, 0.16], [0.66, 0.33, 0.34], [0.33, 0, 0.7]]) {
+        ctx.strokeStyle = `rgba(${r},${g},${b},${(a * strength).toFixed(3)})`;
+        ctx.beginPath();
+        for (const [hx, hy] of heads[bucket]) {
+          ctx.moveTo(hx - sdx * tail * from, hy - sdy * tail * from);
+          ctx.lineTo(hx - sdx * tail * to, hy - sdy * tail * to);
+        }
+        ctx.stroke();
       }
     }
   },

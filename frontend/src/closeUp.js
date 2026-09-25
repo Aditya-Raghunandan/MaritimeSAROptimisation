@@ -44,6 +44,61 @@ export function metresPerPixel(lat, zoom) {
   return (40075016.686 * Math.cos(lat * TO_RAD)) / (256 * 2 ** zoom);
 }
 
+/** The sea's resolution to start at, and the least it will drop to, as shares of the screen's pixels. */
+export const SEA_RES = 0.6;
+export const SEA_RES_MIN = 0.25;
+
+/**
+ * The sea's next resolution, from how long one frame of it took at `res`, forced to finish
+ * on the GPU. Over 8 ms -- half a frame at 60 fps -- it steps down by a third, to a floor:
+ * on a machine drawing WebGL without a graphics card (the CI runners, or a laptop with
+ * acceleration off) the full-resolution sea made the whole page lag (#83). A normal
+ * laptop draws one in about a millisecond and never steps down.
+ *
+ * COST, NOT FRAME RATE. The first version stepped down on a low frame rate, and a fast
+ * laptop's sea went to the floor: a browser throttles frames for a background pane, and
+ * Safari's low-power mode caps every page at 30 fps. Neither is the sea being slow.
+ */
+export function nextSeaRes(res, frameMs) {
+  if (!(frameMs > 8)) return res;
+  return Math.max(SEA_RES_MIN, res * (2 / 3));
+}
+
+/**
+ * The flows the close-up can streak (#85), in the colours the site's own views use: the
+ * drift where a person goes (the Drift view's green), the current (the Current view's
+ * cyan) and the wind (the Wind view's white). `refMs` is a strong value for each, which
+ * sets how fast its streaks run; `width` matches the views' particles.
+ *
+ * Close up, one current cell (8 x 4.5 km) spans the screen, so the model's flow is the
+ * same everywhere on it and the streaks run parallel. That is the truth at this scale;
+ * what they show is which way, and how strongly.
+ */
+export const FLOWS = {
+  drift: { label: 'Drift', tip: 'Where a person in the water goes: current + 2 % of wind', rgb: [90, 245, 135], refMs: 1.0, width: 1.7 },
+  current: { label: 'Current', tip: 'Where the water goes', rgb: [140, 240, 255], refMs: 1.0, width: 1.9 },
+  wind: { label: 'Wind', tip: 'Where the air goes', rgb: [255, 255, 255], refMs: 12, width: 1.0 },
+};
+
+/** The flow to streak, [u, v] m/s: drift is current + `leeway` of the wind. */
+export function flowVector(kind, current, wind, leeway = 0.02) {
+  const c = current ?? [0, 0];
+  const w = wind ?? [0, 0];
+  if (kind === 'current') return [c[0], c[1]];
+  if (kind === 'wind') return [w[0], w[1]];
+  if (kind === 'drift') return [c[0] + leeway * w[0], c[1] + leeway * w[1]];
+  return [0, 0];
+}
+
+/**
+ * How fast a streak runs on screen, px/s: still for no flow, faster for a stronger one,
+ * capped. It shows strength, not the playback clock, as the site's other particles do.
+ */
+export function streakSpeedPx(speedMs, refMs) {
+  if (!(speedMs > 1e-3)) return 0;
+  return 16 + 84 * Math.min(1.5, speedMs / refMs);
+}
+
 /** m/s to knots. */
 export function toKnots(ms) {
   return (ms * 3600) / 1852;

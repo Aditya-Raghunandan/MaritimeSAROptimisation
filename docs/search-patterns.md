@@ -65,7 +65,7 @@ t, glat, glon = ground_track(pattern, marker)           # every waypoint, plus e
 - `transit_time_s` refuses a datum beyond the H-60's 300 NM radius of action.
 - `marker_track` without a forcing backend raises; a still marker is `MarkerTrack.fixed`.
 
-## On the site (issues #64, #68, #69, #71, #73, #75, #76, #79, #80, #81, #83)
+## On the site (issues #64, #68, #69, #71, #73, #75, #76, #79, #80, #81, #83, #85)
 
 The **Search** preset flies the same doctrine against a real buoy. The panel, top-left, has two
 tabs: **Coast Guard search** and **Fly it yourself**. It is built to fit a 1366 × 768 screen
@@ -181,13 +181,25 @@ things move, and the view shows those:
   satellite photo is the real thing.
 - **The swept strip** stays at true width but is fainter close up, so the sea shows through,
   and the faint dashed plan shows only the part of the pattern still to fly (#83).
-- **The key** is at most four short rows: what moves the sea, what the golden weed is, whether
-  it is night, and that none of it is data.
+- **Flow streaks** (#85): dense streaks of one flow at a time, chosen in the key — **drift**
+  (current + 2 % of wind, where a person goes; the Drift view's green, the default),
+  **current** (the Current view's cyan), **wind** (white), or off. One current cell spans the
+  close-up, so the model's flow is the same everywhere on screen and the streaks run parallel:
+  that is the truth at this scale. Their speed shows the flow's strength, not the playback
+  clock, as the site's other particles do; they are pinned to the water, so they stay right
+  while the map follows the helicopter.
+- **The key** is at most four short rows: the streak switch, what moves the sea, whether it is
+  night, and that none of it is data.
 - **Speed.** The sea is one WebGL pass at 60 % of the screen's pixels; weed and animals are a
   2-D canvas. Measured 25 Sep at 1440×900 on the development laptop (#83's sea): one whole
   close-up frame, forced to finish on the GPU (`readPixels`), takes a median 0.6–0.9 ms and at
-  worst 1.7 ms at zooms 13.75–16, against a 16 ms frame. Where WebGL is missing, #73's 2-D
-  texture stands in.
+  worst 1.7 ms at zooms 13.75–16, against a 16 ms frame. **When the sea first appears it
+  times three frames forced to finish, and steps its resolution down by a third while one
+  costs over 8 ms** (`nextSeaRes`, floor 25 %): a machine drawing WebGL without a graphics
+  card — the CI runners — made the page lag at full resolution. It measures cost, not frame
+  rate, because a first version keyed on frame rate sent a fast laptop to the floor: browsers
+  throttle frames in background panes, and Safari's low-power mode caps pages at 30 fps.
+  Where WebGL is missing, #73's 2-D texture stands in.
 
 Waves, weed and animals are drawn for the eye and never feed detection; animals are not to
 scale, like the helicopter icon. `window.__closeUp.summon('dolphins')` calls one up in the

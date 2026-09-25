@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CLOSE_ZOOM, closeUpWeight, floaterStep, isCloseUp, metresPerPixel, nightness, peakWavelengthM,
-  WEED_TILE_M, seededRandom, sunPosition, toKnots, weedRows, whitecapFraction,
+  FLOWS, SEA_RES, SEA_RES_MIN, WEED_TILE_M, flowVector, nextSeaRes, seededRandom, streakSpeedPx, sunPosition, toKnots, weedRows, whitecapFraction,
 } from '../src/closeUp.js';
 import { stepPosition } from '../src/pointDrift.js';
 
@@ -35,6 +35,43 @@ describe('when the close-up is on', () => {
   it('converts m/s to knots', () => {
     expect(toKnots(1852 / 3600)).toBeCloseTo(1, 12);
     expect(toKnots(9.6)).toBeCloseTo(18.66, 2);
+  });
+});
+
+describe('the flow streaks (#85)', () => {
+  it('drifts at current + 2 % of wind, and passes current and wind through', () => {
+    expect(flowVector('drift', [0.3, -0.1], [-9.6, 0])).toEqual([0.3 + 0.02 * -9.6, -0.1]);
+    expect(flowVector('current', [0.3, -0.1], [-9.6, 0])).toEqual([0.3, -0.1]);
+    expect(flowVector('wind', [0.3, -0.1], [-9.6, 0])).toEqual([-9.6, 0]);
+    expect(flowVector('off', [0.3, -0.1], [-9.6, 0])).toEqual([0, 0]);
+    expect(flowVector('drift', null, null)).toEqual([0, 0]);
+  });
+
+  it('runs a streak faster for a stronger flow, never for none, and caps it', () => {
+    expect(streakSpeedPx(0, 1)).toBe(0);
+    expect(streakSpeedPx(0.1, 1)).toBeLessThan(streakSpeedPx(0.5, 1));
+    expect(streakSpeedPx(10, 1)).toBe(streakSpeedPx(100, 1));
+    expect(streakSpeedPx(6, FLOWS.wind.refMs)).toBeCloseTo(streakSpeedPx(0.5, FLOWS.current.refMs), 9);
+  });
+
+  it('uses the site\'s own colours: the Drift view\'s green and the Current view\'s cyan', () => {
+    expect(FLOWS.drift.rgb).toEqual([90, 245, 135]);
+    expect(FLOWS.current.rgb).toEqual([140, 240, 255]);
+  });
+});
+
+describe('nextSeaRes', () => {
+  it('keeps the resolution while a frame costs 8 ms or less', () => {
+    expect(nextSeaRes(SEA_RES, 0.9)).toBe(SEA_RES);
+    expect(nextSeaRes(SEA_RES, 8)).toBe(SEA_RES);
+    expect(nextSeaRes(SEA_RES, NaN)).toBe(SEA_RES);
+  });
+
+  it('steps down by a third when a frame costs more, never below the floor', () => {
+    expect(nextSeaRes(0.6, 20)).toBeCloseTo(0.4, 12);
+    let res = SEA_RES;
+    for (let k = 0; k < 10; k += 1) res = nextSeaRes(res, 120);
+    expect(res).toBe(SEA_RES_MIN);
   });
 });
 

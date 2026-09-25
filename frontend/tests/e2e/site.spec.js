@@ -665,6 +665,9 @@ async function spawnCloseUp(page) {
   and its key, shows a key of its own and goes to satellite; zooming out puts it all back.
 */
 test('close up, the Search view draws its own sea and key, and zooming out puts the page back', async ({ page }) => {
+  // CI draws WebGL in software: the sea is slow there until it steps its resolution down,
+  // and a dozen zoom animations take their time. The work is bounded; the limit says so.
+  test.setTimeout(60_000);
   await page.goto('');
   await ready(page);
   await page.click('button[data-preset="search"]');
@@ -674,8 +677,15 @@ test('close up, the Search view draws its own sea and key, and zooming out puts 
 
   await expect(page.locator('#map')).toHaveClass(/closeup-on/);
   await expect(page.locator('.closeup-key')).toBeVisible();
-  await expect(page.locator('.closeup-key')).toHaveText(/Golden weed/);
+  await expect(page.locator('.closeup-key')).toHaveText(/golden weed/i);
   // Four rows at most (#83): the sea, the weed, night if it is, and that none of it is data.
+  expect(await page.locator('.closeup-key .ck-body > span').count()).toBeLessThanOrEqual(4);
+  // The streak switch (#85): drift by default, and a click changes it. On a short screen
+  // the corner guard folds the key for room, so open it first, as a person would.
+  if (await page.locator('.closeup-key.collapsed').count()) await page.click('.closeup-key .legend-toggle');
+  await expect(page.locator('.closeup-key button[data-flow="drift"]')).toHaveClass(/on/);
+  await page.click('.closeup-key button[data-flow="current"]');
+  await expect(page.locator('.closeup-key button[data-flow="current"]')).toHaveClass(/on/);
   expect(await page.locator('.closeup-key .ck-body > span').count()).toBeLessThanOrEqual(4);
   // No arrows at the buoy any more (#83).
   expect(await page.locator('path.search-why-gap').count()).toBe(0);
@@ -686,8 +696,9 @@ test('close up, the Search view draws its own sea and key, and zooming out puts 
   // The compass gives knots beside m/s, so the rough-sea threshold can be checked (#81).
   await expect(page.locator('.search-compass .cp-lines')).toHaveText(/m\/s \(\d+ kt\)/, { timeout: 10_000 });
 
-  // One click at a time: a click during Leaflet's zoom animation is dropped.
-  for (let k = 0; k < 24; k += 1) {
+  // One click at a time: a click during Leaflet's zoom animation is dropped. 14 eighths of a
+  // zoom take 15 below 13.5, where the close-up ends.
+  for (let k = 0; k < 14; k += 1) {
     await page.click('.leaflet-control-zoom-out');
     await page.waitForTimeout(350);
   }
