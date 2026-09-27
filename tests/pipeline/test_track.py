@@ -193,6 +193,20 @@ class TestTheEnsembleItIsBuiltFor:
         assert together.positions == pytest.approx(np.array(alone))
 
 
+class TestBeachedParticles:
+    def test_a_particle_with_nan_forcing_stays_where_it_is(self):
+        class LandNorth(ConstantForcing):
+            def sample(self, lats, lons, time):
+                current, wind = super().sample(lats, lons, time)
+                current[np.asarray(lats) > 27.0] = np.nan
+                return current, wind
+
+        pipeline = DriftPipeline(LandNorth(current=(1.0, 0.0)), STEP, sigma=0.5, seed=1)
+        end = list(pipeline.track(START, [26.5, 28.0], [281.4, 281.4], HOUR))[-1]
+        assert end.positions[1] == pytest.approx([28.0, 281.4])
+        assert end.positions[0, 1] > 281.4
+
+
 class TestTrackStateRows:
     def test_one_row_per_particle_with_the_position_and_the_forcing(self, eastward):
         rows = next(eastward.track(START, [26.5, 27.0], [281.4, 281.0], HOUR)).rows()
