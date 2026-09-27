@@ -74,6 +74,24 @@ def render(reduced, path: Path, title: str) -> Path:
     return _save(fig, path, plt)
 
 
+def write_map(ensemble, csv, at, cell_m, margin_km, out) -> dict:
+    """One saved time of an already read ensemble as a PNG and the JSON beside it."""
+    k = select_time(ensemble, at)
+    reduced = reduce_cloud(ensemble.lat[k], ensemble.lon[k], cell_m, margin_km,
+                           ensemble.beached[k])
+    offset = (ensemble.times[k] - ensemble.times[0]) / np.timedelta64(1, "s")
+    stem = f"{Path(csv).stem}_at{format_span(offset) if offset else '0s'}_cell{cell_m:g}m"
+    png = render(reduced, Path(out) / f"{stem}.png",
+                 f"{Path(csv).stem}\n{ensemble.times[k]}, {cell_m:g} m cells")
+
+    record = {k_: v for k_, v in reduced.items() if k_ not in ("grid", "p")}
+    record.update(csv=str(csv), time=str(ensemble.times[k]), figure=str(png))
+    Path(png).with_suffix(".json").write_text(json.dumps(record, indent=2))
+    print(f"lost {record['lost']} particles outside the box, beached mass "
+          f"{record['beached_mass']:.4f}, spread {record['spread_km']:.3f} km")
+    return record
+
+
 def main(argv=None) -> dict:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--csv", required=True, help="a CSV written by sar.pipeline.ensemble")
@@ -83,22 +101,7 @@ def main(argv=None) -> dict:
                         help="widen the box beyond the cloud, default none")
     parser.add_argument("--out", required=True, help="directory for the PNG and the JSON")
     args = parser.parse_args(argv)
-
-    ensemble = read_csv(args.csv)
-    k = select_time(ensemble, args.at)
-    reduced = reduce_cloud(ensemble.lat[k], ensemble.lon[k], args.cell_m, args.margin_km,
-                           ensemble.beached[k])
-    offset = (ensemble.times[k] - ensemble.times[0]) / np.timedelta64(1, "s")
-    stem = f"{Path(args.csv).stem}_at{format_span(offset) if offset else '0s'}_cell{args.cell_m:g}m"
-    png = render(reduced, Path(args.out) / f"{stem}.png",
-                 f"{Path(args.csv).stem}\n{ensemble.times[k]}, {args.cell_m:g} m cells")
-
-    record = {k_: v for k_, v in reduced.items() if k_ not in ("grid", "p")}
-    record.update(csv=str(args.csv), time=str(ensemble.times[k]), figure=str(png))
-    Path(png).with_suffix(".json").write_text(json.dumps(record, indent=2))
-    print(f"lost {record['lost']} particles outside the box, beached mass "
-          f"{record['beached_mass']:.4f}, spread {record['spread_km']:.3f} km")
-    return record
+    return write_map(read_csv(args.csv), args.csv, args.at, args.cell_m, args.margin_km, args.out)
 
 
 if __name__ == "__main__":
