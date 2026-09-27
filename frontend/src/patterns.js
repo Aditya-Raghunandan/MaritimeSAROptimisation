@@ -1,5 +1,5 @@
 /**
- * patterns.js -- the Coast Guard's Expanding Square and Sector Search (issues #48, #63).
+ * patterns.js -- the Coast Guard's search patterns (issues #48, #63, #75).
  *
  * A port of `src/sar/search/patterns.py`, which is the reference; the geometry and why
  * it is flown about a drifting marker are argued there and in docs/ADR003.md, cited to
@@ -14,7 +14,7 @@
  */
 
 import {
-  ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, SWEEP_WIDTH_M, sectorRadiusM,
+  ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, SWEEP_WIDTH_M, searchEffortM2, sectorRadiusM,
 } from './platform.js';
 
 const TO_RAD = Math.PI / 180;
@@ -99,9 +99,111 @@ export function sectorSearch({
   return fly('sector_search', legs(), speedMs, durationS);
 }
 
+/** (heading, length) legs visiting each point in turn, starting from the marker. */
+function* legsThrough(points) {
+  let here = [0, 0];
+  for (const [e, n] of points) {
+    const de = e - here[0];
+    const dn = n - here[1];
+    const length = Math.hypot(de, dn);
+    if (length > 1e-9) yield [((Math.atan2(de, dn) / TO_RAD) % 360 + 360) % 360, length];
+    here = [e, n];
+  }
+}
+
+/** Unit vectors along a bearing and across it to the right, as [east, north]. */
+function axes(bearingDeg) {
+  return [eastNorth(bearingDeg, 1), eastNorth(bearingDeg + 90, 1)];
+}
+
+function point(u, v, along, across) {
+  return [along * u[0] + across * v[0], along * u[1] + across * v[1]];
+}
+
+/**
+ * Parallel Track (PS): legs along the major axis (`firstBearingDeg`), S apart, over a
+ * rectangle centred on the marker, the first starting 1/2 S inside a corner (Figure H-34).
+ * The default is the square one window covers at coverage 1: Z = W x V x T.
+ */
+export function parallelTrack({
+  lengthM = null, widthM = null, spacingM = SWEEP_WIDTH_M, firstBearingDeg = 0,
+  speedMs = SEARCH_SPEED_MS, durationS = ON_SCENE_WINDOW_S,
+} = {}) {
+  check('spacingM', spacingM);
+  check('speedMs', speedMs);
+  check('durationS', durationS);
+  const side = Math.sqrt(searchEffortM2(spacingM, speedMs, durationS));
+  const len = check('lengthM', lengthM ?? side);
+  const wid = check('widthM', widthM ?? side);
+  if (len < spacingM || wid < spacingM) {
+    throw new RangeError('a parallel track area must be at least one track spacing each way');
+  }
+  const [u, v] = axes(firstBearingDeg);
+  const legs = Math.max(1, Math.floor(wid / spacingM + 0.5));
+  const near = -len / 2 + spacingM / 2;
+  const far = len / 2 - spacingM / 2;
+  function* points() {
+    for (let k = 0; k < legs; k += 1) {
+      const across = -wid / 2 + spacingM / 2 + k * spacingM;
+      const [a0, a1] = k % 2 === 0 ? [near, far] : [far, near];
+      yield point(u, v, a0, across);
+      yield point(u, v, a1, across);
+    }
+  }
+  const pattern = fly('parallel_track', legsThrough(points()), speedMs, durationS);
+  // The area it covers, for drawing: the map outlines it around the marker.
+  pattern.area = { lengthM: len, widthM: wid, bearingDeg: firstBearingDeg };
+  return pattern;
+}
+
+/**
+ * Trackline Return (TSR): up one side of a line through the marker and down the other,
+ * 1/2 S off it (Figure H-31); each later pass widens by S (a project extension).
+ */
+export function tracklineReturn({
+  halfLengthM, spacingM = SWEEP_WIDTH_M, firstBearingDeg = 0, speedMs = SEARCH_SPEED_MS,
+  durationS = ON_SCENE_WINDOW_S,
+} = {}) {
+  const h = check('halfLengthM', halfLengthM);
+  check('spacingM', spacingM);
+  check('speedMs', speedMs);
+  check('durationS', durationS);
+  const [u, v] = axes(firstBearingDeg);
+  function* points() {
+    for (let k = 0; ; k += 1) {
+      const side = k % 2 === 0 ? 1 : -1;
+      const off = (k + 0.5) * spacingM;
+      yield point(u, v, -h, side * off);
+      yield point(u, v, h, side * off);
+      yield point(u, v, h, -side * off);
+      yield point(u, v, -h, -side * off);
+    }
+  }
+  return fly('trackline_return', legsThrough(points()), speedMs, durationS);
+}
+
+/**
+ * The patterns the panel offers. `short` is the button; `help` is its one line. The last
+ * two are laid out by the drift model: along its predicted path, and over the area around
+ * its datum aligned with the drift, as §H.7.3.9 directs in a current.
+ */
 export const PATTERNS = {
-  expanding_square: { label: 'Expanding Square', build: expandingSquare },
-  sector_search: { label: 'Sector Search', build: sectorSearch },
+  expanding_square: {
+    label: 'Expanding Square', short: 'Square', build: expandingSquare,
+    help: 'A square spiral out from the marker: even coverage, centre first.',
+  },
+  sector_search: {
+    label: 'Sector Search', short: 'Sector', build: sectorSearch,
+    help: 'Spokes through the marker: densest right beside it.',
+  },
+  parallel_track: {
+    label: 'Parallel Track', short: 'Parallel', build: parallelTrack,
+    help: 'Straight legs over the datum\'s area, laid along the predicted drift.',
+  },
+  trackline_return: {
+    label: 'Trackline', short: 'Trackline', build: tracklineReturn,
+    help: 'Up and down the drift model\'s predicted path, wider each pass.',
+  },
 };
 
 /** Index of the leg in progress at t: the last waypoint at or before it, clamped. */

@@ -30,6 +30,9 @@ function build(kind, args) {
   return PATTERNS[kind].build({
     spacingM: a.spacing_m,
     radiusM: a.radius_m ?? null,
+    lengthM: a.length_m ?? null,
+    widthM: a.width_m ?? null,
+    halfLengthM: a.half_length_m,
     firstBearingDeg: a.first_bearing_deg,
     speedMs: a.speed_ms,
     durationS: a.duration_s,

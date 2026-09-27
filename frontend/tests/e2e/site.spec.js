@@ -585,5 +585,196 @@ test('▶ in the Search view never plays the site hours', async ({ page }) => {
   await page.waitForTimeout(900);
   expect(await page.textContent('#stamp')).toBe(before);
   await expect(page.locator('#status')).toHaveText(/flies the search/);
-  expect(await page.locator('canvas.ocean-canvas').count()).toBe(1);
+  // The close-up's canvas is part of the Search view (#79; the 2-D sea of #73 before it).
+  expect(await page.locator('canvas.closeup-life').count()).toBe(1);
+});
+
+/*
+  THE DRIFT MODEL LAYS THESE OUT (#75). Parallel Track and Trackline are flown along the
+  predicted drift; the pattern still to fly is drawn faint ahead of the helicopter (only
+  ahead since #83), and a Parallel Track's area is outlined.
+*/
+for (const [kind, area] of [['parallel_track', 1], ['trackline_return', 0]]) {
+  test(`a ${kind.replace('_', ' ')} flies to a result, drawn ahead of the helicopter`, async ({ page }) => {
+    await readySearch(page);
+    await page.click(`.sp-pill:has(input[value="${kind}"])`);
+    await page.selectOption('.sp-speed', '600');
+    await page.click('.sp-fly');
+    await page.waitForSelector('path.search-planned', { timeout: 10_000 });   // ahead, while it flies
+    await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
+    expect(await page.locator('path.search-planned').count()).toBeLessThanOrEqual(1);
+    expect(await page.locator('path.search-area').count()).toBe(area);
+    await expect(page.locator('.sp-result')).toHaveText(/datum line|as set/);
+  });
+}
+
+/* A north arrow in every view, beside the scale bar (#75). */
+test('the map always carries a north arrow', async ({ page }) => {
+  await page.goto('');
+  await ready(page);
+  await expect(page.locator('.north-arrow')).toBeVisible();
+  await page.click('button[data-preset="search"]');
+  await expect(page.locator('.north-arrow')).toBeVisible();
+});
+
+/** How far the top-right stack runs into the bottom-right one, px (negative is clear). */
+async function cornerOverlap(page) {
+  return page.evaluate(() => {
+    const top = document.querySelector('.leaflet-top.leaflet-right').getBoundingClientRect();
+    const bottom = document.querySelector('.leaflet-bottom.leaflet-right').getBoundingClientRect();
+    return top.bottom - bottom.top;
+  });
+}
+
+/*
+  THE RIGHT-HAND CORNERS NEVER MEET (#76). On 25 Sep the drifter list lay over the
+  legends and the compass over the Surface current key.
+*/
+for (const size of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
+  test(`the right-hand controls do not overlap at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('');
+    await ready(page);
+    for (const preset of ['drifters', 'both', 'drift']) {
+      await page.click(`button[data-preset="${preset}"]`);
+      await page.waitForTimeout(500);
+      expect(await cornerOverlap(page), preset).toBeLessThanOrEqual(0);
+    }
+    await readySearch(page);
+    await page.selectOption('.sp-speed', '600');
+    await page.click('.sp-fly');
+    await page.waitForSelector('.search-compass');
+    await page.waitForTimeout(300);
+    expect(await cornerOverlap(page), 'search').toBeLessThanOrEqual(0);
+  });
+}
+
+/** Spawn a helicopter to fly by hand: the view follows it close up, at zoom 15. */
+async function spawnCloseUp(page) {
+  await page.click('button[data-preset="search"]');
+  await page.waitForTimeout(500);
+  await page.click('.sp-tab[data-tab="fly"]');
+  await page.click('.sp-spawn');
+  const box = await page.locator('#map').boundingBox();
+  await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.5);
+  await page.waitForSelector('.search-heli', { timeout: 5_000 });
+}
+
+/*
+  CLOSE UP (#79). From zoom 13.5 the Search view draws its own sea, hides the colour field
+  and its key, shows a key of its own and goes to satellite; zooming out puts it all back.
+*/
+test('close up, the Search view draws its own sea and key, and zooming out puts the page back', async ({ page }) => {
+  // CI draws WebGL in software: the sea is slow there until it steps its resolution down,
+  // and a dozen zoom animations take their time. The work is bounded; the limit says so.
+  test.setTimeout(60_000);
+  await page.goto('');
+  await ready(page);
+  await page.click('button[data-preset="search"]');
+  await page.waitForTimeout(500);
+  const legendBefore = await page.isVisible('.current-legend');
+  await spawnCloseUp(page);
+
+  await expect(page.locator('#map')).toHaveClass(/closeup-on/);
+  await expect(page.locator('.closeup-key')).toBeVisible();
+  await expect(page.locator('.closeup-key')).toHaveText(/cloud shadows/i);
+  // Four rows at most (#83): the sea, the weed, night if it is, and that none of it is data.
+  expect(await page.locator('.closeup-key .ck-body > span').count()).toBeLessThanOrEqual(4);
+  // The streak switch (#85): drift by default, and a click changes it. On a short screen
+  // the corner guard folds the key for room, so open it first, as a person would.
+  if (await page.locator('.closeup-key.collapsed').count()) await page.click('.closeup-key .legend-toggle');
+  await expect(page.locator('.closeup-key button[data-flow="drift"]')).toHaveClass(/on/);
+  await page.click('.closeup-key button[data-flow="current"]');
+  await expect(page.locator('.closeup-key button[data-flow="current"]')).toHaveClass(/on/);
+  expect(await page.locator('.closeup-key .ck-body > span').count()).toBeLessThanOrEqual(4);
+  // No arrows at the buoy any more (#83).
+  expect(await page.locator('path.search-why-gap').count()).toBe(0);
+  expect(await page.isVisible('.current-legend')).toBe(false);
+  // The shader where WebGL runs, the 2-D texture where it does not: one of them is there.
+  expect(await page.locator('.closeup-sea, .ocean-canvas').count()).toBeGreaterThan(0);
+  await expect(page.locator('.leaflet-control-attribution')).toHaveText(/Maxar/);
+  // The compass gives knots beside m/s, so the rough-sea threshold can be checked (#81).
+  await expect(page.locator('.search-compass .cp-lines')).toHaveText(/m\/s \(\d+ kt\)/, { timeout: 10_000 });
+
+  // One click at a time: a click during Leaflet's zoom animation is dropped. 14 eighths of a
+  // zoom take 15 below 13.5, where the close-up ends.
+  for (let k = 0; k < 14; k += 1) {
+    await page.click('.leaflet-control-zoom-out');
+    await page.waitForTimeout(350);
+  }
+  await page.waitForTimeout(800);
+  await expect(page.locator('#map')).not.toHaveClass(/closeup-on/);
+  expect(await page.locator('.closeup-key').count()).toBe(0);
+  expect(await page.isVisible('.current-legend')).toBe(legendBefore);
+  await expect(page.locator('.leaflet-control-attribution')).not.toHaveText(/Maxar/);
+});
+
+for (const size of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
+  test(`close up, the right-hand controls still do not overlap at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('');
+    await ready(page);
+    await spawnCloseUp(page);
+    await expect(page.locator('.closeup-key')).toBeVisible();
+    await page.waitForTimeout(300);
+    expect(await cornerOverlap(page)).toBeLessThanOrEqual(0);
+  });
+}
+
+/* WHY IT MISSED (#80): the result says why the buoy left the prediction, with the reasoning folded. */
+test('the result says why the buoy left the prediction', async ({ page }) => {
+  await readySearch(page);
+  await page.selectOption('.sp-speed', '600');
+  await page.click('.sp-fly');
+  await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
+  await expect(page.locator('.sp-result')).toHaveText(/Why it left the prediction/);
+  await page.click('.sp-why summary');
+  await expect(page.locator('.sp-why')).toHaveText(/Buoy.*Model.*Missing/s);
+  await expect(page.locator('.sp-why summary')).toHaveAttribute('title', /15 m down/);
+});
+
+/* Open or closed, the reasoning must not make the panel scroll (#71, #80). */
+for (const size of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
+  test(`the reasoning fits in the panel when opened at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await readySearch(page);
+    await page.selectOption('.sp-speed', '600');
+    await page.click('.sp-fly');
+    await expect(page.locator('.sp-result')).toHaveText(/Why it left the prediction/, { timeout: 25_000 });
+    await page.click('.sp-why summary');
+    await page.waitForTimeout(200);
+    expect(await panelOverflow(page)).toBeLessThanOrEqual(1);
+  });
+}
+
+/*
+  LABELS NEVER OVERLAP (#86). When the buoy, the marker and the datum bunch up, their chips
+  used to land on each other. Scrub through a whole search and check every moment.
+*/
+test('the search labels never sit on each other, at any moment of a search', async ({ page }) => {
+  test.setTimeout(60_000);
+  await readySearch(page);
+  await page.selectOption('.sp-speed', '600');
+  await page.click('.sp-fly');
+  await expect(page.locator('.sp-result')).toHaveText(/Found|Not found/, { timeout: 25_000 });
+  const hits = await page.evaluate(async () => {
+    const s = document.querySelector('input[type=range]');
+    const max = Number(s.max);
+    const found = [];
+    for (let f = 0; f <= 1.0001; f += 0.05) {
+      s.value = String(Math.round(max * f));
+      s.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 50));
+      const r = [...document.querySelectorAll('.search-tag span')].map((e) => e.getBoundingClientRect());
+      for (let i = 0; i < r.length; i += 1) {
+        for (let j = i + 1; j < r.length; j += 1) {
+          const a = r[i];
+          const b = r[j];
+          if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) found.push(f.toFixed(2));
+        }
+      }
+    }
+    return found;
+  });
+  expect(hits).toEqual([]);
 });

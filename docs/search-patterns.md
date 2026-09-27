@@ -1,9 +1,10 @@
 # The doctrinal search (`sar.search`)
 
-Closes #44 and #63, and covers the geometry of #48. Three modules:
+Closes #44, #63 and #75, and covers the geometry of #48. Three modules:
 
 - **The helicopter's numbers** (`platform`).
-- **The two Coast Guard patterns** (`patterns`).
+- **The four Coast Guard patterns** (`patterns`): Expanding Square, Sector Search, Parallel Track
+  and Trackline Return.
 - **Where the search starts and where its marker drifts** (`datum`).
 
 **Why each number and rule is what it is** is [ADR003](ADR003.md), cited to the USCG Addendum
@@ -14,8 +15,10 @@ Closes #44 and #63, and covers the geometry of #48. Three modules:
 The helicopter launches within 30 minutes of the call and flies out at 125 kt. It flies to the
 **datum**, the last known position pushed on by the current and the target's leeway for as long as
 that took. There it drops a **marker**, which drifts with the water current. Then it flies an
-**Expanding Square** or a **Sector Search** at 90 kt *relative to the marker* for the 45-minute
-window, seeing everything within 92.6 m of its track.
+**Expanding Square**, a **Sector Search**, a **Parallel Track** or a **Trackline** at 90 kt
+*relative to the marker* for the 45-minute window, seeing everything within 92.6 m of its track.
+The last two are laid out by the drift model's prediction: along the line from the last known
+position to the datum (ADR003 rows 12–14).
 
 ## Running it
 
@@ -23,6 +26,8 @@ window, seeing everything within 92.6 m of its track.
 python -m sar.search.platform                    # every constant, its source, one window
 python -m sar.search.patterns expanding-square --first-bearing 45
 python -m sar.search.patterns sector --first-bearing 45 --duration-min 18
+python -m sar.search.patterns parallel --first-bearing 30              # the Z = W x V x T square
+python -m sar.search.patterns trackline --first-bearing 30 --half-length-m 6000
 python -m sar.search.datum --lat 26.5 --lon -79.0 --start 2019-06-01T06:00 \
     --elapsed-min 77 --constant-current 1.8 0.0 --constant-wind 5.0 5.0
 ```
@@ -52,14 +57,15 @@ t, glat, glon = ground_track(pattern, marker)           # every waypoint, plus e
 
 ## Guards
 
-- A spacing, radius, speed, duration or `every_s` that is not a positive number raises
-  `ValueError`.
+- A spacing, radius, length, width, half-length, speed, duration or `every_s` that is not a
+  positive number raises `ValueError`.
+- A Parallel Track area narrower or shorter than one track spacing raises.
 - Asking a pattern or a marker track for a time outside it raises.
 - A marker track with fewer than two strictly increasing times, or mismatched arrays, raises.
 - `transit_time_s` refuses a datum beyond the H-60's 300 NM radius of action.
 - `marker_track` without a forcing backend raises; a still marker is `MarkerTrack.fixed`.
 
-## On the site (issues #64, #68, #69, #71, #73)
+## On the site (issues #64, #68, #69, #71, #73, #75, #76, #79, #80, #81, #83, #85, #86)
 
 The **Search** preset flies the same doctrine against a real buoy. The panel, top-left, has two
 tabs: **Coast Guard search** and **Fly it yourself**. It is built to fit a 1366 × 768 screen
@@ -73,7 +79,12 @@ The first tab asks the Coast Guard's questions in order:
    missing. Its position then is the last known position (LKP). Once it is chosen, the list gets
    out of the way; *Choose another buoy* brings it back.
 2. **Where does the helicopter start?** Place the base with a click.
-3. **How does the Coast Guard search?** Expanding Square or Sector Search.
+3. **How does the Coast Guard search?** Square, Sector, Parallel or Trackline (#75). The last
+   two are laid out by the prediction:
+   - the **Trackline** runs along the predicted drift, from the last known position, through the
+     datum, and as far again beyond it;
+   - the **Parallel Track** covers the square one window can search (Z = W × V × T, 4.81 km a
+     side), centred on the datum, with its tracks along the predicted drift.
 4. **Where will it be when they arrive?** Either *with the current only* (a drifter buoy) or
    *current + 2 % of the wind* (a person). **This sets the
    datum**, where the helicopter is sent and which way the first leg runs. It does not give the
@@ -85,13 +96,15 @@ Then **Fly the search**:
 2. It drops a marker there.
 3. It flies the pattern about the marker at 90 kt.
 
-The map labels every mark: *last known position*, *datum: where drift predicts it*, *marker* and
-*real buoy*. It draws three lines that tell the story:
+The map labels every mark with a small chip: *last known position*, *datum · where drift predicts
+it*, *marker* and *real buoy*. The rest of the pattern is drawn faint ahead of the helicopter, and
+a Parallel Track's area is outlined (#75). It draws three lines that tell the story:
 - the **predicted drift**, white dots from the last known position to the datum, labelled with how
   long it covers;
 - **where the buoy really went**, a pink line that grows as the search plays;
-- the **datum error**, dotted, from the datum to where the buoy really was on arrival. The marker is dropped at the datum, not on the buoy, because the Coast Guard does
-not know where the buoy is. That gap is the drift model's error, and it is what this project
+- the **datum error**, dotted, from the datum to where the buoy really was on arrival; the datum's
+  label then says how far that was. The marker is dropped at the datum, not on the buoy, because
+  the Coast Guard does not know where the buoy is. That gap is the drift model's error, and it is what this project
 measures.
 
 The strip the helicopter sees is drawn at its true 185.2 m. The map allows zoom 13 while the view
@@ -99,8 +112,8 @@ is open so the strip can be seen.
 
 **One clock.** While a search is loaded it owns the time bar at the bottom:
 - the slider scrubs it, and Play or Space plays and pauses it;
-- the label gives the time since the call, the phase and the playback rate (e.g. "45 s per
-  second");
+- the label gives the time since the call as T+h:mm:ss (its tooltip says so), the phase and
+  the playback rate (e.g. "45 s per second"); the panel says the same time in words;
 - a band under the slider marks *call to launch*, *flying out* and *on scene*;
 - the site clock follows the search moment, so the header time, the wind and current fields, and
   the buoy all show the same instant.
@@ -121,26 +134,117 @@ Replay*. In the Search view, the time bar's ▶ and Space do exactly the same, a
 the site's hours there. *Change the set-up* clears the loaded search, because a new set-up is a new
 search.
 
-**The compass** (#73, top right, while a search or flight is loaded) shows:
+**The compass** (#73; bottom right above the legends since #76, while a search or flight is
+loaded) shows:
 - north;
 - the helicopter's heading (orange);
 - the current (cyan) and the wind (amber) where the helicopter is, each pointing the way it is
   going.
 
-Its readout gives the speeds, where the wind comes from, and the Beaufort force. Above 15 kt it
-adds the Addendum's caveat that the sweep width would be halved (Table H-10, limitation L19); this
-view does not apply that.
+Its readout gives the speeds, where the wind comes from (in m/s and knots, since #81), and the
+Beaufort force. Above 15 kt it says, in plain words, that whitecaps hide a person, so the Coast
+Guard assumes spotters see half as far to each side, and that this view does not, so finding is
+easier here than it would really be (limitation L19). The Addendum citation (Table H-10: ×0.5 over
+15 kt or 3 ft seas, ×0.25 over 25 kt) is the caveat's tooltip.
 
-**Close up** (#73). Flying yourself follows the helicopter at zoom 15 by default; the Search view
-allows zoom 16, where the strip is about 90 px wide. From zoom 13.5 a **sea texture** is drawn.
-- **Wave marks** lie across the wind and ride the real current, sped up by the playback rate.
-- **Whitecaps** follow the Beaufort force.
+**Close up** (#79, replacing #73's texture). Flying yourself follows the helicopter at zoom 15 by
+default; the Search view allows zoom 16, where the strip is about 90 px wide. From zoom 13 the view
+fades into a close-up of its own, fully on from 13.5 (`closeUp.js` has the rules, `closeUpLayer.js`
+draws them).
 
-It is decoration only and never an input to detection.
+*Why not arrows or streaks close up.* At the 1 km scale bar the screen is about 17 km wide: two
+current cells (0.08° × 0.04°, about 8 × 4.5 km) and less than one wind cell. The forcing is the
+same everywhere on screen, so arrows would all run parallel. What differs close up is how three
+things move, and the view shows those:
 
-**The drogue** (#73). When a buoy is chosen, step 4 says whether it still had its drogue at the
-report time. A drogued buoy follows the water, so *current only* fits it. An undrogued one feels
-the wind more, but less than a person.
+| What | Moves with | Clock |
+|---|---|---|
+| the whole textured surface, and its whitecaps | the real current | search time |
+| waves and whitecaps | set by the wind: roughness peaking at the Pierson–Moskowitz wavelength, whitecap cover from Monahan & O'Muircheartaigh (1980), about 1 % of the sea at 10 m/s | real time |
+| gusts: rougher, darker patches of water | downwind at about the wind's speed (#86) | real time |
+| cloud shadows, by daylight, with no glitter in the shade | downwind at about cloud height's wind, 1.7 × the surface wind + 2 m/s; where the clouds are is decoration (#86) | real time |
+| now and then an animal: flying fish, dolphins, a turtle, a humpback (December to April only) | its own swimming, carried by the water | real time |
+| rarely a ship (#86), a container ship or a tanker, with its wake; navigation lights at night | a lane along the top or bottom edge of the view only | real time |
+
+The Sargassum windrows of #79 were removed in #86: drawn small they read as dotted lines,
+and the drift streaks already show where a floating thing goes. **The ship** never crosses
+the middle of the view: its lane lies within the top or bottom fifth, at least 40 px plus
+0.6 of its length clear of the helicopter, the buoy, the marker, the datum and the last known
+position along its whole length, and it leaves early if one of them comes that near
+(`wildlife.planShip`, tested). With both edges taken, no ship comes.
+
+- **The sea** (#83) is ten octaves of gradient noise, 2 m to 1 km, each drawn only while it is a
+  few pixels to a screen long, so there is texture at every zoom and no shimmer. Octaves are
+  stretched along their crests and travel with the wind at the deep-water speed of a wave that
+  long. Faces towards the light are teal, faces away deep blue, with sun glitter in patches.
+  The first version faded out every wave under a few pixels and went flat and dark at the
+  zooms a search is watched at.
+- **Light** follows the real sun at that moment and place. At night it is the same sea, a
+  little dimmer and cooler, with a faint moon glitter; the close-up key says the sweep width is
+  a daylight figure.
+- **The page around it** changes while close up: the basemap goes to satellite (real near a
+  coast; offshore the drawn sea covers it), the colour rasters hide (one flat value at that
+  scale), and the *Close up* key replaces the Surface current key. Zooming out restores the
+  basemap the viewer had.
+- **Near land** the sea thins out within a current-model cell of the coast, where the
+  satellite photo is the real thing.
+- **The swept strip** stays at true width but is fainter close up, so the sea shows through,
+  and the faint dashed plan shows only the part of the pattern still to fly (#83).
+- **Flow streaks** (#85): dense streaks of one flow at a time, chosen in the key — **drift**
+  (current + 2 % of wind, where a person goes; the Drift view's green, the default),
+  **current** (the Current view's cyan), **wind** (white), or off. One current cell spans the
+  close-up, so the model's flow is the same everywhere on screen and the streaks run parallel:
+  that is the truth at this scale. Their speed shows the flow's strength, not the playback
+  clock, as the site's other particles do; they are pinned to the water, so they stay right
+  while the map follows the helicopter.
+- **The key** is at most four short rows: the streak switch, what moves the sea, whether it is
+  night, and that none of it is data.
+- **Labels never overlap** (#86, `labels.js`). Each label is placed, most important first
+  (real buoy, datum, marker, last known position, predicted drift), at the first of 32 spots
+  round its point that is clear of every label already placed, every marker and every panel
+  over the map; it keeps last frame's spot while that is clear, so labels do not flicker. If
+  the predicted drift's label finds no clear spot it steps aside for the frame: its dotted
+  path is still drawn. Chips are sized as actually drawn. A browser test scrubs a whole
+  search checking every moment.
+- **Speed.** The sea is one WebGL pass at 60 % of the screen's pixels; streaks, animals and
+  ships are a
+  2-D canvas. Measured 25 Sep at 1440×900 on the development laptop (#83's sea): one whole
+  close-up frame, forced to finish on the GPU (`readPixels`), takes a median 0.6–0.9 ms and at
+  worst 1.7 ms at zooms 13.75–16, against a 16 ms frame. **When the sea first appears it
+  times three frames forced to finish, and steps its resolution down by a third while one
+  costs over 8 ms** (`nextSeaRes`, floor 25 %): a machine drawing WebGL without a graphics
+  card — the CI runners — made the page lag at full resolution. It measures cost, not frame
+  rate, because a first version keyed on frame rate sent a fast laptop to the floor: browsers
+  throttle frames in background panes, and Safari's low-power mode caps pages at 30 fps.
+  Where WebGL is missing, #73's 2-D texture stands in.
+
+Waves, clouds, gusts, animals and ships are drawn for the eye and never feed detection;
+animals and ships are not to scale, like the helicopter icon. In the development build
+`window.__closeUp.summon('dolphins')` calls up an animal and `window.__closeUp.summonShip()` a ship.
+
+**Why it left the prediction** (#80, `whyMissed.js`). After a search the result says why the buoy
+did not go where the model said. The buoy's own motion (from its positions) is compared with the
+model's (current + the target's share of wind) at the same places and times, along the buoy's
+real path. The difference is what the model is missing, and its direction against the wind is the
+clue:
+
+| The gap | Verdict |
+|---|---|
+| under 0.03 m/s | the model had it about right |
+| along the wind, downwind | the wind pushed harder than the model allows; the windage that would have fitted is given |
+| along the wind, upwind, drogued buoy, wind in the model | a drogued buoy barely feels the wind: *current only* fits it better |
+| across the wind, or the wind under 2 m/s | the water moved differently from the ocean model: an eddy smaller than a cell, or out of place |
+
+The panel shows three lines (buoy, model, missing) and the cause; the summary's tooltip says what
+it cannot see: the waves' own push on anything floating, tides, and the difference between the
+surface current and the current 15 m down. It is a clue, not a proof. (#80 also drew three
+arrows at the buoy close up; #83 removed them. They were not read as intended, and the buoy's
+pink path against the white predicted drift already shows the same thing on the map.)
+
+**The drogue** (#73, reworded in #76). When a buoy is chosen, step 4 says whether it still had
+its drogue at the report time, and what a drogue is: the underwater sail, 15 m down, that keeps a
+buoy with the water. A drogued buoy follows the water, so *current only* fits it. An undrogued one
+feels the wind too, but less than a person.
 
 | Browser module | Mirrors | Held to Python by |
 |---|---|---|

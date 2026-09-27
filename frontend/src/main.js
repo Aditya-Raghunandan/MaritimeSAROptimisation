@@ -9,6 +9,7 @@
 
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import '@fontsource-variable/inter';
 import { Clock } from './clock.js';
 import { buildLayer } from './layers.js';
 import { ZarrSource, pickTier, residentSpanOf } from './sources.js';
@@ -27,6 +28,9 @@ import { DrifterLayer, TrackCache } from './drifterLayer.js';
 import { DrifterPanel } from './drifterPanel.js';
 import { day, inWindow, lifetimeBar, prepareIndex, spanCovering } from './drifters.js';
 import { createSearchView } from './searchView.js';
+import { esriTiles } from './tiles.js';
+import { NorthArrow } from './northArrow.js';
+import { keepCornersApart } from './cornerGuard.js';
 
 const DATA = import.meta.env.VITE_DATA_BASE ?? 'data';
 // The drifter track export (#50). Its own variable so it can be served from
@@ -127,15 +131,13 @@ const BASEMAPS = {
     the subject: the Gulf Stream follows the shelf edge and separates at Cape
     Hatteras because the shelf turns away there.
   */
-  'Ocean (bathymetry)': L.tileLayer(
-    'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
-    // Up-scaled past its last native zoom rather than blank: the Search view goes to 16 (#73).
-    { maxNativeZoom: 13, maxZoom: 18, attribution: 'Esri, GEBCO, NOAA, National Geographic, and other contributors' },
-  ),
-  Satellite: L.tileLayer(
-    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    { maxNativeZoom: 17, maxZoom: 18, attribution: 'Esri, Maxar, Earthstar Geographics' },
-  ),
+  // Up-scaled past their last native zoom rather than blank: the Search view goes to 16
+  // (#73). Over open water Esri holds far less than that -- imagery stops at 13, the
+  // ocean base at 10 in places -- and tiles.js fills those gaps from the zoom above (#76).
+  'Ocean (bathymetry)': esriTiles('Ocean/World_Ocean_Base',
+    { maxNativeZoom: 13, maxZoom: 18, attribution: 'Esri, GEBCO, NOAA, National Geographic, and other contributors' }),
+  Satellite: esriTiles('World_Imagery',
+    { maxNativeZoom: 17, maxZoom: 18, attribution: 'Esri, Maxar, Earthstar Geographics' }),
 };
 
 /*
@@ -366,8 +368,11 @@ function setProvenance(tierName, tier) {
   const el = document.getElementById('provenance');
   if (!el) return;
   if (!tier) { el.textContent = ''; return; }
-  el.textContent = `${tierName} · ${tier.frames.toLocaleString()} frames · `
-    + `${describeStep(tier.step_seconds)} per step · ${tier.compression} · `
+  // The codec is for whoever maintains the store, not for a reader: it moves to the tooltip.
+  const size = tier.bytes >= 1e9 ? `${(tier.bytes / 1e9).toFixed(2)} GB`
+    : tier.bytes >= 1e6 ? `${(tier.bytes / 1e6).toFixed(0)} MB` : `${Math.max(1, Math.round(tier.bytes / 1e3))} kB`;
+  el.textContent = `${tierName} data · ${tier.frames.toLocaleString()} frames · ${size}`;
+  el.title = `${describeStep(tier.step_seconds)} per step · compressed ${tier.compression} · `
     + `${(tier.bytes / 1e6).toFixed(0)} MB published`;
 }
 
@@ -469,6 +474,9 @@ async function start() {
   const mask = domainMask(dataBounds).addTo(map);
   domainLabel(dataBounds, 'Study domain · 17–36 N, 82–63 W').addTo(map);
   addScaleBar(map);
+  new NorthArrow().addTo(map);
+  // Just the library's name: the default prefix carries a flag, which is not ours to fly.
+  map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
 
   const clock = Clock.fromManifest(manifest);
 
@@ -682,7 +690,7 @@ async function start() {
     // Its own key, shown only while a current layer is on. Two legends stacked
     // permanently would take a quarter of the map to explain a layer that is
     // off by default.
-    bindLegend(currentLegend({ maxSpeed: cMax }),
+    bindLegend(currentLegend({ maxSpeed: cMax, className: 'current-legend' }),
       () => [currentRaster, currentQuiver, currentParticles]);
 
     overlays[entry(`${current.layer.label} — colour`, 'how fast, painted; land left blank')] = currentRaster;
@@ -839,6 +847,46 @@ async function start() {
     (`searchBar`, below): one clock for the search, the fields and the buoy (#69).
   */
   let searchView = null;
+  /*
+    CLOSE UP (#79). From zoom 13.5 the Search view draws a sea of its own, and the page
+    around it changes to suit: the basemap goes to satellite, because near a coast that
+    photo is the real thing and offshore the drawn sea covers it; the colour rasters are
+    hidden, being one flat value at that scale; and the Surface current key gives way to
+    the close-up key. Leaving close up puts back the basemap the viewer had -- unless they
+    chose another by hand while close up, which is theirs to keep.
+  */
+  const closeUpChrome = (() => {
+    let on = false;
+    let before = null;
+    let switching = false;
+    let active = BASEMAPS[DEFAULT_BASEMAP];
+    map.on('baselayerchange', (e) => {
+      if (switching) return;
+      active = e.layer;
+      if (on) before = null;
+    });
+    const swap = (to) => {
+      if (!to || to === active) return;
+      switching = true;
+      map.removeLayer(active);
+      map.addLayer(to);
+      switching = false;
+      active = to;
+    };
+    return {
+      enter() {
+        on = true;
+        map.getContainer().classList.add('closeup-on');
+        if (active !== BASEMAPS.Satellite) { before = active; swap(BASEMAPS.Satellite); }
+      },
+      exit() {
+        on = false;
+        map.getContainer().classList.remove('closeup-on');
+        if (before) swap(before);
+        before = null;
+      },
+    };
+  })();
   if (drifterLayer && resultantSource) {
     // Epoch ms to the nearest frame of the wind tier in use, which a span change swaps.
     const frameOf = (ms) => {
@@ -865,6 +913,16 @@ async function start() {
       },
       setMoment: (ms) => clock.setTime(new Date(ms)),
       setStatus,
+      // Sea, land, or not known yet, at the site's moment: the close-up sea thins out
+      // where the current model has land within a cell.
+      waterAt: (lat, lon) => {
+        const f = frameOf(clock.t.getTime());
+        if (f === null || !resultantSource.isResident(f)) return null;
+        const s = resultantSource.sampleAt(f, lat, lon);
+        if (s.onLand) return false;
+        return s.current ? true : null;
+      },
+      closeUp: closeUpChrome,
     });
     overlays[entry('Search — Coast Guard helicopter', 'fly a pattern to find a buoy')] = searchView.layer;
   }
@@ -1022,6 +1080,8 @@ async function start() {
     temporal dead zone bug did to this file once already.
   */
   presetBar.parentNode.insertBefore(presetBar, presetBar.parentNode.firstChild);
+  // With every right-hand control in place: the two corners must not meet (#76).
+  keepCornersApart(map);
 
   /*
     Touching a checkbox directly means no preset describes what is on screen
@@ -1378,6 +1438,7 @@ async function start() {
       slider.max = String(Math.max(1, Math.ceil(endS)));
       slider.step = '1';
       slider.classList.add('searching');
+      if (windowLabel) windowLabel.title = 'Time since the call came in, T+ hours:minutes:seconds';
       for (const el of [spanSelect, winBack, winFwd]) if (el) el.disabled = true;
       if (lifetimeEl) lifetimeEl.hidden = true;
       if (phaseBand) {
@@ -1401,6 +1462,7 @@ async function start() {
       if (!timeOwner) return;
       timeOwner = null;
       slider.classList.remove('searching');
+      if (windowLabel) windowLabel.title = 'The span the slider covers';
       if (phaseBand) phaseBand.hidden = true;
       if (spanSelect) spanSelect.disabled = false;
       showPlayIcon(false);

@@ -18,6 +18,7 @@ from sar.search.platform import (
     constants,
     expanding_square_spacing_m,
     great_circle_m,
+    search_effort_m2,
     sector_radius_m,
     track_length_m,
     transit_time_s,
@@ -116,3 +117,12 @@ class TestCLI:
         assert out["constants"]["sweep_width_m"] == pytest.approx(185.2)
         assert "H-44" in out["sources"]["sweep_width_m"]
         assert out["one_window"]["track_length_nm"] == pytest.approx(67.5)
+
+
+class TestSearchEffort:
+    def test_one_window_is_about_23_square_kilometres(self):
+        assert search_effort_m2() == pytest.approx(185.2 * 46.3 * 2700)
+
+    def test_non_positive_inputs_raise(self):
+        with pytest.raises(ValueError):
+            search_effort_m2(window_s=0.0)

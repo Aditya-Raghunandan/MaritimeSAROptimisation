@@ -13,7 +13,7 @@ import golden from '../src/fixtures/search_golden.json';
 import { SWEEP_WIDTH_M } from '../src/geo.js';
 import {
   KNOT_MS, LAUNCH_DELAY_S, MAX_ENDURANCE_S, NM_M, ON_SCENE_WINDOW_S, RADIUS_OF_ACTION_M,
-  SEARCH_SPEED_MS, STEP_S, TRANSIT_SPEED_MS, sectorRadiusM, transitTimeS,
+  SEARCH_SPEED_MS, STEP_S, TRANSIT_SPEED_MS, searchEffortM2, sectorRadiusM, transitTimeS,
 } from '../src/platform.js';
 
 const P = golden.platform;
@@ -42,6 +42,10 @@ describe('platform constants', () => {
     for (const [name, value] of Object.entries(js)) {
       expect(value, name).toBeCloseTo(P[name], 9);
     }
+  });
+
+  it('agrees with Python on the search effort, Z = W x V x T', () => {
+    expect(searchEffortM2()).toBeCloseTo(P.search_effort_m2, 6);
   });
 
   it('turns a 45-minute window into 45 steps', () => {
