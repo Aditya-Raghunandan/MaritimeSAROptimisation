@@ -1098,6 +1098,13 @@ Three reasons, and the third is specific to a research deliverable:
 What static gives up is server-side computation nobody anticipated. Zarr recovers most of it:
 the browser becomes the query engine.
 
+**Basemap tiles have holes over open water (#76).** Esri's imagery and ocean services answer a
+zoom they hold nothing for with a grey "Map data not yet available" tile, and over the Gulf Stream
+that is most of the close-up range. Measured 2026-09-25: World_Imagery stops at zoom 13 and
+World_Ocean_Base at 10 in the Sargasso. Asked with `blankTile=false` they return 404 instead, and
+`frontend/src/tiles.js` draws a missing tile from the nearest zoom above it that exists (scaled and
+clipped, `tileFallback.js`). Near a coast, where Esri does hold the zoom, the real tile loads.
+
 ### 10.3 Upload
 
 ```mermaid

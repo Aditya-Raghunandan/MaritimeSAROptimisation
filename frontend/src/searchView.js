@@ -27,23 +27,31 @@
  * wind and current fields, and the buoy all show the same instant. Reset, or leaving the
  * view, hands the bar back.
  *
- * Everything that decides anything is in searchRun.js and tested there; this file only
- * sequences it, loads data and animates.
+ * CLOSE UP (#79, #80). From zoom 13.5 the view is the close-up (closeUpLayer.js): a sea
+ * drawn for the moment and the place, Sargassum drifting as the model drifts a person, now
+ * and then an animal; the page swaps to satellite and a key of its own (main.js). At the
+ * end the result says in words why the buoy left the prediction (whyMissed.js).
+ *
+ * Everything that decides anything is in searchRun.js, closeUp.js and whyMissed.js and is
+ * tested there; this file only sequences it, loads data and animates.
  */
 
+import { beaufort } from './beaufort.js';
+import { CloseUpKey } from './closeUpKey.js';
+import { CloseUpLayer } from './closeUpLayer.js';
 import { Compass } from './compass.js';
 import { positionAt, undroguedAt } from './drifters.js';
 import { SWEEP_WIDTH_M, formatDistance } from './geo.js';
 import { PATTERNS } from './patterns.js';
 import { NM_M, ON_SCENE_WINDOW_S, distanceM, transitTimeS } from './platform.js';
-import { OceanLayer } from './oceanLayer.js';
 import { resultantSampler } from './pointDrift.js';
 import { SearchLayer } from './searchLayer.js';
 import { SearchPanel, speedLabel } from './searchPanel.js';
 import {
-  ManualFlight, TARGETS, datumErrorM, detect, formatElapsed, freePlan, headingFromKeys,
-  helicopterAt, keyDirection, planSearch, searchPath,
+  ManualFlight, TARGETS, datumErrorM, detect, formatDuration, formatElapsed, freePlan, headingFromKeys,
+  helicopterAt, keyDirection, markerPositionAt, planSearch, searchPath,
 } from './searchRun.js';
+import { explainMiss } from './whyMissed.js';
 
 /** Forcing to load past the report: launch, a 300 NM transit, the window, and slack. */
 const LOOKAHEAD_MS = 4 * 3600 * 1000;
@@ -93,12 +101,32 @@ function utc(ms) {
  * @param {object} deps.timeBar                      take / update / release the bottom bar
  * @param {(ms) => void} deps.setMoment              move the site clock to a moment
  * @param {(text) => void} deps.setStatus
+ * @param {(lat, lon) => boolean|null} [deps.waterAt] sea (true), land (false) or unknown
+ * @param {{enter, exit}} [deps.closeUp]             swap the basemap and legends close up
  */
 export function createSearchView(deps) {
   const { map, setStatus, timeBar } = deps;
   const layer = new SearchLayer();
   const compass = new Compass();
-  const ocean = new OceanLayer();
+  const key = new CloseUpKey({
+    onFlow: (kind) => {
+      closeUp.setFlow(kind);
+      updateKey();
+    },
+  });
+  const closeUp = new CloseUpLayer({
+    waterAt: deps.waterAt ?? null,
+    onEnter: () => {
+      if (deps.closeUp) deps.closeUp.enter();
+      key.addTo(map);
+      updateKey();
+    },
+    onExit: () => {
+      if (deps.closeUp) deps.closeUp.exit();
+      if (key._map) map.removeControl(key);
+    },
+    onSighting: () => updateKey(),
+  });
   // The forcing where the helicopter is, for the compass and the sea. Reads the site's
   // store at every call, so it follows a tier switch, and answers null until loaded.
   const sampleHere = resultantSampler(deps.resultantSource, deps.frameOf);
@@ -112,6 +140,8 @@ export function createSearchView(deps) {
   let flight = null;
   let datumErr = null;
   let targetAt = null;
+  let why = null;              // why the buoy left the prediction, once a search is flown
+  let here = { wind: null };
   const held = new Set();
   const anim = { s: 0, raf: null, last: null, drawn: 0, moment: 0, state: 'idle', zoomed: false, rate: 0 };
 
@@ -125,16 +155,57 @@ export function createSearchView(deps) {
     const on = map.hasLayer(layer);
     if (on && !panel._map) {
       panel.addTo(map);
-      map.addLayer(ocean);
+      map.addLayer(closeUp);
+      idleConditions();
       map.setMaxZoom(Math.max(siteMaxZoom, SEARCH_MAX_ZOOM));
     } else if (!on && panel._map) {
       reset();
       map.removeControl(panel);
-      if (map.hasLayer(ocean)) map.removeLayer(ocean);
+      if (map.hasLayer(closeUp)) map.removeLayer(closeUp);
       map.setMaxZoom(siteMaxZoom);
       setPlacing(null);
     }
   });
+
+  /* ---------------------------------------------------------------- close up */
+
+  /** With no search loaded, the sea still needs the forcing where the view is looking. */
+  function idleConditions() {
+    if (plan || !map.hasLayer(layer)) return;
+    const c = map.getCenter();
+    const ms = deps.getTime();
+    const at = sampleHere(ms, c.lat, c.lng);
+    closeUp.setConditions({
+      current: at && at.current ? at.current : null, wind: at && at.wind ? at.wind : null, rate: 0, timeMs: ms,
+    });
+    here = { wind: at && at.wind ? at.wind : null };
+    closeUp.setAvoid(target ? [[target.lkp.lat, target.lkp.lon]] : []);
+    updateKey();
+  }
+  map.on('moveend', idleConditions);
+
+  function updateKey() {
+    if (!key._map) return;
+    const d = closeUp.describe();
+    key.update({
+      flow: closeUp.flow(),
+      force: here.wind ? beaufort(Math.hypot(here.wind[0], here.wind[1])).force : null,
+      whitecaps: d.whitecaps,
+      sunElevationDeg: d.sunElevationDeg === null ? null : Math.round(d.sunElevationDeg),
+      sighting: d.sighting,
+    });
+  }
+
+  /** The reasoning behind "why it left the prediction", folded under the result (#80). */
+  function whyHtml() {
+    if (!why) return '';
+    // Short, so the panel still fits when it is open (#71): the full sentence is in
+    // whyMissed.js and the docs, and what it cannot see is the summary's tooltip.
+    const rows = why.table.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    const tip = why.limits;
+    return `<details class="sp-why"><summary title="${tip}">How we can tell</summary>`
+      + `<dl class="sp-why-facts">${rows}</dl><p>${why.cause}</p></details>`;
+  }
 
   /* ---------------------------------------------------------------- the keyboard */
 
@@ -186,7 +257,7 @@ export function createSearchView(deps) {
       const t = transitTimeS(d);
       text += ` · ${(d / NM_M).toFixed(0)} NM out · `
         + (t === null ? 'beyond the H-60\'s 300 NM range'
-          : `on scene ${formatElapsed(t).slice(2)} after the call`);
+          : `on scene ${formatDuration(t)} after the call`);
     }
     panel.setBase(text, true);
   }
@@ -218,9 +289,12 @@ export function createSearchView(deps) {
     layer.setTarget(target.lkp);
     // Whether it still has its drogue then: that decides how much the wind moves it.
     const und = undroguedAt(track, reportMs);
+    // Said in plain words (#76): "Drogue lost by then" assumed the reader knew what one was.
     panel.setDrogueHint(und === null ? null : (und
-      ? 'Drogue lost by then: the wind moves it more than a drogued buoy, less than a person.'
-      : 'Still drogued then (a sea anchor 15 m down): it follows the water, so "current only" fits.'));
+      ? 'It had lost its drogue by then, the underwater sail that keeps a buoy with the water, '
+        + 'so the wind pushes it too, though less than a person.'
+      : 'It still had its drogue then, an underwater sail 15 m down that keeps it with the '
+        + 'water, so "current only" fits.'), und ? 'undrogued' : 'drogued');
     // The list has done its job. Hiding the drifter layer also removes its second copy of
     // the buoy, which moved on the site clock while the search drew its own.
     deps.showDrifters(false);
@@ -319,16 +393,24 @@ export function createSearchView(deps) {
     targetAt = (ms) => positionAt(target.track, ms);
     result = detect(plan, targetAt);
     datumErr = datumErrorM(plan, targetAt);
+    why = explainMiss({
+      targetAt, sample, fromMs: plan.reportMs, toMs: plan.dropMs, leeway: plan.targetLeeway,
+      undrogued: undroguedAt(target.track, target.reportMs),
+    });
     layer.setPlan(plan, targetAt, result);
     // The set-up has done its job: fold it to one line so the result fits (#71).
     const drift = choices.targetKind === 'person' ? 'current + 2 % of wind' : 'current only';
-    panel.collapseSetup(`Buoy ${target.buoy.id} · base ${(plan.distanceM / NM_M).toFixed(0)} NM out · `
-      + `${PATTERNS[plan.patternKind].label} · datum drifted with ${drift}`);
+    panel.collapseSetup([
+      ['Buoy', target.buoy.id],
+      ['Base', `${(plan.distanceM / NM_M).toFixed(0)} NM out`],
+      ['Pattern', PATTERNS[plan.patternKind].label],
+      ['Datum', `drifted with ${drift}`],
+    ]);
     map.fitBounds([[base.lat, base.lon], [plan.datum.lat, plan.datum.lon]], { padding: [60, 60] });
     ownTime([
       { toS: plan.launchS, label: 'call to launch', cls: 'ph-ready' },
       { toS: plan.arriveS, label: 'flying out', cls: 'ph-transit' },
-      { toS: plan.endS, label: `on scene: ${PATTERNS[plan.patternKind].label}`, cls: 'ph-search' },
+      { toS: plan.endS, label: `on scene · ${PATTERNS[plan.patternKind].short}`, cls: 'ph-search' },
     ]);
     play();
   }
@@ -346,8 +428,10 @@ export function createSearchView(deps) {
     // Close up and following, or just in view, as the tick-box says.
     if (panel.follow()) map.setView([at.lat, at.lon], FOLLOW_ZOOM, { animate: false });
     else if (map.getZoom() < 12) map.setView([at.lat, at.lon], 12);
-    // For the compass and the sea: loaded in the background, shown once it lands.
-    loadForcing(plan.reportMs).catch(() => {});
+    // For the compass and the sea: loaded in the background, and drawn the moment it lands,
+    // not at take-off -- until then the sea had no wind and the compass no current.
+    const spawned = plan;
+    loadForcing(plan.reportMs).then(() => { if (plan === spawned) render(anim.s, true); }).catch(() => {});
     // A person needs time to steer: past 45 s per second the helicopter crosses the whole
     // area a pattern would cover in a couple of seconds.
     if (panel.speedX() > 45) panel.setSpeed(15);
@@ -376,6 +460,7 @@ export function createSearchView(deps) {
     return mode === 'free' && !flight.done;
   }
 
+  /** The time bar's read-out: T+ clock time, which the bar's tooltip explains. */
   function label(s) {
     const h = helicopterAt(plan, s);
     let what;
@@ -392,8 +477,14 @@ export function createSearchView(deps) {
     return `${formatElapsed(s)} · ${what}${pace}`;
   }
 
+  /** The panel's read-out: the same, with the time said in words. */
+  function phaseLine(s) {
+    return label(s).replace(/^T\+\S+/, `${formatDuration(s)} since the call`);
+  }
+
   function render(s, force = false) {
     const now = performance.now();
+    const ms = plan.reportMs + s * 1000;
     layer.setTime(s);
     // A helicopter flown by hand crosses a screen in a few minutes: follow it close up,
     // or at least keep it clear of the panel on the left and the legends on the right.
@@ -402,7 +493,7 @@ export function createSearchView(deps) {
       if (panel.follow()) map.setView([p.lat, p.lon], map.getZoom(), { animate: false });
       else {
         map.panInside([p.lat, p.lon], {
-          paddingTopLeft: [400, 160], paddingBottomRight: [360, 220], animate: false,
+          paddingTopLeft: [400, 160], paddingBottomRight: [340, 300], animate: false,
         });
       }
     }
@@ -410,17 +501,29 @@ export function createSearchView(deps) {
     const h = mode === 'free'
       ? (s >= flight.s ? flight.position() : flight.positionAt(s))
       : helicopterAt(plan, Math.min(s, plan.endS));
-    const here = sampleHere(plan.reportMs + s * 1000, h.lat, h.lon);
-    const current = here && here.current ? here.current : null;
-    const wind = here && here.wind ? here.wind : null;
+    const at = sampleHere(ms, h.lat, h.lon);
+    const current = at && at.current ? at.current : null;
+    const wind = at && at.wind ? at.wind : null;
     compass.update({ heading: h.heading, current, wind });
-    ocean.setConditions({ current, wind, rate: anim.state === 'playing' ? anim.rate : 0 });
+    // What a passing ship keeps clear of (#86): the helicopter, the buoy, the marker, the datum.
+    const avoid = [[h.lat, h.lon]];
+    const buoyNow = targetAt ? targetAt(ms) : null;
+    if (buoyNow) avoid.push(buoyNow);
+    if (!plan.free) {
+      avoid.push([plan.datum.lat, plan.datum.lon], [plan.lkp.lat, plan.lkp.lon]);
+      const mk = markerPositionAt(plan, s);
+      if (mk) avoid.push([mk.lat, mk.lon]);
+    }
+    closeUp.setAvoid(avoid);
+    closeUp.setConditions({ current, wind, rate: anim.state === 'playing' ? anim.rate : 0, timeMs: ms });
+    here = { wind };
+    updateKey();
     timeBar.update(s, label(s), anim.state === 'playing');
     if (force || now - anim.moment >= MOMENT_MS) {
       anim.moment = now;
       deps.setMoment(plan.reportMs + s * 1000);
     }
-    panel.setPhase(label(s));
+    panel.setPhase(phaseLine(s));
   }
 
   function play() {
@@ -500,9 +603,9 @@ export function createSearchView(deps) {
     panel.setFlying('done');
     if (mode === 'free') releaseKeys();
     const lines = mode === 'free' ? freeLines() : patternLines();
-    panel.setResult(lines.map((l) => `<p>${l}</p>`).join(''));
+    panel.setResult(lines.map((l) => `<p>${l}</p>`).join('') + (mode === 'free' ? '' : whyHtml()));
     timeBar.update(anim.s, label(anim.s), false);
-    panel.setPhase(label(anim.s));
+    panel.setPhase(phaseLine(anim.s));
     const r = mode === 'free' ? flight.result() : result;
     setStatus(r && r.found ? 'Found. Drag the time bar to look back, or Reset.' : 'Done. Drag the time bar to look back, or Reset.');
   }
@@ -511,17 +614,18 @@ export function createSearchView(deps) {
     const lines = [];
     const name = PATTERNS[plan.patternKind].label;
     if (result.found) {
-      lines.push(`<b class="sp-ok">Found</b> at ${formatElapsed(result.foundS)}, `
-        + `${formatElapsed(result.foundS - plan.arriveS).slice(2)} into the ${name}.`);
+      lines.push(`<b class="sp-ok">Found</b> ${formatDuration(result.foundS)} after the call, `
+        + `${formatDuration(result.foundS - plan.arriveS)} into the ${name}.`);
     } else {
       const pass = Number.isFinite(result.closestM) ? formatDistance(result.closestM) : 'none';
       lines.push(`<b class="sp-miss">Not found</b> in the 45-minute window. Closest pass ${pass}`
-        + (result.closestS !== null ? ` at ${formatElapsed(result.closestS)}.` : '.'));
+        + (result.closestS !== null ? `, ${formatDuration(result.closestS)} after the call.` : '.'));
     }
     if (datumErr !== null) {
-      lines.push(`The <b>datum error</b> was ${formatDistance(datumErr)}: that far from the drift model's `
-        + 'prediction to where the buoy really was when the helicopter arrived.');
+      lines.push(`<span class="sp-datum-line">The <b>datum error</b> was ${formatDistance(datumErr)}: that far from the drift model's `
+        + 'prediction to where the buoy really was when the helicopter arrived.</span>');
     }
+    if (why) lines.push(`<b>Why it left the prediction:</b> ${why.headline}`);
     lines.push(`First leg ${plan.firstBearingDeg.toFixed(0)}°, ${plan.bearingSource}.`);
     for (const note of plan.notes) lines.push(`Note: ${note}.`);
     return lines;
@@ -533,13 +637,13 @@ export function createSearchView(deps) {
     const flown = flight.s - plan.arriveS;
     if (target) {
       if (r.found) {
-        lines.push(`<b class="sp-ok">You found it</b>, ${formatElapsed(r.foundS).slice(2)} into your flight.`);
+        lines.push(`<b class="sp-ok">You found it</b>, ${formatDuration(r.foundS)} into your flight.`);
       } else {
         const pass = Number.isFinite(r.closestM) ? formatDistance(r.closestM) : 'none';
         lines.push(`<b class="sp-miss">Not found.</b> Your closest pass was ${pass}.`);
       }
     }
-    lines.push(`You flew ${formatDistance(flight.lengthM)} in ${formatElapsed(flown).slice(2)}, sweeping about `
+    lines.push(`You flew ${formatDistance(flight.lengthM)} in ${formatDuration(flown)}, sweeping about `
       + `${((flight.lengthM * SWEEP_WIDTH_M) / 1e6).toFixed(1)} km² if no strip overlapped.`);
     if (flown >= ON_SCENE_WINDOW_S - 1) lines.push('That was the whole 45-minute window.');
     return lines;
@@ -563,6 +667,7 @@ export function createSearchView(deps) {
     result = null;
     flight = null;
     datumErr = null;
+    why = null;
     targetAt = null;
     anim.s = 0;
     anim.zoomed = false;
@@ -574,8 +679,9 @@ export function createSearchView(deps) {
     panel.setResult('');
     panel.expandSetup();
     if (compass._map) map.removeControl(compass);
-    ocean.setConditions({ rate: 0 });
+    closeUp.setConditions({ rate: 0 });
     if (owned) timeBar.release();
+    idleConditions();
   }
 
   function onReset() {
@@ -597,6 +703,10 @@ export function createSearchView(deps) {
     }
     onPrimary(panel.choices());
   }
+
+  // For looking at the close-up while developing it: window.__closeUp.summon('dolphins').
+  // Stripped from the production build.
+  if (import.meta.env.DEV) window.__closeUp = closeUp;
 
   return { layer, panel, consumeClick, claimsPlay, playFromBar };
 }
