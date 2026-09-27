@@ -94,6 +94,7 @@ def spawn_positions(lat, lon, n, datum_sigma_km, rng) -> np.ndarray:
     """R1e's start cloud: n positions, Gaussian with datum_sigma_km per axis about the datum."""
     check_cloud(n, datum_sigma_km)
     offsets_m = datum_sigma_km * 1000.0 * rng.standard_normal((int(n), 2))
+    # https://www.investopedia.com/terms/c/central_limit_theorem.asp#toc-what-is-the-central-limit-theorem-clt
     # One second at offsets_m m/s is offsets_m metres, through the engine's own conversion.
     return calculate_position(np.tile([lat, lon], (int(n), 1)), offsets_m, 1.0)
 
