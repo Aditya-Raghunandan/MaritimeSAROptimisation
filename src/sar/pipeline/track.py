@@ -99,6 +99,9 @@ class DriftPipeline:
         current, wind = self.forcing.sample(positions[:, 0], positions[:, 1], time)
         drift = calculate_drift(wind, current, self.leeway)
         moved = calculate_position(positions, drift, self.timestep, self.sigma, self.rng)
+        # D016: where the forcing is NaN the particle is beached, frozen in place with its mass.
+        beached = ~np.isfinite(drift).all(axis=1)
+        moved[beached] = positions[beached]
         return moved, current, wind, drift
 
     def track(self, start, lat, lon, duration: float) -> Iterator[TrackState]:

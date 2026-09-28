@@ -58,6 +58,7 @@ def random_displacement(shape, timestep: float, sigma: float = DEFAULT_SIGMA,
 def calculate_position(position, drift, timestep: float = INTEGRATION_STEP_SECONDS,
                        sigma: float = DEFAULT_SIGMA, rng=None, out=None):
     """The position one step later, [lat, lon] in degrees, longitude wrapped to 0 to 360."""
+    # rng: an int reseeds identically on every call, so a loop must pass one live Generator.
     position = as_position(position)
     drift = as_vector(drift, "drift")
     timestep = float(timestep)

@@ -33,8 +33,10 @@ They may cite an ADR or a vault decision for *why*, and should not restate the r
 | [validation-split.md](validation-split.md) | `sar.validate.split` — which drifter tracks are dev, sealed or the 2023 holdout, and why (issue #51) |
 | [viz-export.md](viz-export.md) | `sar.viz` — the published archive the website reads |
 | [resultant-vector.md](resultant-vector.md) | `sar.model.interpolate` — current and wind at any position and time (issue #10) |
+| [position-update.md](position-update.md) | `sar.model.position` and `sar.pipeline.track`: the Euler-Maruyama step, the drift pipeline and its error budget (issue #6) |
 | [probability-grid.md](probability-grid.md) | `sar.model.grid` — particle positions to cells, and back (issue #7) |
-| [search-patterns.md](search-patterns.md) | `sar.search` — the helicopter's numbers, the four doctrinal patterns (Expanding Square, Sector Search, Parallel Track, Trackline), the datum and its marker (issues #44, #48, #63, #75) |
+| [monte-carlo.md](monte-carlo.md) | `sar.pipeline.ensemble`: N particles from a perturbed datum, the CSV it writes, the heatmap and the convergence ladder (issues #46, R1e, R1f) |
+| [search-patterns.md](search-patterns.md) | `sar.search` — the helicopter's numbers, the Expanding Square and Sector Search, the datum and its marker (issues #44, #48, #63) |
 | [linear_time_interpolation.md](linear_time_interpolation.md) | `sar.utils.interpolation` — why the drift model needs it |
 | [e2e-testing.md](e2e-testing.md) | `npm run test:e2e` and `npm run shots` — browser tests, and looking at the page (issue #21) |
 | [issue-template.md](issue-template.md) | the structure every new issue follows, and what "done" means |
