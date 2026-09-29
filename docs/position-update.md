@@ -27,8 +27,10 @@ $$\Delta\varphi = \frac{v\,\Delta t}{R}, \qquad \Delta\lambda = \frac{u\,\Delta 
 
 both then multiplied by $180/\pi$. $R$ is `EARTH_RADIUS_M`, 6,371,008.8 m, the GRS80 mean
 radius $R_1 = (2a + b)/3$ from Moritz (2000), *Journal of Geodesy* 74(1), 128 to 133. It
-is the same number as `R_EARTH_M` in `frontend/src/geo.js`, so the backend's track and the
-map's ruler cannot disagree about how far a particle moved.
+is defined once, in `sar.utils.geo`, and every conversion between degrees and metres in the
+project derives from it: this step, the grid, the search patterns, the sweep, and `R_EARTH_M`
+in `frontend/src/geo.js`, which the search golden fixture holds to it. So the backend's track,
+the patterns and the map's ruler cannot disagree about how far a particle moved.
 
 The $\cos\varphi$ is the whole content of the flat-earth approximation. Lines of longitude
 converge towards the pole, so a degree of longitude is shorter than a degree of latitude
@@ -188,7 +190,7 @@ direction, so it grows linearly with the track and no ensemble averages it away.
 Fixing it costs two lines, replacing $R$ with $M(\varphi)$ and $N(\varphi)$. It is left
 out because the ticket specifies the flat-earth spherical form, and because section 5
 shows the number it would buy is three orders of magnitude below the error already in the
-forcing. `EARTH_RADIUS_M` is a module constant so the change would be made in one place.
+forcing. `EARTH_RADIUS_M` is defined once, in `sar.utils.geo`, so the change would be made in one place.
 
 ### 4. The stochastic term
 
