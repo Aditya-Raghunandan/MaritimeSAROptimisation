@@ -1,11 +1,13 @@
 # The doctrinal search (`sar.search`)
 
-Closes #44, #63 and #75, and covers the geometry of #48. Three modules:
+Closes #44, #45, #63 and #75, and covers the geometry of #48. Four modules:
 
 - **The helicopter's numbers** (`platform`).
 - **The four Coast Guard patterns** (`patterns`): Expanding Square, Sector Search, Parallel Track
   and Trackline Return.
 - **Where the search starts and where its marker drifts** (`datum`).
+- **What one leg of flight finds among the particles** (`sweep`): the reward, the POD and the
+  scorer for every strategy.
 
 **Why each number and rule is what it is** is [ADR003](ADR003.md), cited to the USCG Addendum
 (COMDTINST M16130.2F) by page.
@@ -30,6 +32,8 @@ python -m sar.search.patterns parallel --first-bearing 30              # the Z =
 python -m sar.search.patterns trackline --first-bearing 30 --half-length-m 6000
 python -m sar.search.datum --lat 26.5 --lon -79.0 --start 2019-06-01T06:00 \
     --elapsed-min 77 --constant-current 1.8 0.0 --constant-wind 5.0 5.0
+python -m sar.search.sweep --lat 26.5 --lon -79 --spread-km 2 --particles 10000 \
+    --seed 1 --bearing 90                        # one 60 s leg through a 2 km cloud
 ```
 
 ```python
@@ -64,6 +68,53 @@ t, glat, glon = ground_track(pattern, marker)           # every waypoint, plus e
 - A marker track with fewer than two strictly increasing times, or mismatched arrays, raises.
 - `transit_time_s` refuses a datum beyond the H-60's 300 NM radius of action.
 - `marker_track` without a forcing backend raises; a still marker is `MarkerTrack.fixed`.
+- `sweep` and `seen` raise on a sweep width that is not a positive number, a `pod` outside 0 to
+  1, particle arrays (lat, lon, weight, and the end positions) whose shapes differ, one end
+  array without the other, and a helicopter fix that is not one finite (lat, lon) pair.
+
+## Sweeping particles (#45)
+
+`sweep(lat, lon, weight, start, end, sweep_width_m=W, pod=1.0, lat_end=None, lon_end=None)`
+flies one leg, `start` to `end`, over the particles and returns `(weight_after, mass_removed)`.
+Every strategy is scored by this one call. That includes the Expanding Square, greedy and PPO,
+which is what keeps their comparison controlled (D006, D023).
+
+- **The rule is definite range** (D027). Anything within W/2 = 92.6 m of the helicopter is seen,
+  and a seen particle keeps `1 − pod` of its weight. `pod` is 1 by default.
+- **Distance to the leg, not to its line.** Past either end, distance is measured to the
+  endpoint, so the swept region is a capsule, not an infinite strip. A zero-length leg sweeps a
+  disc.
+- **Particles that move during the leg.** Pass `lat_end` and `lon_end`, the same particles at
+  the end of the leg, and the test becomes the closest point of approach (ADR003 §3). The
+  helicopter's position minus the particle's moves in a straight line from r0 to r1, so the
+  closest they come is the distance from the origin to the segment r0 → r1 (`closest_approach_m`,
+  the same algebra as `closestApproach` in `frontend/src/searchRun.js`). Leave them out and the
+  particles are held still, which is the same formula with r0 and r1 measured from one point.
+- **Nothing is renormalised**, and the input array is not changed. `mass_removed` is the drop in
+  total weight: the probability this leg found (ADR002, normalisation row).
+- **Metres on a local flat earth**, with cos φ at each particle (ADR002 §7; `relative_m`, the
+  inverse of `offset_position`). The same leg in metres sweeps the same cloud at 17 N and 36 N.
+
+One 60 s leg east at 90 kt (2,778 m) against six particles:
+
+| Particle | Closest approach | Seen |
+|---|---|---|
+| 50 m north of the leg's middle | 50 m | yes |
+| 100 m north of the middle | 100 m | no |
+| 50 m past the east end, on the line | 50 m | yes |
+| 80 m past the east end and 80 m north | 113 m | no (the infinite line would say yes) |
+| 150 m south of the east end, drifting north at 1.8 m/s | 42 m, as the helicopter arrives | yes (held still: 150 m, a miss) |
+| 80 m south of x = +1,000 m, drifting south at 1.8 m/s | 173 m, as the helicopter passes | no (held still: 80 m, a hit) |
+
+The CLI's check: one such leg through the middle of a 2 km Gaussian cloud should find
+erf(92.6 / (2000√2)) × erf(1389 / (2000√2)), plus the two end caps, **1.98 %** of the mass. The
+command in **Running it** finds 2.04 % with 10⁴ particles (sampling error ±0.14 %), and
+`test_matches_the_capsule_over_a_gaussian_cloud` holds it to 4σ at 2 × 10⁵.
+
+**For #47.** A step that contains several sub-legs calls `sweep` once per sub-leg (ADR003 §2),
+with the particles' positions interpolated to each sub-leg's ends. With `pod` < 1, a particle
+near a turn is seen by both sub-legs that meet there, in one pass. At D027's `pod` = 1 the
+second look finds nothing, so it does not matter there.
 
 ## On the site (issues #64, #68, #69, #71, #73, #75, #76, #79, #80, #81, #83, #85, #86)
 
@@ -266,9 +317,8 @@ be the model predicting itself.
 
 ## Not here, and deliberately
 
-- **Sweeping particles** (#45) and **the episode runner** (#47). Both need the ensemble (#58).
-  ADR003 §2–§3 says what they must do with a pattern: follow its sub-legs, and detect by
-  closest approach.
+- **The episode runner** (#47). It flies a strategy step by step and calls `sweep` for each
+  sub-leg (ADR003 §2); it now has both of its inputs, `sweep` and #90's `Ensemble`.
 - **The gridded forcing backend.** `datum` works with any object that has the `ConstantForcing`
   interface, so it gains real HYCOM and ERA5 when that backend exists.
 - **Weather-corrected sweep width.** W is the calm-water figure (ADR003, Consequences).
