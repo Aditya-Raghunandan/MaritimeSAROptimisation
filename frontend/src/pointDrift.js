@@ -18,13 +18,15 @@
  * particle. Drifting on the leeway alone would draw a path the model cannot vouch for.
  */
 
+import { M_PER_DEG_LAT, R_EARTH_M } from './geo.js';
+
 const TO_RAD = Math.PI / 180;
 
-/** GRS80 mean radius, as `sar.model.position.EARTH_RADIUS_M` and geo.js. */
-export const EARTH_RADIUS_M = 6371008.8;
+/** The project's one Earth radius (geo.js), under the name Python's engine uses. */
+export const EARTH_RADIUS_M = R_EARTH_M;
 
 /** Metres per degree on that sphere -- `calculate_position`'s own conversion. */
-export const M_PER_DEG = (EARTH_RADIUS_M * Math.PI) / 180;
+export const M_PER_DEG = M_PER_DEG_LAT;
 
 const TIME_TOLERANCE_S = 1e-9;
 

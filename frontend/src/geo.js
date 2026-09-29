@@ -14,8 +14,17 @@
  * fifth depending where you measure it.
  */
 
-const R_EARTH_M = 6371008.8; // IUGG mean radius
 const TO_RAD = Math.PI / 180;
+
+/**
+ * The project's one Earth radius: GRS80 mean, as `sar.utils.geo.EARTH_RADIUS_M`.
+ * `tests/geo.test.js` holds it to Python through `fixtures/search_golden.json`.
+ * Every other file on the site that turns degrees into metres imports these two.
+ */
+export const R_EARTH_M = 6371008.8;
+
+/** Metres per degree of latitude on that sphere, 111,195.1 m. */
+export const M_PER_DEG_LAT = R_EARTH_M * TO_RAD;
 
 /** Gulf Stream surface average -- what the project sizes drift against. */
 export const TYPICAL_CURRENT_MS = 1.8;
