@@ -13,14 +13,15 @@
  * Pure arithmetic, no DOM.
  */
 
+import { M_PER_DEG_LAT } from './geo.js';
 import {
   ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, SWEEP_WIDTH_M, searchEffortM2, sectorRadiusM,
 } from './platform.js';
 
 const TO_RAD = Math.PI / 180;
 
-/** Metres per degree of latitude, as `sar.utils.geo.M_PER_DEG_LAT`. */
-export const M_PER_DEG_LAT = 111320;
+/** Metres per degree of latitude, as `sar.utils.geo.M_PER_DEG_LAT` (from geo.js). */
+export { M_PER_DEG_LAT };
 
 /** One Sector Search pattern as turns from its first leg (Addendum pp. 3-27 to 3-28). */
 export const SECTOR_LEGS = [0, 120, 240, 240, 0, 120, 120, 240, 0];

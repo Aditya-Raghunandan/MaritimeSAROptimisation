@@ -23,12 +23,12 @@
 import L from 'leaflet';
 
 import { beaufort } from './beaufort.js';
+import { M_PER_DEG_LAT as M_PER_DEG } from './geo.js';
 import { whitecapCount } from './seaState.js';
 
 /** Below this zoom the texture would be noise, not water. */
 export const OCEAN_MIN_ZOOM = 13.5;
 
-const M_PER_DEG = 111320;
 const MARKS = 260;
 
 export const OceanLayer = L.Layer.extend({

@@ -5,6 +5,7 @@ import pytest
 import xarray as xr
 
 from sar.utils.geo import (
+    EARTH_RADIUS_M,
     M_PER_DEG_LAT,
     assert_conventions,
     east_north,
@@ -180,3 +181,28 @@ class TestOffsetPosition:
     def test_accepts_arrays(self):
         lat, lon = offset_position(np.array([17.0, 36.0]), 281.0, 100.0, 0.0)
         assert lat.shape == lon.shape == (2,)
+
+
+class TestOneEarthRadius:
+    """One sphere for every degrees-to-metres conversion (29 Sep 2026; was two, 0.11 % apart)."""
+
+    def test_is_the_grs80_mean_radius(self):
+        assert EARTH_RADIUS_M == 6_371_008.8
+
+    def test_a_degree_of_latitude_is_that_sphere_s(self):
+        assert M_PER_DEG_LAT == pytest.approx(EARTH_RADIUS_M * np.pi / 180.0, rel=1e-15)
+        assert M_PER_DEG_LAT == pytest.approx(111_195.08, abs=0.01)
+
+    def test_the_engine_uses_the_same_one(self):
+        from sar.model.position import EARTH_RADIUS_M as engine_radius
+        from sar.model.position import calculate_position
+        assert engine_radius == EARTH_RADIUS_M
+        # One second at 1,000 m/s north moves exactly 1,000 m of this module's latitude.
+        moved = calculate_position([26.5, 281.0], [0.0, 1000.0], 1.0)
+        assert (moved[0] - 26.5) * M_PER_DEG_LAT == pytest.approx(1000.0, rel=1e-12)
+
+    def test_the_search_and_the_split_use_the_same_one(self):
+        from sar.search.platform import great_circle_m
+        from sar.validate.split import EARTH_RADIUS_KM
+        assert EARTH_RADIUS_KM * 1000.0 == pytest.approx(EARTH_RADIUS_M, rel=1e-15)
+        assert great_circle_m(26.0, 281.0, 27.0, 281.0) == pytest.approx(M_PER_DEG_LAT, rel=1e-12)

@@ -12,6 +12,8 @@ What it records:
 
     platform   every constant in `sar.search.platform`, so `frontend/src/geo.js` cannot
                quote a different sweep width (issue #44's parity criterion)
+    geo        the one Earth radius and its metres per degree, `sar.utils.geo`, so the
+               site cannot convert degrees to metres with a different sphere
     patterns   Expanding Square and Sector Search waypoints, and offsets and headings
                sampled along them, at several first bearings and windows, including ones
                that end mid-leg
@@ -51,7 +53,7 @@ from sar.search.platform import (
     search_effort_m2,
     transit_time_s,
 )
-from sar.utils.geo import to_display_longitude
+from sar.utils.geo import EARTH_RADIUS_M, M_PER_DEG_LAT, to_display_longitude
 
 OUT = Path("frontend/src/fixtures/search_golden.json")
 START = "2019-06-01T06:00"
@@ -138,6 +140,7 @@ def build() -> dict:
         "tolerance_deg": 1e-10,
         "tolerance_s": 1e-6,
         "platform": {**constants(), "search_effort_m2": search_effort_m2()},
+        "geo": {"earth_radius_m": EARTH_RADIUS_M, "m_per_deg_lat": M_PER_DEG_LAT},
         "patterns": [pattern_case(kind, args) for kind, args in PATTERN_CASES],
         "on_ground": [on_ground_case(lat, 281.0) for lat in (17.0, 26.5, 36.0)],
         "drift": [

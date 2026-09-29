@@ -54,7 +54,7 @@
 
 import L from 'leaflet';
 
-const METRES_PER_DEGREE = 111_320;
+import { M_PER_DEG_LAT as METRES_PER_DEGREE } from './geo.js';
 
 export const ParticleLayer = L.Layer.extend({
   /**

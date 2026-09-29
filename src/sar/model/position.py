@@ -8,13 +8,10 @@ import json
 import numpy as np
 
 from sar.model.drift import as_vector
+from sar.utils.geo import EARTH_RADIUS_M  # the project's one Earth radius
 
 # D009 (vault decision, Aditya, 2026-09-03): one minute per integration step.
 INTEGRATION_STEP_SECONDS = 60.0
-
-# GRS80 mean radius R1 = (2a + b) / 3; Moritz (2000), J. Geodesy 74(1), 128-133.
-# The same number as R_EARTH_M in frontend/src/geo.js, so both measure alike.
-EARTH_RADIUS_M = 6371008.8
 
 DEGREES_PER_RADIAN = 180.0 / np.pi
 

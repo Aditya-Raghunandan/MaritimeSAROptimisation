@@ -8,7 +8,10 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { bearing, formatDistance } from '../src/geo.js';
+import golden from '../src/fixtures/search_golden.json';
+import { M_PER_DEG_LAT, R_EARTH_M, bearing, formatDistance } from '../src/geo.js';
+import { M_PER_DEG_LAT as PATTERNS_M_PER_DEG } from '../src/patterns.js';
+import { EARTH_RADIUS_M, M_PER_DEG } from '../src/pointDrift.js';
 
 const at = (lat, lng) => ({ lat, lng });
 
@@ -65,5 +68,21 @@ describe('formatDistance', () => {
 
   it('drops the decimals once they stop meaning anything', () => {
     expect(formatDistance(155_000)).toBe('155 km');
+  });
+});
+
+
+describe('one Earth radius', () => {
+  // Until 29 Sep 2026 the patterns, the close-up sea and the particles used 111,320 m per
+  // degree while the drift and the ruler used this sphere: 0.11 % apart.
+  it('is the same number as Python', () => {
+    expect(R_EARTH_M).toBe(golden.geo.earth_radius_m);
+    expect(M_PER_DEG_LAT).toBeCloseTo(golden.geo.m_per_deg_lat, 6);
+  });
+
+  it('is the one every module converts with', () => {
+    expect(PATTERNS_M_PER_DEG).toBe(M_PER_DEG_LAT);
+    expect(M_PER_DEG).toBe(M_PER_DEG_LAT);
+    expect(EARTH_RADIUS_M).toBe(R_EARTH_M);
   });
 });

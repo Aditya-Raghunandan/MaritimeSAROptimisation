@@ -37,7 +37,7 @@ import json
 
 import numpy as np
 
-from sar.model.position import EARTH_RADIUS_M
+from sar.utils.geo import EARTH_RADIUS_M
 
 # The international nautical mile, exact by definition (1929), and the knot it defines.
 NM_M = 1852.0

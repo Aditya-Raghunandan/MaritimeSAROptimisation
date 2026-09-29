@@ -29,10 +29,21 @@ import xarray as xr
 STORE_LON_RANGE = (0.0, 360.0)
 CANONICAL_DIMS = ("lat", "lon")
 
-# Metres per degree of latitude on a sphere of the WGS84 mean radius. Constant with
-# latitude to within 0.6 % over this project's box, which is far below every other error
-# in the system; the longitude equivalent is NOT constant and is the function below.
-M_PER_DEG_LAT = 111_320.0
+# The project's one Earth radius: the GRS80 mean radius R1 = (2a + b) / 3, Moritz (2000),
+# J. Geodesy 74(1), 128-133. Everything that turns degrees into metres derives from it:
+# the drift step (`sar.model.position`), the grid, the search patterns, the sweep, and the
+# site's `frontend/src/geo.js`, which the search golden fixture holds to this value.
+# Until 29 Sep 2026 this module used 111,320 m per degree, the EQUATORIAL radius, while the
+# engine used this one: two conversions 0.11 % apart. Against the WGS84 ellipsoid across
+# 17-36 N, this sphere is long north-south by 0.2-0.5 % and short east-west by 0.1-0.2 %;
+# the equatorial one is long by 0.3-0.6 % and short by under 0.1 %. The error is larger
+# north-south, where this radius is the closer of the two.
+EARTH_RADIUS_M = 6_371_008.8
+
+# Metres per degree of latitude on that sphere, 111,195.1 m. The longitude equivalent is
+# NOT constant and is the function below. Written as the engine's own expression, so the
+# two are the same float.
+M_PER_DEG_LAT = EARTH_RADIUS_M / (180.0 / np.pi)
 
 # ERA5 and HYCOM disagree on what to call the same axis.
 _RENAMES = {"latitude": "lat", "longitude": "lon", "Latitude": "lat", "Longitude": "lon"}
@@ -51,8 +62,8 @@ def to_display_longitude(lon):
 def metres_per_degree_lon(lat):
     """Metres in one degree of longitude AT THIS LATITUDE. Scalar or array.
 
-    A degree of longitude is 111.32 km at the equator and shrinks as cos(latitude):
-    99.6 km at 26.5 N, 90.1 km at 36 N. It exists as a function, and takes latitude as
+    A degree of longitude is 111.19 km at the equator and shrinks as cos(latitude):
+    99.5 km at 26.5 N, 90.0 km at 36 N. It exists as a function, and takes latitude as
     an argument, for one reason: SO THAT IT CANNOT BE FROZEN.
 
     Converting an eastward velocity in m/s into a longitude rate means dividing by this

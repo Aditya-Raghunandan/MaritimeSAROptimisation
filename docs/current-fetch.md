@@ -212,7 +212,7 @@ At the middle of the study box (26.5 N):
 
 | Axis | Degrees | Metres |
 |---|---|---|
-| longitude | 0.08 | **8.07 km** (0.08 × 111.32 × cos 26.5°) |
+| longitude | 0.08 | **7.96 km** (0.08 × 111.195 × cos 26.5°) |
 | latitude | 0.04 | **4.45 km** |
 
 ### The request-size ceiling, and why it is not the same as throughput

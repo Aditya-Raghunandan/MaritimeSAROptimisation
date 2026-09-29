@@ -46,6 +46,7 @@ from scipy.sparse.csgraph import connected_components
 
 from sar.fetch.drifters import output_paths
 from sar.utils.data_io import combine_products, load_drifters
+from sar.utils.geo import EARTH_RADIUS_M
 
 MIN_HOURS = 48.0
 SHARED_WATER_KM = 10.0
@@ -60,7 +61,8 @@ DEFAULT_SEED = 20260923
 HOURLY_WINDOW = ("2019-01-01", "2024-01-01")
 SIX_HOURLY_WINDOW = ("2022-11-01", "2024-01-01")
 
-EARTH_RADIUS_KM = 6371.0
+# 6371.0 until 29 Sep 2026; the split was regenerated with this one and is byte-identical.
+EARTH_RADIUS_KM = EARTH_RADIUS_M / 1000.0
 SPLITS = ("dev", "sealed", "holdout-2023")
 
 
