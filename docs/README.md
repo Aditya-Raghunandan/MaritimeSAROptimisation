@@ -35,6 +35,7 @@ They may cite an ADR or a vault decision for *why*, and should not restate the r
 | [resultant-vector.md](resultant-vector.md) | `sar.model.interpolate` — current and wind at any position and time (issue #10) |
 | [position-update.md](position-update.md) | `sar.model.position` and `sar.pipeline.track`: the Euler-Maruyama step, the drift pipeline and its error budget (issue #6) |
 | [probability-grid.md](probability-grid.md) | `sar.model.grid` — particle positions to cells, and back (issue #7) |
+| [gridded-forcing.md](gridded-forcing.md) | `sar.pipeline.gridded` — the real HYCOM current and ERA5 wind at every particle: the maths, land, gaps, files and cost (issue #88) |
 | [monte-carlo.md](monte-carlo.md) | `sar.pipeline.ensemble`: N particles from a perturbed datum, the CSV it writes, the heatmap and the convergence ladder (issues #46, R1e, R1f) |
 | [search-patterns.md](search-patterns.md) | `sar.search` — the helicopter's numbers, the four Coast Guard patterns, the datum and its marker, and the particle sweep (issues #44, #45, #48, #63, #75) |
 | [linear_time_interpolation.md](linear_time_interpolation.md) | `sar.utils.interpolation` — why the drift model needs it |
