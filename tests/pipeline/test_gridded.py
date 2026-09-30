@@ -530,6 +530,13 @@ class TestCommandLines:
             track._cli(["--start", "2021-01-05T01:00", "--lat", "17.5", "--lon", "-80.8",
                         "--duration", "60", "--timestep", "60", *flags])
 
+    def test_a_window_the_files_cannot_support_is_a_usage_error(self, root, capsys):
+        with pytest.raises(SystemExit):
+            track._cli(["--forcing-dir", str(root), "--start", "2021-01-05T23:30",
+                        "--lat", "17.5", "--lon", "-80.8", "--duration", "3600",
+                        "--timestep", "60"])
+        assert "outside the files" in capsys.readouterr().err
+
     def test_the_ensemble_runs_on_the_real_forcing_flag(self, root, tmp_path):
         path = ensemble._cli(["--lat", "17.5", "--lon", "-80.8", "--datum-sigma-km", "0",
                               "--start", "2021-01-05T01:00", "--timestep", "60",

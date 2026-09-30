@@ -328,9 +328,10 @@ def _cli(argv=None) -> Path:
         estimate_rows(args.particles, args.duration, args.timestep, args.save_every,
                       args.with_forcing, args.force)
         check_cloud(args.particles, args.datum_sigma_km)
-    except ValueError as error:
+        # Last, so a run the files cannot support is a usage error, not a traceback.
+        forcing = forcing_from(args)
+    except (ValueError, FileNotFoundError) as error:
         parser.error(str(error))
-    forcing = forcing_from(args)
     spec = {"forcing": forcing, "particles": args.particles, "start": args.start,
             "lat": args.lat, "lon": args.lon, "duration": args.duration,
             "timestep": args.timestep, "datum_sigma_km": args.datum_sigma_km,

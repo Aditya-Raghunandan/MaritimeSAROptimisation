@@ -169,7 +169,10 @@ def _cli(argv=None) -> dict:
 
     if args.forcing_dir:
         end = np.datetime64(args.start, "us") + np.timedelta64(round(args.duration * 1e6), "us")
-        forcing = GriddedForcing.from_dir(args.forcing_dir, args.start, end)
+        try:
+            forcing = GriddedForcing.from_dir(args.forcing_dir, args.start, end)
+        except (ValueError, FileNotFoundError) as error:
+            parser.error(str(error))
     else:
         forcing = ConstantForcing(args.constant_current, args.constant_wind or (0.0, 0.0))
     pipeline = DriftPipeline(forcing, args.timestep, args.leeway, args.sigma, args.seed)
