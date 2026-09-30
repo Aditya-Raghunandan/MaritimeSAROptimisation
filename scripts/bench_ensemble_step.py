@@ -8,6 +8,8 @@ to every step.
 
     python scripts/bench_ensemble_step.py
     python scripts/bench_ensemble_step.py --particles 1000000
+    python scripts/bench_ensemble_step.py --forcing-dir C:/maritime-data \
+        --time 2021-01-05T07:30 --particles 1 10000 100000     # the real backend, #88
     sbatch scripts/bench_ensemble_step.sbatch                 # one task on a compute node
     BENCH_TASKS=4 sbatch --ntasks=4 scripts/bench_ensemble_step.sbatch   # four on one node
 
@@ -18,6 +20,11 @@ WHAT IT FOUND, 2026-09-24 (jobs 58728 and 58729, jaguar11, i7-3770, NumPy 2.5.3)
 The step is memory-bound: a node delivers 1.48x one core, not 4x, and ADR002's 504 s is
 2.6x too low alone and 7x with a full node. Sampling is 85 % of the step under load.
 Vault: notebook/aditya/2026-09-24 How many particles, and what the cluster can afford.
+
+WITH --forcing-dir the grid-sample column times the real `sar.pipeline.gridded` backend
+(issue #88) on the stored files instead of the stand-in. N = 1 matters as much as 10^6:
+the sigma calibration (#89) calls the backend once per step for one particle, ~38 M times.
+The stand-in's GRIDS had HYCOM's lat and lon swapped until 30 Sep; the size is the same.
 """
 
 from __future__ import annotations
@@ -30,9 +37,10 @@ import time
 import numpy as np
 
 from sar.pipeline.forcing import ConstantForcing
+from sar.pipeline.gridded import GriddedForcing
 from sar.pipeline.track import DriftPipeline
 
-GRIDS = {"current": (238, 476), "wind": (77, 77)}   # (lat, lon) cells over the box
+GRIDS = {"current": (476, 238), "wind": (77, 77)}   # (lat, lon) points over the box
 STEPS_48H, STEPS_24H = 2880, 1440                  # at the 60 s step (D009)
 
 
@@ -75,10 +83,21 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--particles", type=int, nargs="+",
                     default=[10**4, 10**5, 10**6, 2 * 10**6])
+    ap.add_argument("--forcing-dir",
+                    help="time the real gridded backend on the files under <dir>/raw (#88)")
+    ap.add_argument("--time", default="2019-06-01T06:00",
+                    help="the instant the real backend is sampled at, ISO 8601")
     args = ap.parse_args(argv)
     rng = np.random.default_rng(1)
-    sample = make_sampler(rng)
-    t0 = np.datetime64("2019-06-01T06:00")
+    t0 = np.datetime64(args.time, "us")
+    if args.forcing_dir:
+        forcing = GriddedForcing.from_dir(args.forcing_dir, t0, t0)
+
+        def sample(lat, lon):
+            return forcing.sample(lat, lon, t0)
+        print(f"real backend: {forcing.describe()['current']['files']}")
+    else:
+        sample = make_sampler(rng)
 
     print(f"host {platform.node()} | {platform.processor() or platform.machine()} | "
           f"numpy {np.__version__} | py {sys.version.split()[0]}")
@@ -89,11 +108,11 @@ def main(argv=None) -> None:
                              timestep=60.0, sigma=0.1, seed=7)
         pos = pipe.start_positions(np.full(n, 26.5), np.full(n, 281.0))
         pos = pos + rng.normal(0, 0.05, (n, 2))
-        reps = 20 if n <= 10**5 else 6
+        reps = 2000 if n <= 10 else 20 if n <= 10**5 else 6
         p_ms = median_ms(lambda: pipe.advance(pos, t0), reps)
         g_ms = median_ms(lambda: sample(pos[:, 0], pos[:, 1]), reps)
         total = p_ms + g_ms
-        print(f"{n:>10,} {p_ms:>12.1f} {g_ms:>15.1f} {total:>14.1f} "
+        print(f"{n:>10,} {p_ms:>12.3f} {g_ms:>15.3f} {total:>14.3f} "
               f"{total * STEPS_48H / 1000:>9.0f} {total * STEPS_24H / 1000:>9.0f}")
 
 

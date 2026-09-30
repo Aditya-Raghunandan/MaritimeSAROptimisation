@@ -21,6 +21,8 @@
 # Submit from the repo checkout on the cluster:
 #     sbatch scripts/bench_ensemble_step.sbatch
 #     BENCH_TASKS=4 sbatch --ntasks=4 scripts/bench_ensemble_step.sbatch
+#     sbatch scripts/bench_ensemble_step.sbatch --forcing-dir /home/26p67/data \
+#         --time 2019-06-01T06:00 --particles 1 10000 100000 1000000     # the real backend
 
 set -euo pipefail
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
@@ -32,7 +34,7 @@ TASKS="${BENCH_TASKS:-1}"
 
 lscpu | grep -E "Model name|^CPU\(s\)"
 if [ "$TASKS" -eq 1 ]; then
-    PYTHONPATH=src "$PY" scripts/bench_ensemble_step.py
+    PYTHONPATH=src "$PY" scripts/bench_ensemble_step.py "$@"
 else
     # $PY and $SLURM_PROCID are expanded inside each task, not here.
     srun --ntasks="$TASKS" --cpus-per-task=1 bash -c \
