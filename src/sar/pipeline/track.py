@@ -1,9 +1,12 @@
 """track.py: the drift pipeline, sampling forcing and advancing a position step by step.
 
-    python -m sar.pipeline.track --constant-current <u> <v> --start <iso 8601> \\
-        --lat <degrees north> --lon <degrees east> --timestep <seconds> \\
-        --duration <seconds> [--constant-wind <u> <v>] [--sigma <m/s^0.5>] \\
-        [--seed <int>] [--leeway <fraction>] [--every <n>]
+    python -m sar.pipeline.track (--constant-current <u> <v> | --forcing-dir <data root>) \\
+        --start <iso 8601> --lat <degrees north> --lon <degrees east> \\
+        --timestep <seconds> --duration <seconds> [--constant-wind <u> <v>] \\
+        [--sigma <m/s^0.5>] [--seed <int>] [--leeway <fraction>] [--every <n>]
+
+--forcing-dir reads the real HYCOM current and ERA5 wind under <data root>/raw
+(`sar.pipeline.gridded`, issue #88); --constant-current is a uniform steady field.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from sar.model.position import (
     calculate_position,
 )
 from sar.pipeline.forcing import ConstantForcing, as_particle_axes
+from sar.pipeline.gridded import GriddedForcing
 
 _MICROSECONDS = 1_000_000
 
@@ -141,8 +145,11 @@ class DriftPipeline:
 
 def _cli(argv=None) -> dict:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--constant-current", nargs=2, type=float, required=True,
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--constant-current", nargs=2, type=float,
                         metavar=("U", "V"), help="uniform steady current in m/s")
+    source.add_argument("--forcing-dir",
+                        help="data root holding raw/hycom_* and raw/era5_*: the real forcing")
     parser.add_argument("--constant-wind", nargs=2, type=float, metavar=("U", "V"),
                         help="uniform steady 10 m wind in m/s, default calm")
     parser.add_argument("--start", required=True, help="start time, ISO 8601")
@@ -160,7 +167,14 @@ def _cli(argv=None) -> dict:
                         help="print every Nth state; the first and the last are always printed")
     args = parser.parse_args(argv)
 
-    forcing = ConstantForcing(args.constant_current, args.constant_wind or (0.0, 0.0))
+    if args.forcing_dir:
+        end = np.datetime64(args.start, "us") + np.timedelta64(round(args.duration * 1e6), "us")
+        try:
+            forcing = GriddedForcing.from_dir(args.forcing_dir, args.start, end)
+        except (ValueError, FileNotFoundError) as error:
+            parser.error(str(error))
+    else:
+        forcing = ConstantForcing(args.constant_current, args.constant_wind or (0.0, 0.0))
     pipeline = DriftPipeline(forcing, args.timestep, args.leeway, args.sigma, args.seed)
     run = pipeline.describe(args.start, args.lat, args.lon, args.duration)
     rows = [row

@@ -13,6 +13,7 @@ import pandas as pd
 
 from sar.model.position import DEFAULT_SIGMA, INTEGRATION_STEP_SECONDS, calculate_position
 from sar.pipeline.forcing import ConstantForcing
+from sar.pipeline.gridded import GriddedForcing
 from sar.pipeline.track import _STEP_TOLERANCE, DriftPipeline
 from sar.utils.geo import to_display_longitude
 
@@ -292,14 +293,21 @@ def add_run_arguments(parser) -> None:
     parser.add_argument("--sigma", type=float, default=DEFAULT_SIGMA,
                         help=f"D009's sigma in m/s^0.5, default {DEFAULT_SIGMA:g} (unmeasured)")
     parser.add_argument("--seed", type=int, help="base seed; recorded either way")
-    parser.add_argument("--constant-current", nargs=2, type=float, required=True,
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--constant-current", nargs=2, type=float,
                         metavar=("U", "V"), help="uniform steady current in m/s")
+    source.add_argument("--forcing-dir",
+                        help="data root holding raw/hycom_* and raw/era5_*: the real forcing "
+                             "(sar.pipeline.gridded, issue #88)")
     parser.add_argument("--constant-wind", nargs=2, type=float, metavar=("U", "V"),
                         help="uniform steady 10 m wind in m/s, default calm")
 
 
-def forcing_from(args) -> ConstantForcing:
-    """The one backend there is, from the parsed flags."""
+def forcing_from(args) -> ConstantForcing | GriddedForcing:
+    """The backend the flags ask for: the real files, or a uniform steady field."""
+    if getattr(args, "forcing_dir", None):
+        end = np.datetime64(args.start, "us") + np.timedelta64(round(args.duration * 1e6), "us")
+        return GriddedForcing.from_dir(args.forcing_dir, args.start, end)
     return ConstantForcing(args.constant_current, args.constant_wind or (0.0, 0.0))
 
 
@@ -320,9 +328,10 @@ def _cli(argv=None) -> Path:
         estimate_rows(args.particles, args.duration, args.timestep, args.save_every,
                       args.with_forcing, args.force)
         check_cloud(args.particles, args.datum_sigma_km)
-    except ValueError as error:
+        # Last, so a run the files cannot support is a usage error, not a traceback.
+        forcing = forcing_from(args)
+    except (ValueError, FileNotFoundError) as error:
         parser.error(str(error))
-    forcing = forcing_from(args)
     spec = {"forcing": forcing, "particles": args.particles, "start": args.start,
             "lat": args.lat, "lon": args.lon, "duration": args.duration,
             "timestep": args.timestep, "datum_sigma_km": args.datum_sigma_km,

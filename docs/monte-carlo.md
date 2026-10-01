@@ -16,6 +16,10 @@ python -m sar.pipeline.ensemble \
     --out C:/maritime-data
 ```
 
+On the real HYCOM current and ERA5 wind, replace `--constant-current` and `--constant-wind`
+with `--forcing-dir <data root>`, the folder holding `raw/` (`docs/gridded-forcing.md`, #88).
+Exactly one of `--constant-current` and `--forcing-dir` is required.
+
 Everything that defines what the run is has no default: `--lat`, `--lon`, `--datum-sigma-km`, `--start`, `--timestep`, `--duration`, `--particles`, `--constant-current` and `--out`. `--sigma` defaults to zero because it is unmeasured, as it does in `position.py` and `track.py`. `--seed` is optional; the entropy the run actually used is recorded in the sidecar either way. Spans take `48h`, `15m`, `90s` or a bare number of seconds.
 
 On one core the command above takes 27 s and writes 1.93 million rows.
@@ -195,5 +199,5 @@ Measured on the run in **Running it** (10⁴ particles, 2 km datum spread, $\sig
 - **Measuring sigma** against the GDP drifters, which depends on the sealed drifter set (#51).
 - **`src/sar/model/probmap.py`**, the published map product and its time series (ADR002).
 - **Beaching detection** from a land mask, and the GSHHG cross-check D016 requires.
-- **The gridded forcing backend** reading HYCOM and ERA5 through `sar.model.interpolate`. This command gains a flag for it then.
+- **The gridded forcing backend** is now `sar.pipeline.gridded` (#88), behind `--forcing-dir`. `Ensemble.beached` still marks both beached and out-of-domain particles, since both have NaN forcing; `GriddedForcing.outside()` tells them apart.
 - **Per-particle sampled properties**, such as alpha drawn across R1c's range.

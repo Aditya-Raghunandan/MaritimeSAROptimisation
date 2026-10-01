@@ -564,6 +564,10 @@ against that.
 
 ## Land corners: what happens now and what could be done
 
+**For the drift engine this is decided** (#88, `docs/gridded-forcing.md`): a particle whose
+nearest HYCOM point is land is beached; otherwise the wet corners are renormalised, and the
+diagonal corner counts only through a wet edge neighbour. This module is unchanged:
+
 Any missing corner raises `MissingCornerError`. This is deliberate for now; a particle
 within one cell of the coast cannot be advanced until one of these is chosen:
 
