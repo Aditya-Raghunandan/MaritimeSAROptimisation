@@ -200,4 +200,4 @@ Smoke tests, not results: σ is a trial value until #89 calibrates it.
 - **Telling beached from out of domain inside `Ensemble`.** Its `beached` flag marks any
   particle with NaN forcing, so it marks both; `outside()` gives it what it needs (D016).
 - **The GSHHG coastline cross-check** (D016).
-- **σ.** Its calibration is #89.
+- **σ.** Calibrated in #89 at 54.4 m s⁻¹ᐟ²: `docs/sigma-calibration.md`.

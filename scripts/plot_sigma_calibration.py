@@ -176,6 +176,7 @@ def coverage_ladder(cal, out):
     end_label(ax, star["value"], 0.6, f"sigma* = {star['value']:.1f}")
     end_label(ax, s[-1], LEVEL, "90 % target", dy=-8)
     ax.set_xticks(s, [f"{v:.0f}" for v in s])
+    ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     ax.set_xlabel("sigma (m s^-1/2)")
     ax.set_ylabel("buoys inside the 90 % region at 24 h")
     ax.set_ylim(0, 1)
@@ -202,8 +203,8 @@ def coverage_by_lead(cal, out):
         axes[1].plot(nominal, observed, color=colour, marker="o", ms=5, label=tier)
     axes[0].axhline(0.9, color=MUTED, lw=1)
     axes[0].axhline(0.8, color=AXIS, lw=1)
-    end_label(axes[0], 48, 0.9, "90 %", dy=6)
-    end_label(axes[0], 48, 0.8, "80 % (R2d)", dy=-6)
+    axes[0].text(47, 0.91, "90 %", ha="right", va="bottom", fontsize=9, color=INK2)
+    axes[0].text(47, 0.79, "80 % (R2d)", ha="right", va="top", fontsize=9, color=INK2)
     axes[0].set_ylim(0, 1)
     axes[0].set_xlabel("hours after the start")
     axes[0].set_ylabel("buoys inside the 90 % region")
@@ -219,30 +220,41 @@ def coverage_by_lead(cal, out):
 
 
 def twin_recovery(cal, out):
+    """Recovered over planted, one column per case: 1 is exact."""
     tw = cal["twin"]
-    fig, ax = plt.subplots(figsize=(5.6, 4.6))
+    order = sorted(tw, key=lambda c: (("+slide" in c), float(c.replace("sigma", "").split("+")[0])))
+    fig, ax = plt.subplots(figsize=(6.4, 4.2))
     data = {}
-    for case, v in tw.items():
+    for i, case in enumerate(order):
+        v = tw[case]
         planted = float(case.replace("sigma", "").split("+")[0])
         s1 = v["stage1_sigma_quantile"]["value"]
         s2 = v["stage2"]["sigma_star"]
         data[case] = {"planted": planted, "stage1_formula": s1, "stage2_ladder": s2}
-        slide = "+slide" in case
-        ax.scatter([planted], [s1], s=48, color=ORANGE, marker="s" if slide else "o",
-                   edgecolor=SURFACE, linewidth=2, zorder=3)
-        ax.errorbar([planted], [s2["value"]],
-                    yerr=[[s2["value"] - s2["ci95"][0]], [s2["ci95"][1] - s2["value"]]],
-                    color=BLUE, marker="D" if slide else "o", ms=7, capsize=0, zorder=4)
-    lim = [10, 130]
-    ax.plot(lim, lim, color=AXIS, lw=1)
-    ax.set_xlim(*lim)
-    ax.set_ylim(*lim)
+        ax.scatter([i - 0.12], [s1 / planted], s=48, color=ORANGE, edgecolor=SURFACE,
+                   linewidth=2, zorder=3)
+        ax.errorbar([i + 0.12], [s2["value"] / planted],
+                    yerr=[[(s2["value"] - s2["ci95"][0]) / planted],
+                          [(s2["ci95"][1] - s2["value"]) / planted]],
+                    color=BLUE, marker="o", ms=7, capsize=0, zorder=4)
+        if "+slide" in case:
+            sc = cal.get("sigma_c", 9.55)
+            if isinstance(sc, dict):                 # calibration.json carries its CI too
+                sc = sc["crosswind_axis"]["value"]
+            expect = np.hypot(planted, sc) / planted
+            data[case]["expected_with_slide"] = expect * planted
+            ax.hlines(expect, i - 0.3, i + 0.3, color=INK2, lw=1)
+            end_label(ax, i + 0.3, expect, "expected", dy=0)
+    ax.axhline(1.0, color=AXIS, lw=1)
+    ax.set_xticks(range(len(order)),
+                  [c.replace("sigma", "planted ").replace("+slide", "\n+ a person's slide")
+                   for c in order])
+    ax.set_xlim(-0.5, len(order) - 0.5)
     ax.scatter([], [], color=ORANGE, s=48, label="stage 1 formula")
-    ax.scatter([], [], color=BLUE, s=48, label="stage 2 ladder (sigma*)")
+    ax.scatter([], [], color=BLUE, s=48, label="stage 2 ladder (sigma*), 95 % CI")
     ax.legend(loc="upper left")
-    ax.set_xlabel("sigma planted in the fake buoys")
-    ax.set_ylabel("sigma the method gave back")
-    ax.set_title("Twin experiment: does the method recover a known sigma?", loc="left")
+    ax.set_ylabel("recovered / planted (1 = exact)")
+    ax.set_title("Twin experiment: does the method give back a known sigma?", loc="left")
     save(fig, out, "sigma_twin_recovery", data)
 
 
