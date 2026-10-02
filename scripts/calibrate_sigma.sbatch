@@ -20,9 +20,10 @@
 #     sbatch scripts/calibrate_sigma.sbatch windows --out $D/windows
 #     sbatch --array=0-31%24 scripts/calibrate_sigma.sbatch stage1 --windows $D/windows --out $D/stage1
 #     sbatch scripts/calibrate_sigma.sbatch fit --windows $D/windows --stage1 $D/stage1 --out $D/fit.json
-#     sbatch --array=0-31%24 scripts/calibrate_sigma.sbatch ladder --windows $D/windows \
-#         --sigmas 25 35 50 70 100 --out $D/ladder
-#     sbatch --array=0-31%24 scripts/calibrate_sigma.sbatch twin --windows $D/windows --out $D/twin
+#     SIGMA_PROCS=4 sbatch --array=0-11 --cpus-per-task=4 scripts/calibrate_sigma.sbatch \
+#         ladder --windows $D/windows --sigmas 25 35 50 70 100 --out $D/ladder
+#     SIGMA_PROCS=4 sbatch --array=0-11 --cpus-per-task=4 scripts/calibrate_sigma.sbatch \
+#         twin --windows $D/windows --out $D/twin
 #     sbatch scripts/calibrate_sigma.sbatch calibrate --windows $D/windows --fit $D/fit.json \
 #         --ladder $D/ladder --twin $D/twin --out $D/calibration.json
 
@@ -34,17 +35,24 @@ DATA="${SAR_DATA:-/home/26p67/data}"
 [ -x "$PY" ] || { echo "no interpreter at $PY -- see D017 on micromamba"; exit 1; }
 
 STAGE="$1"; shift
-TASK=()
-if [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
-    TASK=(--task "$SLURM_ARRAY_TASK_ID" --tasks "${SIGMA_TASKS:-$SLURM_ARRAY_TASK_COUNT}")
-fi
+# SIGMA_PROCS processes per array task. This partition gives each task a whole node
+# (measured 2 Oct: 32 one-CPU tasks ran 12 at a time, one per node), so a task that
+# runs one process leaves three of the node's four cores idle. Submit with
+# --cpus-per-task=$SIGMA_PROCS.
+PROCS="${SIGMA_PROCS:-1}"
+ID="${SLURM_ARRAY_TASK_ID:-0}"
+COUNT="${SIGMA_TASKS:-${SLURM_ARRAY_TASK_COUNT:-1}}"
 
-echo "stage $STAGE on $(hostname), task ${SLURM_ARRAY_TASK_ID:-none}, commit $(git rev-parse --short HEAD)"
+echo "stage $STAGE on $(hostname), task $ID of $COUNT x $PROCS, commit $(git rev-parse --short HEAD)"
 case "$STAGE" in
     windows)
         PYTHONPATH=src "$PY" -m sar.validate.drift_windows --data "$DATA" "$@" ;;
     stage1|ladder|twin)
-        PYTHONPATH=src "$PY" -m sar.validate.calibrate_sigma "$STAGE" --data "$DATA" "${TASK[@]}" "$@" ;;
+        for p in $(seq 0 $((PROCS - 1))); do
+            PYTHONPATH=src "$PY" -m sar.validate.calibrate_sigma "$STAGE" --data "$DATA" \
+                --task $((ID * PROCS + p)) --tasks $((COUNT * PROCS)) "$@" &
+        done
+        wait ;;
     *)
         PYTHONPATH=src "$PY" -m sar.validate.calibrate_sigma "$STAGE" "$@" ;;
 esac
