@@ -27,6 +27,7 @@ from sar.pipeline.gridded import (
     usable_corners,
 )
 from sar.pipeline.track import DriftPipeline
+from sar.utils.geo import M_PER_DEG_LAT
 
 TAG = box_tag()
 T0 = np.datetime64("2021-01-05T00:00", "ns")
@@ -504,6 +505,34 @@ class TestWithTheEngine:
         frozen = lons >= 278.0 + 0.08 * 19.5
         assert frozen.any() and np.all(lons[frozen] == lons[frozen][0])
         assert lons[frozen][0] - (278.0 + 0.08 * 19.5) < 0.01
+
+    def test_the_kicks_spread_as_sigma_root_t_on_the_real_backend(self, tmp_path):
+        """#89 stage 0: the noise has only ever run on ConstantForcing. In a uniform
+        gridded field the cloud must spread exactly as the kicks alone say."""
+        current_file(tmp_path, np.full((9, HYCOM[2], HYCOM[5]), 0.25))
+        wind_file(tmp_path, np.full((25, ERA5[2], ERA5[5]), 4.0))
+        n, duration = 4000, 2 * 3600
+        with GriddedForcing.from_dir(tmp_path, "2021-01-05T00:00", "2021-01-05T02:00") as f:
+            last = list(DriftPipeline(f, 60.0, sigma=2.0, seed=3).track(
+                "2021-01-05T00:00", [17.6] * n, [279.0] * n, duration))[-1]
+        north = last.positions[:, 0] * M_PER_DEG_LAT
+        east = last.positions[:, 1] * M_PER_DEG_LAT * np.cos(np.radians(17.6))
+        expected = 2.0 * np.sqrt(duration)
+        assert north.std() == pytest.approx(expected, rel=0.05)
+        assert east.std() == pytest.approx(expected, rel=0.05)
+
+    def test_a_beached_particle_receives_no_kick(self, tmp_path):
+        """At a calibrated sigma one kick is ~390 m, so a beached particle that still
+        took its kick would wander along the coast instead of staying where it landed."""
+        u = np.full((9, HYCOM[2], HYCOM[5]), 0.25)
+        u[:, :, 20:] = np.nan
+        current_file(tmp_path, u)
+        wind_file(tmp_path, np.full((25, ERA5[2], ERA5[5]), 4.0))
+        on_land = 278.0 + 0.08 * 22
+        with GriddedForcing.from_dir(tmp_path, "2021-01-05T00:00", "2021-01-05T01:00") as f:
+            states = list(DriftPipeline(f, 60.0, sigma=50.0, seed=4).track(
+                "2021-01-05T00:00", [17.5] * 10, [on_land] * 10, 3600))
+        assert np.array_equal(states[-1].positions, states[0].positions)
 
 
 class TestCommandLines:

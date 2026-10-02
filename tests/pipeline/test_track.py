@@ -168,6 +168,29 @@ class TestTheStochasticTerm:
         with pytest.raises(ValueError, match="sigma must not be negative"):
             DriftPipeline(ConstantForcing(), STEP, sigma=-1.0)
 
+    def test_the_spread_after_four_hours_does_not_depend_on_the_step(self):
+        """The sqrt(dt) trap, end to end (#89 stage 0): with sigma * dt in place of
+        sigma * sqrt(dt) anywhere in the loop, the 240 s run would spread twice as far."""
+        n, duration = 4000, 4 * HOUR
+        spread = {}
+        for step in (60.0, 240.0):
+            pipeline = DriftPipeline(ConstantForcing(), step, sigma=1.0, seed=1)
+            last = list(pipeline.track(START, [LAT] * n, [LON] * n, duration))[-1]
+            spread[step] = (last.positions[:, 0] - LAT).std() / DEG_PER_M
+        assert spread[240.0] / spread[60.0] == pytest.approx(1.0, rel=0.06)
+        assert spread[60.0] == pytest.approx(np.sqrt(duration), rel=0.05)
+
+    def test_east_and_north_spread_equally_in_metres_and_independently(self):
+        """The pipeline tests above read latitude only; longitude goes through cos(lat).
+        A wrong cos(lat) on the kick would make the cloud oval for no physical reason."""
+        n = 20_000
+        pipeline = DriftPipeline(ConstantForcing(), STEP, sigma=1.0, seed=2)
+        last = list(pipeline.track(START, [LAT] * n, [LON] * n, HOUR))[-1]
+        north = (last.positions[:, 0] - LAT) / DEG_PER_M
+        east = (last.positions[:, 1] - LON) / DEG_PER_M * np.cos(np.radians(LAT))
+        assert east.std() / north.std() == pytest.approx(1.0, rel=0.03)
+        assert abs(np.corrcoef(east, north)[0, 1]) < 0.03
+
 
 class TestTheEnsembleItIsBuiltFor:
     def test_a_scalar_start_is_one_particle(self, eastward):
