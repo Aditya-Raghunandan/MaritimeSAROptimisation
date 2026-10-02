@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 
 import matplotlib
+import matplotlib.ticker
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -107,6 +108,7 @@ def msd_growth(fit, out):
     ax.set_xlabel("hours after the start")
     ax.set_ylabel("mean squared gap (km^2)")
     ax.set_xticks([6, 12, 24, 48], ["6", "12", "24", "48"])
+    ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
     ax.legend(loc="upper left")
     ax.set_title("How the gap grows: the exponent beta", loc="left")
     save(fig, out, "sigma_msd_growth", data)

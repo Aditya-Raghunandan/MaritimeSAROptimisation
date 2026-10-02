@@ -412,8 +412,9 @@ def beta_fit(rows: pd.DataFrame, w_labels: dict, hours=BETA_HOURS, n_boot=N_BOOT
     span = span[span["w"].isin(keep) & span["valid"]]
     sq = (span["gap_e"].astype(float) ** 2 + span["gap_n"].astype(float) ** 2)
     x = span.assign(sq=sq.to_numpy()).pivot(index="w", columns="hour", values="sq")
+    hours_used = x.columns.to_numpy(int)
     x = x.to_numpy()
-    logt = np.log(np.arange(lo, hi + 1, dtype=float))
+    logt = np.log(hours_used.astype(float))
 
     def slope(w):
         msd = np.log((w @ x) / w.sum(axis=-1)[..., None])
@@ -431,7 +432,7 @@ def beta_fit(rows: pd.DataFrame, w_labels: dict, hours=BETA_HOURS, n_boot=N_BOOT
             # A random walk grows its mean squared gap as t^1. If 1 is outside the CI, a
             # single sigma is right at the calibration horizon only.
             "random_walk_consistent": bool(ci[0] <= 1.0 <= ci[1]),
-            "msd_km2_by_hour": dict(zip(range(lo, hi + 1),
+            "msd_km2_by_hour": dict(zip(hours_used.tolist(),
                                         (np.mean(x, axis=0) / 1e6).round(3).tolist()))}
 
 
