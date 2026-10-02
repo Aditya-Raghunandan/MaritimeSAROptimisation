@@ -786,7 +786,8 @@ def main(argv=None) -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def common(sp, run=True):
-        sp.add_argument("--windows", required=True, help="stem written by sar.validate.drift_windows")
+        sp.add_argument("--windows", required=True,
+                        help="stem written by sar.validate.drift_windows")
         if run:
             sp.add_argument("--data", required=True, help="archive root holding raw/")
             sp.add_argument("--task", type=int, default=0)
