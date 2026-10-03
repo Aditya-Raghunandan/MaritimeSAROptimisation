@@ -13,10 +13,12 @@ with $\vec x_n$ the position now, $\vec v_d$ the drift velocity from D002, $\Del
 step and $\sigma$ the diffusivity. All four are supplied by the caller;
 `calculate_position` invents nothing and reads nothing.
 
-$\sigma$ defaults to zero, which makes the step deterministic and reduces it to explicit
-Euler. That is the default because $\sigma$ is not yet pinned: the Monte Carlo ticket
-measures it against the NOAA GDP drifter records. A run with $\sigma = 0$ is the mean
-path, not a sample from the distribution, and no spread can be read off it.
+$\sigma$ defaults to zero in the code, which makes the step deterministic and reduces it to
+explicit Euler. A run with $\sigma = 0$ is the mean path, not a sample from the distribution,
+and no spread can be read off it. **The calibrated value is $\sigma$ = 54.4 m s$^{-1/2}$**
+(95 % CI 52.9–57.7), measured on the dev drifters in #89 (`docs/sigma-calibration.md`,
+vault D028). Making it the engine's default is a separate step, agreed with the Monte Carlo
+side first.
 
 ## Metres into degrees
 
@@ -194,20 +196,27 @@ forcing. `EARTH_RADIUS_M` is defined once, in `sar.utils.geo`, so the change wou
 
 ### 4. The stochastic term
 
-Now implemented, and zero by default because $\sigma$ is unmeasured. It is a spread rather
-than a bias: it grows as $\sqrt{t}$, has zero mean, and is the only term here that an
-ensemble is meant to expose rather than remove.
+A spread rather than a bias: it grows as $\sqrt{t}$, has zero mean, and is the only term
+here that an ensemble is meant to expose rather than remove.
 
-| $\sigma$ (m s$^{-1/2}$) | One 60 s step | Over 24 h, per component |
-|---|---|---|
-| 0.05 | 0.39 m | 15 m rms |
-| 0.1 | 0.77 m | 29 m rms |
-| 0.2 | 1.55 m | 59 m rms |
+**Calibrated in #89 at $\sigma$ = 54.4 m s$^{-1/2}$**, chosen so the real buoy lands inside
+the ensemble's 90 % region in 90 % of dev windows at 24 h (`docs/sigma-calibration.md`).
 
-Those are smaller than the biases above, which is the point worth carrying forward: unless
-$\sigma$ turns out much larger than these trial values, the ensemble spread the search
-pattern is drawn from comes mostly from uncertainty in the forcing and in the leeway
-coefficient, not from this term.
+| | One 60 s step | 3 h | 24 h | 48 h |
+|---|---|---|---|---|
+| Spread per component, $\sigma\sqrt t$ | 421 m | 5.7 km | 16.0 km | 22.6 km |
+
+That is 270 to 1,100 times the trial values used before it was measured (0.05–0.2,
+which gave 15–59 m in a day). The term no longer stands for minute-scale noise. It is the model's
+account of the forcing's own error, the 9–26 km a day in section 5, now measured: an eddy
+diffusivity $K = \sigma^2/2 \approx 1{,}500$ m$^2$ s$^{-1}$.
+
+Two things that follow:
+- **One kick is 421 m**, four times the drift's own ~108 m step at 1.8 m/s. A particle near
+  the coast beaches far more often than at the trial values. It still cannot jump a land
+  cell, which is at least 4.45 km across.
+- **The error it stands for is not a random walk.** The real gap grows as $t^{1.74}$, so a
+  constant $\sigma$ is right at 24 h only (vault L22).
 
 ### 5. The forcing itself
 
@@ -239,7 +248,7 @@ about 1.5 micrometres, and the spacing of a double at a longitude of 281 degrees
 | Forcing and leeway uncertainty | 9 to 26 km | dominates everything |
 | Sphere against ellipsoid | about 600 m | systematic, independent of $\Delta t$ |
 | Euler truncation | 35 m | linear in $\Delta t$ |
-| Stochastic term | 29 m rms at $\sigma = 0.1$ | spread, grows as $\sqrt{t}$ |
+| Stochastic term | 16.0 km per component at the calibrated $\sigma$ = 54.4 | spread, grows as $\sqrt{t}$; stands for the forcing error above |
 | Frozen $\cos\varphi$ | 0.21 m | linear in $\Delta t$ |
 | Floating point | micrometres | negligible |
 

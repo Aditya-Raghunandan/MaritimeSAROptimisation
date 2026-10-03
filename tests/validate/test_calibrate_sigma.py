@@ -1,0 +1,158 @@
+"""Tests for sar.validate.calibrate_sigma (#89). Steady analytic fields only.
+
+The buoys here are made by DriftPipeline itself, with a known sigma, so the model is
+exactly right and the method must give the planted sigma back. Then the cases the issue
+names: a persistent current error must show as beta near 2, a crosswind slide must show
+as more crosswind than downwind spread, and a buoy that feels less wind must show as the
+model running ahead downwind by exactly the difference.
+"""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from sar.pipeline.forcing import ConstantForcing
+from sar.pipeline.track import DriftPipeline
+from sar.validate import calibrate_sigma as cs
+from sar.validate.drift_windows import Windows
+
+HOURS = 12
+CURRENT, WIND = (0.3, 0.1), (6.0, 0.0)
+
+
+def synthetic(days=12, per_day=40, sigma=50.0, buoy_current=CURRENT, leeway=0.02, slide=0.0,
+              seed=0):
+    """Windows whose buoys are engine particles from a known model."""
+    rng = np.random.default_rng(seed)
+    rows, lat, lon = [], [], []
+    for d in range(days):
+        t0 = np.datetime64("2021-01-01T00:00", "ns") + np.timedelta64(2 * d, "D")
+        lat0 = 25.0 + rng.uniform(-1, 1, per_day)
+        lon0 = 285.0 + rng.uniform(-1, 1, per_day)
+        forcing = ConstantForcing(buoy_current, WIND)
+        if slide:
+            forcing = cs.SlidingForcing(forcing, slide, rng.choice([-1.0, 1.0], per_day))
+        pipe = DriftPipeline(forcing, 60.0, leeway=leeway, sigma=sigma, seed=rng)
+        states = list(pipe.track(t0, lat0, lon0, HOURS * 3600.0))
+        pos = np.stack([states[h * 60].positions for h in range(HOURS + 1)], axis=1)
+        lat.append(pos[..., 0])
+        lon.append(pos[..., 1])
+        for k in range(per_day):
+            rows.append({"window": f"{d}-{k}", "unit": f"u{d}", "ID": f"b{k}",
+                         "group": (d * per_day + k) // 4, "tier": "undrogued", "t0": t0,
+                         "month": "2021-01", "lat0": lat0[k], "lon0": lon0[k],
+                         "ve0": buoy_current[0] + leeway * WIND[0],
+                         "vn0": buoy_current[1] + leeway * WIND[1]})
+    lat, lon = np.concatenate(lat), np.concatenate(lon)
+    return Windows(pd.DataFrame(rows), lat, lon, np.ones_like(lat, bool), HOURS)
+
+
+def stage1_rows(w, alphas=(0.02,)):
+    rows, status = cs.stage1(w, cs.fixed(ConstantForcing(CURRENT, WIND)),
+                             list(enumerate(w.batches())), alphas=alphas)
+    tab = w.table
+    rows["group"] = tab["group"].to_numpy()[rows["w"].to_numpy()]
+    rows["month"] = tab["month"].to_numpy()[rows["w"].to_numpy()]
+    return rows, status
+
+
+def at(rows, hour, alpha=0.02):
+    return rows[(rows["hour"] == hour) & np.isclose(rows["alpha"], alpha) & rows["valid"]]
+
+
+@pytest.fixture(scope="module")
+def planted():
+    return stage1_rows(synthetic())[0]
+
+
+class TestStage1:
+    def test_the_gap_at_t0_is_zero(self, planted):
+        assert np.all(at(planted, 0)["sep"] == 0.0)
+
+    def test_every_window_ran(self):
+        _, status = stage1_rows(synthetic(days=2, per_day=3))
+        assert (status["status"] == "ok").all() and len(status) == 6
+
+    def test_a_planted_sigma_comes_back_by_every_estimator(self, planted):
+        p = at(planted, HOURS)
+        s = cs.horizon_stats(p, HOURS, np.ones(len(p)))
+        for key in ("sigma_quantile", "sigma_raw", "sigma_debiased"):
+            assert s[key] == pytest.approx(50.0, rel=0.12), key
+
+    def test_a_random_walk_grows_with_exponent_one(self, planted):
+        labels = {"group": planted.groupby("w")["group"].first()}
+        b = cs.beta_fit(planted, labels, hours=(2, HOURS), n_boot=200)
+        assert b["value"] == pytest.approx(1.0, abs=0.15) and b["random_walk_consistent"]
+
+    def test_a_persistent_current_error_grows_with_exponent_two_and_is_flagged(self):
+        rows, _ = stage1_rows(synthetic(days=4, per_day=10, sigma=0.0,
+                                        buoy_current=(0.4, 0.1)))
+        labels = {"group": rows.groupby("w")["group"].first()}
+        b = cs.beta_fit(rows, labels, hours=(2, HOURS), n_boot=200)
+        assert b["value"] == pytest.approx(2.0, abs=0.05) and not b["random_walk_consistent"]
+
+    def test_a_crosswind_slide_spreads_more_across_the_wind_than_along_it(self):
+        rows, _ = stage1_rows(synthetic(days=6, per_day=40, sigma=5.0, slide=0.0051))
+        p = at(rows, HOURS)
+        s = cs.horizon_stats(p, HOURS, np.ones(len(p)))
+        assert s["sigma_crosswind"] > 1.5 * s["sigma_downwind"]
+        # Crosswind is to the right of the wind run: the wind blows east, so right is south.
+        assert np.allclose(p["gap_cw"], -p["gap_n"], atol=1e-3)
+
+    def test_a_buoy_that_feels_half_the_wind_shows_the_model_one_percent_ahead(self):
+        rows, _ = stage1_rows(synthetic(days=2, per_day=5, sigma=0.0, leeway=0.01))
+        p = at(rows, HOURS)
+        s = cs.horizon_stats(p, HOURS, np.ones(len(p)))
+        assert s["windage_minus_model_pct"] == pytest.approx(-1.0, abs=1e-3)
+        lead = 0.01 * 6.0 * HOURS * 3600.0 / 1e3
+        assert s["model_lead_downwind_km"] == pytest.approx(lead, rel=1e-3)
+
+    def test_the_alpha_off_run_is_kept_apart(self):
+        rows, _ = stage1_rows(synthetic(days=1, per_day=3, sigma=0.0), alphas=(0.02, 0.0))
+        assert sorted(np.unique(rows["alpha"]).round(2)) == [0.0, 0.02]
+
+    def test_an_empty_table_or_a_non_positive_hour_raises(self, planted):
+        with pytest.raises(ValueError, match="empty"):
+            cs.horizon_stats(planted.iloc[:0], HOURS, np.ones(0))
+        with pytest.raises(ValueError, match="positive"):
+            cs.horizon_stats(at(planted, HOURS), 0, np.ones(1))
+
+
+class TestCoverage:
+    def test_gaussian_gaps_at_the_true_sigma_cover_ninety_percent(self):
+        rng = np.random.default_rng(1)
+        t = 24 * 3600.0
+        gaps = 40.0 * np.sqrt(t) * rng.standard_normal((20_000, 2))
+        cover = cs.coverage_analytic(np.hypot(*gaps.T), 40.0, 24)
+        assert cover == pytest.approx(0.9, abs=0.007)    # 3 standard errors at n = 20,000
+
+    def test_the_crossing_is_found_in_log_sigma(self):
+        assert cs.crossing([10, 100], [0.8, 1.0], 0.9) == pytest.approx(np.sqrt(1000))
+        assert np.isnan(cs.crossing([10, 100], [0.95, 0.99], 0.9))
+
+    def test_the_energy_optimum_of_a_parabola_in_log_sigma(self):
+        s = np.array([25.0, 35.0, 50.0, 70.0, 100.0])
+        assert cs.parabola_minimum(s, (np.log(s) - np.log(44.0)) ** 2) == pytest.approx(44.0)
+
+    def test_the_ladder_brackets_a_planted_sigma(self):
+        w = synthetic(days=3, per_day=20, sigma=50.0, seed=2)
+        rows = cs.ladder(w, cs.fixed(ConstantForcing(CURRENT, WIND)),
+                         list(enumerate(w.batches())), [25.0, 50.0, 100.0], 200, seed=3,
+                         leads=(HOURS,))
+        cover = rows.groupby("sigma")["rank"].apply(lambda r: np.mean(r <= 0.9))
+        assert cover[25.0] < cover[50.0] < cover[100.0]
+        assert cover[50.0] == pytest.approx(0.9, abs=0.1)
+
+
+class TestClusters:
+    def test_windows_of_one_group_share_a_weight(self):
+        w = cs.boot_weights(["a", "a", "b", "c"], n_boot=50)
+        assert w.shape == (50, 4) and np.array_equal(w[:, 0], w[:, 1])
+        # each resample draws three groups, so the three groups' counts add to three
+        assert np.all(w[:, 0] + w[:, 2] + w[:, 3] == 3)
+
+    def test_the_gate_counts_groups_not_windows(self):
+        p = pd.DataFrame({"sep": [1.0, 1.0, 1.0, 9.0], "sep_still": [5.0] * 4,
+                          "sep_persist": [5.0] * 4, "group": [1, 1, 1, 2]})
+        g = cs.gate(p)
+        assert g["stationary"]["groups"] == 2 and g["stationary"]["model_better_groups"] == 1
