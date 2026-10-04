@@ -15,10 +15,10 @@ step and $\sigma$ the diffusivity. All four are supplied by the caller;
 
 $\sigma$ defaults to zero in the code, which makes the step deterministic and reduces it to
 explicit Euler. A run with $\sigma = 0$ is the mean path, not a sample from the distribution,
-and no spread can be read off it. **The calibrated value is $\sigma$ = 54.4 m s$^{-1/2}$**
-(95 % CI 52.9–57.7), measured on the dev drifters in #89 (`docs/sigma-calibration.md`,
-vault D028). Making it the engine's default is a separate step, agreed with the Monte Carlo
-side first.
+and no spread can be read off it. **The calibrated value is $\sigma$ = 26.3 m s$^{-1/2}$**
+(95 % CI 25.3–27.6), matched at 4 h on the dev drifters (`docs/sigma-calibration.md` §0,
+vault D028 as amended 4 Oct). It is `CALIBRATED_SIGMA` here and the default of the ensemble
+command (`sar.pipeline.ensemble --sigma`). The first calibration, at 24 h, gave 54.4.
 
 ## Metres into degrees
 
@@ -199,24 +199,26 @@ forcing. `EARTH_RADIUS_M` is defined once, in `sar.utils.geo`, so the change wou
 A spread rather than a bias: it grows as $\sqrt{t}$, has zero mean, and is the only term
 here that an ensemble is meant to expose rather than remove.
 
-**Calibrated in #89 at $\sigma$ = 54.4 m s$^{-1/2}$**, chosen so the real buoy lands inside
-the ensemble's 90 % region in 90 % of dev windows at 24 h (`docs/sigma-calibration.md`).
+**Calibrated at $\sigma$ = 26.3 m s$^{-1/2}$**, chosen so the real buoy lands inside the
+ensemble's 90 % region in 90 % of dev windows at **4 h**, the end of the longest search
+(`docs/sigma-calibration.md` §0). The first calibration, at 24 h, gave 54.4.
 
-| | One 60 s step | 3 h | 24 h | 48 h |
-|---|---|---|---|---|
-| Spread per component, $\sigma\sqrt t$ | 421 m | 5.7 km | 16.0 km | 22.6 km |
+| | One 60 s step | 1 h | 3 h | 4 h | 24 h |
+|---|---|---|---|---|---|
+| Spread per component, $\sigma\sqrt t$ | 204 m | 1.6 km | 2.7 km | 3.2 km | 7.7 km |
 
-That is 270 to 1,100 times the trial values used before it was measured (0.05–0.2,
+That is 130 to 530 times the trial values used before it was measured (0.05–0.2,
 which gave 15–59 m in a day). The term no longer stands for minute-scale noise. It is the model's
-account of the forcing's own error, the 9–26 km a day in section 5, now measured: an eddy
-diffusivity $K = \sigma^2/2 \approx 1{,}500$ m$^2$ s$^{-1}$.
+account of the forcing's own error over a search's first hours, now measured: an eddy
+diffusivity $K = \sigma^2/2 \approx 350$ m$^2$ s$^{-1}$.
 
 Two things that follow:
-- **One kick is 421 m**, four times the drift's own ~108 m step at 1.8 m/s. A particle near
-  the coast beaches far more often than at the trial values. It still cannot jump a land
-  cell, which is at least 4.45 km across.
-- **The error it stands for is not a random walk.** The real gap grows as $t^{1.74}$, so a
-  constant $\sigma$ is right at 24 h only (vault L22).
+- **One kick is 204 m**, about twice the drift's own ~108 m step at 1.8 m/s. It cannot jump
+  a land cell, which is at least 4.45 km across.
+- **The error it stands for is not a random walk.** The real gap grows as $t^{1.91}$ over
+  the first 6 h, so a constant $\sigma$ is right at 4 h only: too wide before, too narrow
+  after (vault L22). At 24 h this $\sigma$ under-covers badly, and any claim there needs the
+  24 h value.
 
 ### 5. The forcing itself
 
@@ -248,7 +250,7 @@ about 1.5 micrometres, and the spacing of a double at a longitude of 281 degrees
 | Forcing and leeway uncertainty | 9 to 26 km | dominates everything |
 | Sphere against ellipsoid | about 600 m | systematic, independent of $\Delta t$ |
 | Euler truncation | 35 m | linear in $\Delta t$ |
-| Stochastic term | 16.0 km per component at the calibrated $\sigma$ = 54.4 | spread, grows as $\sqrt{t}$; stands for the forcing error above |
+| Stochastic term | 7.7 km per component at the calibrated $\sigma$ = 26.3 (3.2 km at 4 h, where it is matched) | spread, grows as $\sqrt{t}$; stands for the forcing error above |
 | Frozen $\cos\varphi$ | 0.21 m | linear in $\Delta t$ |
 | Floating point | micrometres | negligible |
 

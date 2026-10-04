@@ -9,7 +9,105 @@ default until now, every particle follows the same path and there is no probabil
 This document is how $\sigma$ was measured against real drifters, what came out, and what
 it means. The decision it supports is vault D028.
 
-> **The answer.** $\sigma$ = **54.4 m s⁻¹ᐟ²** (95 % CI 52.9–57.7). That is $\sigma^*$ = 53.6,
+> **The engine's value, since 4 Oct 2026: $\sigma$ = 26.3 m s⁻¹ᐟ²** (95 % CI 25.3–27.6),
+> matched at **4 h**, the end of the longest search. It is `CALIBRATED_SIGMA` in
+> `sar.model.position` and the default of `sar.pipeline.ensemble --sigma`. §0 is that
+> calibration. §1–§10 are the first one, at 24 h, kept as measured: it is where the method,
+> the twin experiment and the reasons for the change come from.
+
+## 0. The 4 h calibration (vault D028, amended 4 Oct 2026)
+
+**Why the horizon moved.** A cloud matched at $T$ is too wide before $T$ and too narrow
+after, because the real gap grows faster than $\sigma\sqrt t$ (§4). The helicopter searches
+about 1.0–3.7 h after the call (vault D027: a 30 min launch, up to 2.4 h of transit at
+125 kt, 45 min on scene). At the 24 h value, 54.4, the 90 % region held **99.1 %** of buoys at
+3 h, against the 90 % it claims: about four times the area the search needs. Matching at
+**4 h**, the end of the longest search, keeps the whole window on the slightly-too-wide side.
+
+**What was run.** The same method and the same 12,973 dev windows, with `--hour 4`:
+
+| Stage | Run | Result |
+|---|---|---|
+| Fit, on stage 1's existing rows | job 58833, 39 s | $\sigma_0$ = 25.6 (24.6–26.7); slide $\sigma_c$ = 4.19 (4.10–4.34); $\beta$ over 1–6 h = 1.91 |
+| Ladder, σ = 12, 15, 19, 22, 25, 28, 32, 40 at leads 1–6 h | array 58834, ~15 min per process | $\sigma^*$ = **25.98** (24.96–27.24) |
+| Calibrate | job 58846 | $\sigma = \sqrt{25.98^2 + 4.19^2}$ = **26.3** (25.3–27.6) |
+| Confirmation at 26.3, both tiers, 1–24 h | array 58847, ~10 min per process | **90.3 %** inside at 4 h (undrogued) |
+
+Coverage of the 90 % region on the ladder (undrogued):
+
+| σ | 1 h | 2 h | 3 h | **4 h** | 6 h |
+|---|---|---|---|---|---|
+| 22 | 98.1 % | 94.0 % | 89.1 % | 83.6 % | 73.7 % |
+| 25 | 98.6 % | 96.3 % | 92.7 % | **88.8 %** | 80.8 % |
+| 28 | 99.0 % | 97.5 % | 95.1 % | **92.3 %** | 86.1 % |
+| 32 | 99.1 % | 98.3 % | 96.9 % | 95.0 % | 90.7 % |
+
+**The confirmation, at exactly 26.3** (array 58847, 1,000 particles per window, both tiers;
+job `calibrate --confirm`, `h4/confirmation.json`). Inside the 90 % region:
+
+| | 1 h | 2 h | 3 h | **4 h** | 6 h | 12 h | 24 h |
+|---|---|---|---|---|---|---|---|
+| Undrogued (≈ 9,960 windows) | 98.8 % | 96.8 % | 93.8 % | **90.3 %** | 83.2 % | 68.1 % | 51.7 % |
+| Drogued (≈ 2,880 windows) | 98.6 % | 95.2 % | 89.7 % | 84.1 % | 74.6 % | 55.4 % | 37.5 % |
+| Median 90 % area | 36 km² | 72 | 108 | **144** | 216 | 435 | 880 |
+
+- **At 4 h, undrogued: 90.3 %** (95 % CI by group 88.8–91.5 %, 109 groups). Calibrated.
+- **Across the search window (1–3.7 h) it covers 91–99 %:** the safe side, as intended.
+- **After 4 h it under-covers fast:** 83 % at 6 h, 52 % at 24 h. Any map beyond the search
+  window needs a σ matched there.
+- **Shape at 4 h:** the 50, 68, 80, 90 and 95 % regions hold 57.9, 74.0, 83.3, 90.3 and
+  94.1 %. The core is too wide and the far tail a little thin, as at 24 h (§6).
+- **Drogued buoys are under-covered** (84 % at 4 h). They don't feel the person's leeway, so
+  the person cloud is aimed slightly wrong for them (below).
+- Beached particles: about 1 % at 4 h.
+
+**The gate at 4 h** (σ = 0 centre, stage 1, paired sign test over groups):
+
+| At 4 h | Model | Stays put | Persistence (GDP velocity) | Model beats stays put |
+|---|---|---|---|---|
+| Undrogued | 3.27 km | 3.64 km | 0.98 km | 81 of 109 groups, p = 2 × 10⁻⁷ |
+| Drogued | 3.82 km | 3.53 km | 0.92 km | 23 of 44, p = 0.44 (it does not) |
+
+Drogued buoys ride on a drogue 15 m down and don't feel a person's 2 % leeway, so the
+person model pushes them too far downwind, as at 24 h. Vault D025 (amended 4 Oct, awaiting
+co-sign) makes persistence a reported comparison and asks which tier R2b and R2c score on.
+
+**Persistence sees the next hour, but that is not why it wins**
+(`scripts/check_persistence_lookahead.py`, 12,436 windows with a past hour). GDP's `ve`, `vn`
+at $t_0$ are ≈ 0.14 × the backward hourly difference + 0.82 × the forward one. Persistence
+rebuilt from the backward difference alone, which a forecaster at $t_0$ has, misses by
+**1.20 km at 4 h against the model's 3.26 km**. A measured velocity at the datum is worth more
+than anything in the drift equation over a search's first hours.
+
+**What the 4 h value means.** $\sigma\sqrt t$ is 1.6 km per axis at 1 h, 2.7 km at 3 h and
+3.2 km at 4 h, against 5.7 km at 3 h for the 24 h value. Strata at 4 h: $\sigma_0$ = 22.2 where
+the current at the start is below 0.3 m/s, 30.0 at 0.3–1 m/s and **61.0 above 1 m/s**
+(44 windows), so the Gulf Stream jet still needs about 2.4× the pooled value (§4, L23).
+
+**Re-running it:**
+
+```
+D=/home/26p67/data/derived/sigma
+sbatch scripts/calibrate_sigma.sbatch fit --windows $D/windows --stage1 $D/stage1 \
+    --hour 4 --horizons 1 2 3 6 12 24 --beta-hours 1 6 --out $D/h4/fit.json
+SIGMA_PROCS=4 sbatch --array=0-11 --cpus-per-task=4 scripts/calibrate_sigma.sbatch ladder \
+    --windows $D/windows --sigmas 12 15 19 22 25 28 32 40 --leads 1 2 3 4 6 --out $D/h4/ladder
+sbatch scripts/calibrate_sigma.sbatch calibrate --windows $D/windows --hour 4 \
+    --fit $D/h4/fit.json --ladder $D/h4/ladder --out $D/h4/calibration.json
+SIGMA_PROCS=4 sbatch --array=0-11 --cpus-per-task=4 scripts/calibrate_sigma.sbatch ladder \
+    --windows $D/windows --sigmas 26.3 --tiers undrogued drogued --leads 1 2 3 4 6 12 24 \
+    --out $D/h4/confirm
+sbatch scripts/calibrate_sigma.sbatch calibrate --windows $D/windows --hour 4 \
+    --fit $D/h4/fit.json --confirm $D/h4/confirm --out $D/h4/confirmation.json
+```
+
+`fit.json` records its hour, and `calibrate` refuses a fit made at another one, because the
+crosswind slide inside it is matched at that hour. The twin experiment (§5) was not repeated:
+the method is unchanged, and it recovered planted values from 20 to 100.
+
+---
+
+> **The first calibration, at 24 h (2 Oct).** $\sigma$ = **54.4 m s⁻¹ᐟ²** (95 % CI 52.9–57.7). That is $\sigma^*$ = 53.6,
 > the value at which 90 % of undrogued dev buoys land inside the ensemble's 90 % region at
 > 24 h, plus a person's crosswind slide that no buoy can show. It spreads the cloud by
 > 5.7 km per axis at 3 h and 16.0 km at 24 h, and the 90 % region at 24 h covers about
@@ -424,8 +522,8 @@ enters the repo.
 
 ## 10. Limitations this adds
 
-- **$\sigma$ is right at 24 h only** ($\beta$ = 1.74): the cloud is too wide earlier and too
-  narrow later.
+- **$\sigma$ is right at one horizon only** ($\beta$ = 1.74 over 6–48 h, 1.91 over 1–6 h): the
+  cloud is too wide earlier and too narrow later. The engine's value is matched at 4 h (§0).
 - **A pooled $\sigma$ under-covers in currents above 1 m/s** by about a factor of two.
 - **The buoys measure the ocean's error, not a person's.** Undrogued buoys are a lower bound
   on a person's wind drift (D018), not a measurement of one. Only the crosswind slide is
