@@ -32,7 +32,7 @@
 #     sbatch scripts/calibrate_sigma.sbatch fit --windows $D/windows --stage1 $D/stage1 \
 #         --hour 4 --horizons 1 2 3 6 12 24 --beta-hours 1 6 --out $D/h4/fit.json
 #     SIGMA_PROCS=4 sbatch --array=0-11 --cpus-per-task=4 scripts/calibrate_sigma.sbatch \
-#         ladder --windows $D/windows --sigmas 12 15 19 24 30 38 48 --leads 1 2 3 4 6 \
+#         ladder --windows $D/windows --sigmas 12 15 19 22 25 28 32 40 --leads 1 2 3 4 6 \
 #         --out $D/h4/ladder
 #     sbatch scripts/calibrate_sigma.sbatch calibrate --windows $D/windows --hour 4 \
 #         --fit $D/h4/fit.json --ladder $D/h4/ladder --out $D/h4/calibration.json
