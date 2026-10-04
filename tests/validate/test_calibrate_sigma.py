@@ -156,3 +156,61 @@ class TestClusters:
                           "sep_persist": [5.0] * 4, "group": [1, 1, 1, 2]})
         g = cs.gate(p)
         assert g["stationary"]["groups"] == 2 and g["stationary"]["model_better_groups"] == 1
+
+
+class TestHorizon:
+    """--hour (D028's amendment, 4 Oct): sigma matched at a horizon other than 24 h."""
+
+    @pytest.fixture(scope="class")
+    def fitted(self, tmp_path_factory):
+        w = synthetic(days=4, per_day=20, sigma=50.0, seed=5)
+        w.table.loc[w.table.index % 2 == 0, "tier"] = "drogued"
+        rows, status = cs.stage1(w, cs.fixed(ConstantForcing(CURRENT, WIND)),
+                                 list(enumerate(w.batches())))
+        d = tmp_path_factory.mktemp("stage1")
+        rows.to_parquet(d / "rows-000.parquet", index=False)
+        status.to_parquet(d / "status-000.parquet", index=False)
+        return w, d, cs.fit(w, d, n_boot=50, hour=4, horizons=(2, 12), beta_hours=(1, 6))
+
+    def test_the_fit_records_its_hour_and_tables_it_with_the_others(self, fitted):
+        _, _, out = fitted
+        assert out["hour"] == 4
+        assert sorted(out["table_a"]["undrogued, alpha=0.02"]) == [2, 4, 12]
+
+    def test_sigma_0_and_the_gate_are_read_at_that_hour(self, fitted):
+        w, d, out = fitted
+        rows, _ = cs.load_stage1(w, d)
+        p = rows[rows["valid"] & (rows["hour"] == 4) & (rows["tier"] == "undrogued")
+                 & np.isclose(rows["alpha"], 0.02)]
+        gate = out["gate"]["undrogued, alpha=0.02"]["stationary"]
+        assert gate["median_model_km"] == pytest.approx(p["sep"].median() / 1e3)
+        head = out["table_a"]["undrogued, alpha=0.02"][4]
+        assert out["sigma_0"] == head["sigma_quantile"]["value"]
+
+    def test_the_slide_is_matched_at_that_hour_and_grows_as_root_t(self, fitted):
+        # A steady 6 m/s wind runs 6 t metres, so sigma_c = 0.0051 x 6 x sqrt(t).
+        _, _, out = fitted
+        expected = cs.CROSSWIND_SLIDE * WIND[0] * np.sqrt(4 * 3600.0)
+        assert out["sigma_c"]["crosswind_axis"]["value"] == pytest.approx(expected, rel=1e-3)
+
+    def test_calibrate_refuses_a_fit_made_at_another_hour(self, fitted, tmp_path):
+        w, _, _ = fitted
+        w.save(tmp_path / "windows")
+        (tmp_path / "fit.json").write_text('{"sigma_0": 50, "sigma_c": {}}')   # no hour: 24 h
+        with pytest.raises(SystemExit, match="fitted at 24 h"):
+            cs.main(["calibrate", "--windows", str(tmp_path / "windows"),
+                     "--fit", str(tmp_path / "fit.json"), "--hour", "4",
+                     "--out", str(tmp_path / "calibration.json")])
+
+    def test_sigma_star_reads_the_ladder_at_that_lead_only(self):
+        w = synthetic(days=1, per_day=10, sigma=0.0)
+        inside_4 = {10.0: [0.5] * 5 + [0.95] * 5, 40.0: [0.5] * 10, 160.0: [0.5] * 10}
+        inside_24 = {10.0: [0.95] * 10, 40.0: [0.5] * 5 + [0.95] * 5,  # never reaches 90 %
+                     160.0: [0.5] * 7 + [0.95] * 3}
+        rows = pd.DataFrame([{"w": k, "sigma": s, "lead": lead, "bandwidth": 1.0, "n": 100,
+                              "rank": r, "energy_m": 1.0}
+                             for lead, table in ((4, inside_4), (24, inside_24))
+                             for s, ranks in table.items() for k, r in enumerate(ranks)])
+        at_4 = cs.calibrate_sigma_star(rows, w, n_boot=20, hour=4)["sigma_star"]["value"]
+        assert at_4 == pytest.approx(10.0 * 4.0 ** 0.8)      # 0.9 is 4/5 of the way, in log
+        assert np.isnan(cs.calibrate_sigma_star(rows, w, n_boot=20, hour=24)["sigma_star"]["value"])

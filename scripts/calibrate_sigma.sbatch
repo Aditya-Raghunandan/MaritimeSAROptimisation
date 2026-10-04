@@ -26,6 +26,16 @@
 #         twin --windows $D/windows --out $D/twin
 #     sbatch scripts/calibrate_sigma.sbatch calibrate --windows $D/windows --fit $D/fit.json \
 #         --ladder $D/ladder --twin $D/twin --out $D/calibration.json
+#
+# At another horizon (D028's amendment, 4 Oct: 4 h), stage 1 is reused. fit, the ladder and
+# calibrate take the hour, and calibrate refuses a fit made at a different one:
+#     sbatch scripts/calibrate_sigma.sbatch fit --windows $D/windows --stage1 $D/stage1 \
+#         --hour 4 --horizons 1 2 3 6 12 24 --beta-hours 1 6 --out $D/h4/fit.json
+#     SIGMA_PROCS=4 sbatch --array=0-11 --cpus-per-task=4 scripts/calibrate_sigma.sbatch \
+#         ladder --windows $D/windows --sigmas 12 15 19 22 25 28 32 40 --leads 1 2 3 4 6 \
+#         --out $D/h4/ladder
+#     sbatch scripts/calibrate_sigma.sbatch calibrate --windows $D/windows --hour 4 \
+#         --fit $D/h4/fit.json --ladder $D/h4/ladder --out $D/h4/calibration.json
 
 set -euo pipefail
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1

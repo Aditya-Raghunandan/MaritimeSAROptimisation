@@ -11,7 +11,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sar.model.position import DEFAULT_SIGMA, INTEGRATION_STEP_SECONDS, calculate_position
+from sar.model.position import (CALIBRATED_SIGMA, CALIBRATION_HORIZON_H, DEFAULT_SIGMA,
+                                INTEGRATION_STEP_SECONDS, calculate_position)
 from sar.pipeline.forcing import ConstantForcing
 from sar.pipeline.gridded import GriddedForcing
 from sar.pipeline.track import _STEP_TOLERANCE, DriftPipeline
@@ -290,8 +291,9 @@ def add_run_arguments(parser) -> None:
                         help=f"step in seconds, required; D009 fixes {INTEGRATION_STEP_SECONDS:g}")
     parser.add_argument("--duration", type=parse_span, required=True,
                         help="how long to track, such as 48h, 90m or 3600")
-    parser.add_argument("--sigma", type=float, default=DEFAULT_SIGMA,
-                        help=f"D009's sigma in m/s^0.5, default {DEFAULT_SIGMA:g} (unmeasured)")
+    parser.add_argument("--sigma", type=float, default=CALIBRATED_SIGMA,
+                        help=f"D009's sigma in m/s^0.5, default {CALIBRATED_SIGMA:g}: measured at "
+                        f"{CALIBRATION_HORIZON_H} h (D028); 0 for one deterministic path")
     parser.add_argument("--seed", type=int, help="base seed; recorded either way")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--constant-current", nargs=2, type=float,

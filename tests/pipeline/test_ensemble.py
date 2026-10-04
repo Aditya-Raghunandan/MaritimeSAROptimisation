@@ -9,7 +9,7 @@ from scipy.stats import chi2_contingency
 
 import sar.pipeline.ensemble as ens
 from sar.model.grid import ProbabilityGrid, normalise
-from sar.model.position import EARTH_RADIUS_M
+from sar.model.position import CALIBRATED_SIGMA, EARTH_RADIUS_M
 from sar.pipeline.ensemble import (
     Ensemble,
     describe_run,
@@ -392,6 +392,12 @@ class TestCli:
         again = run_ensemble(**small_run(particles=20, forcing=ConstantForcing((1.8, 0.0)),
                                          seed=np.random.SeedSequence(run["seed_entropy"])))
         assert np.array_equal(again.lat, read_csv(path).lat)
+
+    def test_sigma_defaults_to_the_calibrated_value(self, tmp_path):
+        args = list(self.ARGS)
+        del args[args.index("--sigma"):args.index("--sigma") + 2]
+        run = json.loads(ens._cli([*args, "--out", str(tmp_path)]).with_suffix(".json").read_text())
+        assert run["pipeline"]["sigma"] == CALIBRATED_SIGMA == 26.3
 
     @pytest.mark.parametrize("missing", ["--lat", "--datum-sigma-km", "--timestep", "--particles"])
     def test_what_defines_a_run_is_required(self, tmp_path, missing):
