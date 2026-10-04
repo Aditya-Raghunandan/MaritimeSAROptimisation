@@ -18,9 +18,15 @@ DEGREES_PER_RADIAN = 180.0 / np.pi
 # A project limit, not a published one: 1 / cos(lat) is unusable nearer the pole than this.
 POLAR_LIMIT_DEG = 89.0
 
-# D009's sigma is unpinned until the Monte Carlo ticket measures it, so the step is
-# deterministic unless a caller says otherwise.
+# The step itself is deterministic unless a caller says otherwise.
 DEFAULT_SIGMA = 0.0
+
+# The measured sigma (#89, vault D028 as amended 4 Oct 2026): the real buoy lands inside the
+# ensemble's 90 % region 90 % of the time at 4 h on the undrogued dev drifters, the end of the
+# longest search (D027), plus a person's crosswind slide. 95 % CI 25.3-27.6. Matched at 4 h
+# only: wider than the real error before it, narrower after (docs/sigma-calibration.md).
+CALIBRATED_SIGMA = 26.3
+CALIBRATION_HORIZON_H = 4
 
 
 def as_position(value, name: str = "position") -> np.ndarray:
