@@ -28,6 +28,13 @@ Each stage runs on a compute node as one task of a Slurm array over the start da
     python -m sar.validate.calibrate_sigma ladder ... --sigmas 25 35 50 70 100
     python -m sar.validate.calibrate_sigma twin ... ;  ... calibrate ...
 
+THE HORIZON. sigma is matched at one hour T, because the real gap grows faster than
+sigma * sqrt(t) and one sigma is right at one time only. P1 chose 24 h on 1 Oct; D028's
+amendment of 4 Oct moved the engine to 4 h, the end of the longest search. `--hour` on fit,
+twin and calibrate picks T (default 24), so both calibrations re-run from the same code.
+fit records the hour it used, and calibrate refuses a fit made at another hour, because
+the crosswind slide in it is matched at that hour.
+
 docs/sigma-calibration.md sets out the maths, the decisions and the results.
 """
 
@@ -477,11 +484,17 @@ def load_stage1(windows: Windows, stage1_dir) -> tuple[pd.DataFrame, pd.DataFram
     return rows, st
 
 
-def fit(windows: Windows, stage1_dir, n_boot=N_BOOT) -> dict:
-    """Everything stage 1 says: Table A, the gate, sigma by horizon, beta, sigma_0."""
+def fit(windows: Windows, stage1_dir, n_boot=N_BOOT, hour: int = CALIBRATION_HOUR,
+        horizons=HORIZONS_H, beta_hours=BETA_HOURS) -> dict:
+    """Everything stage 1 says: Table A, the gate, sigma by horizon, beta, sigma_0.
+
+    The gate, the strata, sigma_0 and the crosswind slide are all at `hour`; Table A covers
+    `horizons` and `hour` together.
+    """
     rows, status = load_stage1(windows, stage1_dir)
     valid = rows[rows["valid"]]
-    out = {"windows": {"total": int(len(windows)),
+    horizons = tuple(sorted(set(int(h) for h in horizons) | {int(hour)}))
+    out = {"hour": int(hour), "windows": {"total": int(len(windows)),
                        "run": int((status["status"] == "ok").sum()),
                        "skipped": status.loc[status["status"] != "ok", "status"]
                        .value_counts().to_dict()},
@@ -491,32 +504,32 @@ def fit(windows: Windows, stage1_dir, n_boot=N_BOOT) -> dict:
             key = f"{tier}, alpha={alpha:g}"
             sub = valid[(valid["tier"] == tier) & np.isclose(valid["alpha"], alpha)]
             out["table_a"][key] = {}
-            for hour in HORIZONS_H:
-                p = sub[sub["hour"] == hour]
+            for h in horizons:
+                p = sub[sub["hour"] == h]
                 labels = {"group": p["group"].to_numpy(), "month": p["month"].to_numpy()}
-                s = with_ci(lambda q, w: horizon_stats(q, hour, w), p, labels, n_boot)
+                s = with_ci(lambda q, w: horizon_stats(q, h, w), p, labels, n_boot)
                 s["windows"], s["groups"] = int(len(p)), int(p["group"].nunique())
                 s["K_m2_s"] = {"value": s["sigma_debiased"]["value"] ** 2 / 2}
-                out["table_a"][key][hour] = s
+                out["table_a"][key][h] = s
             every = sub
             labels = {"group": every.groupby("w")["group"].first(),
                       "month": every.groupby("w")["month"].first()}
             out["beta"][key] = beta_fit(rows[(rows["tier"] == tier)
                                              & np.isclose(rows["alpha"], alpha)], labels,
-                                        n_boot=n_boot)
-            p24 = sub[sub["hour"] == CALIBRATION_HOUR]
-            out["gate"][key] = gate(p24)
+                                        hours=tuple(beta_hours), n_boot=n_boot)
+            at_t = sub[sub["hour"] == hour]
+            out["gate"][key] = gate(at_t)
             out["strata"][key] = {}
-            for name, p in p24.groupby("stratum"):
+            for name, p in at_t.groupby("stratum"):
                 labels = {"group": p["group"].to_numpy(), "month": p["month"].to_numpy()}
-                s = with_ci(lambda q, w: horizon_stats(q, CALIBRATION_HOUR, w), p, labels,
+                s = with_ci(lambda q, w: horizon_stats(q, hour, w), p, labels,
                             n_boot)
                 out["strata"][key][name] = {
                     "windows": int(len(p)),
                     **{k: s[k] for k in ("sigma_quantile", "sigma_debiased", "median_sep_km")}}
-    head = out["table_a"][f"undrogued, alpha={LEEWAY_COEFFICIENT:g}"][CALIBRATION_HOUR]
+    head = out["table_a"][f"undrogued, alpha={LEEWAY_COEFFICIENT:g}"][hour]
     out["sigma_0"] = head["sigma_quantile"]["value"]
-    out["sigma_c"] = crosswind_sigma(valid, n_boot)
+    out["sigma_c"] = crosswind_sigma(valid, n_boot, hour)
     return out
 
 
@@ -580,17 +593,18 @@ def coverage_table(ladder_rows: pd.DataFrame, windows: Windows, lead=CALIBRATION
         group=tab["group"].to_numpy(), month=tab["month"].to_numpy(), tier=tab["tier"].to_numpy())
 
 
-def calibrate_sigma_star(ladder_rows, windows, tier="undrogued", n_boot=N_BOOT) -> dict:
-    """sigma* where coverage of the 90 % region is 90 % at 24 h, with clustered CIs."""
-    sigmas, tab = coverage_table(ladder_rows, windows)
+def calibrate_sigma_star(ladder_rows, windows, tier="undrogued", n_boot=N_BOOT,
+                         hour: int = CALIBRATION_HOUR) -> dict:
+    """sigma* where coverage of the 90 % region is 90 % at `hour`, with clustered CIs."""
+    sigmas, tab = coverage_table(ladder_rows, windows, lead=hour)
     tab = tab[tab["tier"] == tier]
     x = tab[list(sigmas)].to_numpy()
     cover = x.mean(axis=0)
     point = crossing(sigmas, cover, LEVEL)
-    es = (ladder_rows[(ladder_rows["lead"] == CALIBRATION_HOUR)
+    es = (ladder_rows[(ladder_rows["lead"] == hour)
                       & np.isclose(ladder_rows["bandwidth"], 1.0)]
           .groupby("sigma")["energy_m"].mean())
-    out = {"sigmas": sigmas.tolist(), "coverage": cover.round(4).tolist(),
+    out = {"hour": int(hour), "sigmas": sigmas.tolist(), "coverage": cover.round(4).tolist(),
            "windows": int(len(tab)), "sigma_star": {"value": point},
            "energy_score_m": es.round(1).to_dict(),
            "sigma_energy_optimum": parabola_minimum(es.index.to_numpy(), es.to_numpy())}
@@ -643,12 +657,15 @@ def _cmd_stage1(args) -> None:
 
 
 def _cmd_fit(args) -> None:
-    result = fit(_load_windows(args), args.stage1, args.boot)
+    result = fit(_load_windows(args), args.stage1, args.boot, args.hour, tuple(args.horizons),
+                 tuple(args.beta_hours))
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(result, indent=2, default=float))
-    head = result["table_a"][f"undrogued, alpha={LEEWAY_COEFFICIENT:g}"][CALIBRATION_HOUR]
-    print(json.dumps({"sigma_0": result["sigma_0"], "beta": result["beta"],
-                      "gate": result["gate"], "undrogued_24h": head}, indent=1, default=float))
+    head = result["table_a"][f"undrogued, alpha={LEEWAY_COEFFICIENT:g}"][args.hour]
+    print(json.dumps({"hour": args.hour, "sigma_0": result["sigma_0"],
+                      "sigma_c": result["sigma_c"], "beta": result["beta"],
+                      "gate": result["gate"], f"undrogued_{args.hour}h": head},
+                     indent=1, default=float))
 
 
 def _cmd_ladder(args) -> None:
@@ -708,7 +725,7 @@ def _cmd_twin(args) -> None:
                                          index=False)
         sigmas = [sigma_true * k for k in LADDER]
         rows_l = ladder(w, gridded(args.data), batches, sigmas, args.particles, args.seed + 1,
-                        (CALIBRATION_HOUR,), truth=truth, tag=name)
+                        (args.hour,), truth=truth, tag=name)
         rows_l["w"] = keep[rows_l["w"].to_numpy()]
         rows_l.to_parquet(out / f"twin-ladder-{name}-{args.task:03d}.parquet", index=False)
     print(json.dumps({"task": args.task, "batches": len(batches), "cases": len(cases),
@@ -720,22 +737,23 @@ def _read_all(directory, pattern) -> pd.DataFrame:
     return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True) if files else None
 
 
-def twin_summary(windows: Windows, twin_dir, n_boot=N_BOOT) -> dict:
+def twin_summary(windows: Windows, twin_dir, n_boot=N_BOOT,
+                 hour: int = CALIBRATION_HOUR) -> dict:
     """What the twin gave back for each planted sigma: stage 1's formula and stage 2's."""
     out = {}
     s1 = _read_all(twin_dir, "twin-stage1-*.parquet")
     lad = _read_all(twin_dir, "twin-ladder-*.parquet")
     tab = windows.table
     for case, rows in s1.groupby("case"):
-        p = rows[rows["valid"] & (rows["hour"] == CALIBRATION_HOUR)]
+        p = rows[rows["valid"] & (rows["hour"] == hour)]
         p = p.assign(group=tab["group"].to_numpy()[p["w"].to_numpy()])
-        s = with_ci(lambda q, w: horizon_stats(q, CALIBRATION_HOUR, w), p,
+        s = with_ci(lambda q, w: horizon_stats(q, hour, w), p,
                     {"group": p["group"].to_numpy()}, n_boot)
         r = rows.assign(group=tab["group"].to_numpy()[rows["w"].to_numpy()],
                         month=tab["month"].to_numpy()[rows["w"].to_numpy()])
         labels = {"group": r.groupby("w")["group"].first()}
         lc = lad[lad["tag"] == case]
-        star = calibrate_sigma_star(lc, windows, n_boot=n_boot)
+        star = calibrate_sigma_star(lc, windows, n_boot=n_boot, hour=hour)
         out[case] = {"windows": int(len(p)),
                      "stage1_sigma_quantile": s["sigma_quantile"],
                      "stage1_sigma_debiased": s["sigma_debiased"],
@@ -749,10 +767,17 @@ def twin_summary(windows: Windows, twin_dir, n_boot=N_BOOT) -> dict:
 def _cmd_calibrate(args) -> None:
     w = _load_windows(args)
     fit_result = json.loads(Path(args.fit).read_text())
-    out = {"fit_sigma_0": fit_result["sigma_0"], "sigma_c": fit_result["sigma_c"]}
+    # A fit written before --hour existed was made at 24 h.
+    fit_hour = int(fit_result.get("hour", 24))
+    if fit_hour != args.hour:
+        raise SystemExit(f"{args.fit} was fitted at {fit_hour} h, but calibrate is at "
+                         f"{args.hour} h: its crosswind slide is matched at {fit_hour} h. "
+                         f"Re-run fit with --hour {args.hour}.")
+    out = {"hour": args.hour, "fit_sigma_0": fit_result["sigma_0"],
+           "sigma_c": fit_result["sigma_c"]}
     if args.ladder:
         lad = _read_all(args.ladder, "ladder-*.parquet")
-        out["ladder"] = calibrate_sigma_star(lad, w, n_boot=args.boot)
+        out["ladder"] = calibrate_sigma_star(lad, w, n_boot=args.boot, hour=args.hour)
         star = out["ladder"]["sigma_star"]
         sc = fit_result["sigma_c"]["crosswind_axis"]
         out["sigma_final"] = {
@@ -761,14 +786,14 @@ def _cmd_calibrate(args) -> None:
                      float(np.hypot(star["ci95"][1], sc["ci95"][1]))],
             "rule": "sqrt(sigma*^2 + sigma_c^2), sigma_c matched on the crosswind axis"}
     if args.twin:
-        out["twin"] = twin_summary(w, args.twin, args.boot)
+        out["twin"] = twin_summary(w, args.twin, args.boot, args.hour)
     if args.confirm:
         conf = _read_all(args.confirm, "ladder-*.parquet")
         out["confirm"] = {"sigma": float(conf["sigma"].iloc[0]),
                           "reliability": reliability(conf, w)}
     if args.check:
         chk = _read_all(args.check, "ladder-*.parquet")
-        q = chk[chk["lead"] == CALIBRATION_HOUR]
+        q = chk[chk["lead"] == args.hour]
         out["check"] = {f"n={int(n)}, bandwidth={bw:g}": {
             "windows": int(len(g)), "coverage90": float(np.mean(g["rank"] <= LEVEL)),
             "coverage50": float(np.mean(g["rank"] <= 0.5))}
@@ -794,6 +819,10 @@ def main(argv=None) -> None:
             sp.add_argument("--tasks", type=int, default=1)
         sp.add_argument("--out", required=True)
 
+    def horizon(sp):
+        sp.add_argument("--hour", type=int, default=CALIBRATION_HOUR,
+                        help="the horizon sigma is matched at, hours (P1: 24; D028 amended: 4)")
+
     s1 = sub.add_parser("stage1", help="sigma = 0 runs: the gap per hour, alpha 0.02 and 0")
     common(s1)
     s1.set_defaults(func=_cmd_stage1)
@@ -802,6 +831,11 @@ def main(argv=None) -> None:
     common(f, run=False)
     f.add_argument("--stage1", required=True)
     f.add_argument("--boot", type=int, default=N_BOOT)
+    horizon(f)
+    f.add_argument("--horizons", type=int, nargs="+", default=list(HORIZONS_H),
+                   help="Table A's hours; --hour is always added")
+    f.add_argument("--beta-hours", type=int, nargs=2, default=list(BETA_HOURS),
+                   metavar=("FROM", "TO"), help="the hours beta is fitted over")
     f.set_defaults(func=_cmd_fit)
 
     lad = sub.add_parser("ladder", help="ensembles at each sigma, scored on the 90 % region")
@@ -823,6 +857,7 @@ def main(argv=None) -> None:
     tw.add_argument("--particles", type=int, default=1000)
     tw.add_argument("--days", type=int, default=150)
     tw.add_argument("--seed", type=int, default=20261003)
+    horizon(tw)
     tw.set_defaults(func=_cmd_twin)
 
     c = sub.add_parser("calibrate", help="sigma*, sigma_final, the twin and the checks")
@@ -833,6 +868,7 @@ def main(argv=None) -> None:
     c.add_argument("--confirm")
     c.add_argument("--check")
     c.add_argument("--boot", type=int, default=N_BOOT)
+    horizon(c)
     c.set_defaults(func=_cmd_calibrate)
 
     args = p.parse_args(argv)
