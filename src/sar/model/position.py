@@ -43,13 +43,15 @@ DEFAULT_SIGMA = 0.0
 CALIBRATED_SIGMA = 26.3
 CALIBRATION_HORIZON_H = 4
 
-# The random velocity (D030). Its memory is Taylor's (1921) T_L fitted to the undrogued dev
-# drifters' 90 % spread at 1-48 h (scripts/fit_random_velocity.py, 4 Oct 2026): 25.7 h,
-# about one inertial period at 26.5 N. sigma_u is matched in the engine at 4 h, as sigma
-# was (D028), plus a person's crosswind slide; the fit alone gave 0.217 m/s per axis.
+# The random velocity (vault D030, ADR005). Its memory is Taylor's (1921) T_L fitted to the
+# undrogued dev drifters' 90 % spread at 1-48 h (scripts/fit_random_velocity.py, 4 Oct 2026):
+# 25.7 h, about one inertial period at 26.5 N. sigma_u is matched in the engine at 4 h, as
+# sigma was (D028): the ladder (array 58974) puts 90 % of the buoys inside the 90 % region at
+# sigma_u* = 0.223 m/s (95 % CI 0.215-0.233), and a person's crosswind slide adds 0.035 m/s
+# in quadrature. 95 % CI 0.217-0.236; HYCOM's own velocity error is 0.228 per axis.
 DEFAULT_SIGMA_U = 0.0
 MEMORY_TIME_S = 25.7 * 3600.0
-CALIBRATED_SIGMA_U = 0.217  # provisional, the fit; the engine ladder replaces it
+CALIBRATED_SIGMA_U = 0.226
 
 
 def as_position(value, name: str = "position") -> np.ndarray:
