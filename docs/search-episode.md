@@ -86,6 +86,27 @@ A **flight record** for `replay_policy` is JSON, in one of two forms:
 
 It replays headings, not positions, because a ground path already contains the current.
 
+## Score the whole scenario table
+
+`scripts/score_scenarios.py` flies the Expanding Square and the Sector Search over every row,
+at each arrival, under the random velocity (`rv`) and the old random walk (`rw`) on the same
+seeds, and writes one JSON line per flight to `S##.jsonl`:
+
+- **how much:** `pos`;
+- **how fast:** `removed_per_step` (the reward, minute by minute), `pos_15m`, `pos_30m`,
+  `expected_ttd_s`;
+- **the real buoy:** `found`, `found_s`, `closest_m`.
+
+```bash
+python scripts/score_scenarios.py score --csv scenarios.csv --forcing-dir DATA \
+    --rows 1-55 --noise rv rw --arrival-h 1 2 3 --out DIR
+python scripts/score_scenarios.py summary DIR     # means, and rv minus rw paired by row
+sbatch --array=1-14 scripts/score_scenarios.sbatch   # the cluster: four rows per node
+```
+
+One row, both noises and three arrivals (12 flights) takes about 4 s on the laptop at
+N = 10⁴.
+
 ## The cloud every minute
 
 The scenario runs save every 5 minutes. `search_window` runs the scenario again **at its own
