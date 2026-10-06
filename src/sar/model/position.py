@@ -1,4 +1,19 @@
-"""position.py: one Euler-Maruyama step of D009, x_{n+1} = x_n + v_d dt + sigma sqrt(dt) Z."""
+"""position.py: one Euler-Maruyama step of D009, x_{n+1} = x_n + v_d dt + sigma sqrt(dt) Z.
+
+Two random terms live here, and a run uses one of them (D030):
+
+    random walk      a fresh push of sigma sqrt(dt) every step (D009, D028). The cloud's
+                     spread grows as sqrt(t).
+    random velocity  each particle carries a velocity error u that forgets itself over T_L,
+                     a first-order Markov ("random flight") process (Taylor 1921; Griffa
+                     1996). x moves by (v_d + u) dt, and u <- a u + sqrt(1 - a^2) sigma_u Z
+                     with a = exp(-dt / T_L). The spread grows as t for hours, then as
+                     sqrt(t).
+
+The dev drifters say the second (vault D030): their spread at 1-48 h fits it to 2 %, where
+one random-walk sigma is off by 50 %, and sigma_u matches HYCOM's measured velocity error.
+The model stays three terms (D002): u is eta, with memory.
+"""
 
 from __future__ import annotations
 
@@ -28,6 +43,14 @@ DEFAULT_SIGMA = 0.0
 CALIBRATED_SIGMA = 26.3
 CALIBRATION_HORIZON_H = 4
 
+# The random velocity (D030). Its memory is Taylor's (1921) T_L fitted to the undrogued dev
+# drifters' 90 % spread at 1-48 h (scripts/fit_random_velocity.py, 4 Oct 2026): 25.7 h,
+# about one inertial period at 26.5 N. sigma_u is matched in the engine at 4 h, as sigma
+# was (D028), plus a person's crosswind slide; the fit alone gave 0.217 m/s per axis.
+DEFAULT_SIGMA_U = 0.0
+MEMORY_TIME_S = 25.7 * 3600.0
+CALIBRATED_SIGMA_U = 0.217  # provisional, the fit; the engine ladder replaces it
+
 
 def as_position(value, name: str = "position") -> np.ndarray:
     """One [lat, lon] pair in degrees, or a stack of them, as a float array."""
@@ -56,6 +79,53 @@ def random_displacement(shape, timestep: float, sigma: float = DEFAULT_SIGMA,
         raise ValueError(f"sigma must not be negative, got {sigma}")
     rng = np.random.default_rng(rng)
     return sigma * np.sqrt(abs(float(timestep))) * rng.standard_normal(shape)
+
+
+def velocity_memory(timestep: float, memory_time_s: float = MEMORY_TIME_S) -> float:
+    """How much of a velocity error survives one step: exp(-dt / T_L)."""
+    timestep, memory_time_s = float(timestep), float(memory_time_s)
+    if not np.isfinite(memory_time_s) or memory_time_s <= 0.0:
+        raise ValueError(f"the memory time must be a positive number of seconds, "
+                         f"got {memory_time_s}")
+    return float(np.exp(-abs(timestep) / memory_time_s))
+
+
+def _check_sigma_u(sigma_u: float) -> float:
+    sigma_u = float(sigma_u)
+    if not np.isfinite(sigma_u) or sigma_u < 0.0:
+        raise ValueError(f"sigma_u must be a non-negative speed in m/s, got {sigma_u}")
+    return sigma_u
+
+
+def start_velocity_error(shape, sigma_u: float = DEFAULT_SIGMA_U, rng=None) -> np.ndarray:
+    """Each particle's velocity error at the start, [east, north] m/s, N(0, sigma_u^2) per axis.
+
+    The process's own steady state, so a cloud released from one point (D026) spreads in a
+    straight line from the first step, as the drifters do. Starting it at zero would grow the
+    cloud too slowly through exactly the hours a search happens in. Zeros when sigma_u is 0.
+    """
+    sigma_u = _check_sigma_u(sigma_u)
+    if sigma_u == 0.0:
+        return np.zeros(shape)
+    return sigma_u * np.random.default_rng(rng).standard_normal(shape)
+
+
+def evolve_velocity_error(velocity_error, timestep: float = INTEGRATION_STEP_SECONDS,
+                          sigma_u: float = DEFAULT_SIGMA_U,
+                          memory_time_s: float = MEMORY_TIME_S, rng=None) -> np.ndarray:
+    """The velocity error one step later: a u + sqrt(1 - a^2) sigma_u Z, a = exp(-dt / T_L).
+
+    Exact for the Ornstein-Uhlenbeck process at any step, so the variance stays sigma_u^2
+    rather than drifting with dt. At 60 s and T_L = 25.7 h, a = 0.99935 and the fresh part
+    is 0.036 sigma_u.
+    """
+    sigma_u = _check_sigma_u(sigma_u)
+    a = velocity_memory(timestep, memory_time_s)
+    u = np.asarray(velocity_error, dtype=float)
+    if sigma_u == 0.0:
+        return a * u
+    noise = np.random.default_rng(rng).standard_normal(u.shape)
+    return a * u + np.sqrt(1.0 - a * a) * sigma_u * noise
 
 
 def calculate_position(position, drift, timestep: float = INTEGRATION_STEP_SECONDS,
