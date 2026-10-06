@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 
 from sar.model.drift import LEEWAY_COEFFICIENT
-from sar.model.position import CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H
+from sar.model.position import CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H, DEFAULT_SIGMA
 from sar.pipeline.ensemble import Ensemble, run_ensemble, synthetic_cloud
 from sar.pipeline.gridded import GriddedForcing
 from sar.search.datum import marker_track
@@ -103,16 +103,17 @@ def drift_bearing(forcing, lat: float, lon: float, time,
 
 def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
                   arrival_s: float, sigma_u: float = CALIBRATED_SIGMA_U,
-                  steps: int = STEPS) -> SearchSetup:
+                  steps: int = STEPS, sigma: float = DEFAULT_SIGMA) -> SearchSetup:
     """A scenario's cloud through the search window, every minute, and its marker.
 
     The scenario's own run again (one start point, D026; its seed), kept at every step and
     sliced to the steps + 1 frames from arrival. Memory is the whole run at every step:
-    39 MB at 10^4 particles for 4 h, 386 MB at 10^5.
+    39 MB at 10^4 particles for 4 h, 386 MB at 10^5. `sigma` with sigma_u = 0 is the old
+    random walk (D028), for comparing the two noise models on the same seeds.
     """
     a = check_arrival(arrival_s, steps)
     run = run_ensemble(forcing, particles, start, lat, lon, (a + steps) * STEP_S, STEP_S,
-                       datum_sigma_km=0.0, seed=seed, sigma_u=sigma_u)
+                       datum_sigma_km=0.0, seed=seed, sigma=sigma, sigma_u=sigma_u)
     cut = slice(a, a + steps + 1)
     window = Ensemble(run.times[cut], run.lat[cut], run.lon[cut], run.weight, run.beached[cut])
     datum = centroid(window.lat[0], window.lon[0], window.weight)
@@ -145,7 +146,8 @@ def truth_track(row, arrival_s: float) -> MarkerTrack:
 
 
 def scenario_search(row, forcing, arrival_s: float, particles: int,
-                    sigma_u: float = CALIBRATED_SIGMA_U, steps: int = STEPS) -> SearchSetup:
+                    sigma_u: float = CALIBRATED_SIGMA_U, steps: int = STEPS,
+                    sigma: float = DEFAULT_SIGMA) -> SearchSetup:
     """A row of the scenario table, ready to search: cloud, marker, and the buoy as target.
 
     `forcing` is a backend, or a data root holding raw/hycom_* and raw/era5_*.
@@ -156,7 +158,7 @@ def scenario_search(row, forcing, arrival_s: float, particles: int,
         end = start + np.timedelta64(int((a + steps) * STEP_S), "s")
         forcing = GriddedForcing.from_dir(forcing, start, end)
     setup = search_window(forcing, start, float(row["lat"]), float(row["lon"]),
-                          int(row["seed"]), particles, arrival_s, sigma_u, steps)
+                          int(row["seed"]), particles, arrival_s, sigma_u, steps, sigma)
     return replace(setup, target=truth_track(row, setup.arrival_s))
 
 

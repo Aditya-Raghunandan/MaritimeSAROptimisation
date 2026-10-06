@@ -72,6 +72,19 @@ class TestSearchWindow:
         # current + 2 % of the wind: (1.1, 0.54).
         assert setup.drift_bearing_deg == pytest.approx(np.degrees(np.arctan2(1.1, 0.54)))
 
+    def test_the_old_random_walk_is_the_5_minute_run_too(self):
+        # sigma with sigma_u = 0 rebuilds a D028 run, so both noise models share the seeds.
+        setup = search_window(FORCING, START, LAT, LON, 7, 300, 3600.0, sigma_u=0.0,
+                              sigma=26.3)
+        five = run_ensemble(FORCING, 300, START, LAT, LON, (60 + 45) * 60.0, STEP_S,
+                            datum_sigma_km=0.0, seed=7, save_every=300.0, sigma=26.3)
+        assert np.array_equal(setup.window.lat[::5], five.lat[slice(12, 22)])
+        assert np.array_equal(setup.window.lon[::5], five.lon[slice(12, 22)])
+
+    def test_both_random_terms_at_once_is_refused(self):
+        with pytest.raises(ValueError):
+            search_window(FORCING, START, LAT, LON, 7, 10, 0.0, sigma_u=0.226, sigma=26.3)
+
     def test_it_searches(self):
         setup = search_window(FORCING, START, LAT, LON, 4, 2000, 3600.0)
         m = run(pattern_policy(expanding_square(SWEEP_WIDTH_M, setup.drift_bearing_deg)),
