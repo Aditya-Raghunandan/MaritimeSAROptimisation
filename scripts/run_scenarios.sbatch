@@ -28,7 +28,7 @@ DATA="${SAR_DATA:-/home/26p67/data}"
 CSV="${CSV:-$DATA/derived/scenarios/scenarios.csv}"
 N="${N:-10000}"                  # particles
 SAVE="${SAVE:-5m}"               # how often the cloud is written
-DURATION="${DURATION:-4h}"       # sigma is matched at 4 h; the cloud is too narrow after it
+DURATION="${DURATION:-4h}"       # the search is done by 3.7 h; the cloud holds ~90 % to 24 h (ADR005)
 SIGMA_U="${SIGMA_U:-}"           # empty: the engine's default, CALIBRATED_SIGMA_U (D030)
 SIGMA="${SIGMA:-}"               # set only to run the old random walk (D028)
 if [ -n "$SIGMA" ]; then NOISE=(--sigma "$SIGMA"); elif [ -n "$SIGMA_U" ]; then NOISE=(--sigma-u "$SIGMA_U"); else NOISE=(); fi

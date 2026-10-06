@@ -13,6 +13,7 @@ renumbered once merged — a number that has been cited somewhere is a permanent
 | [ADR001](ADR001.md) | Dependency management tooling — `pip` and `venv` for Python, `npm` for the frontend | Decided, amended (the original `uv` choice is withdrawn; the cluster has no `uv`) |
 | [ADR002](ADR002.md) | Probability map interface — three grids not one; box anchored at arrival; cell size a required parameter; binning at N = 10⁶; coverage swept on the particles; cos φ recomputed per particle per step | **Proposed** — six rows await agreement from the search half |
 | [ADR003](ADR003.md) | Search platform, sweep width and the doctrinal patterns — W = 0.1 NM, definite-range detection, 90 kt search, 125 kt transit, 30 min launch; Expanding Square and Sector Search flown relative to a current-drifting datum marker, all cited to the USCG Addendum; amended for the Parallel Track and Trackline laid along the predicted drift (#75) | **Decided** on the build side, awaiting the search half's co-sign |
+| [ADR005](ADR005.md) | The random term has memory — each particle carries a velocity error that forgets itself over T_L = 25.7 h (a random flight, Taylor 1921), in place of a fresh random-walk push every minute; σ_u matched at 4 h; the random walk kept bit for bit behind `--sigma` | **Decided** (D030), agreed by the drift half 6 Oct |
 
 **These numbers are not the vault's D-numbers.** The project vault keeps its own decision series,
 `decisions/Dnnn`, covering decisions that are not about code — the case study region, the study
