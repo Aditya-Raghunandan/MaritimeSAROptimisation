@@ -4,19 +4,24 @@ The episode (`sar.search.episode`) needs the cloud every 60 s through the 45-min
 the datum marker's track, and, to score "found", the real buoy. This builds all three.
 
 THE CLOUD EVERY MINUTE, FROM THE SAME SEED (ADR004 row 4). A scenario run saves the cloud
-every 5 minutes (scripts/run_scenarios.sbatch), which is too seldom to sweep: between
-snapshots the engine gave each particle five random pushes of about 204 m (sigma = 26.3,
-sigma x sqrt(60 s)), and a straight line between snapshots misses the particle by about
-228 m at the midpoint, 2.5 times the 92.6 m half-strip. So `search_window` runs the
-scenario again with the same seed and keeps every step of the window. `run_ensemble` draws
-its pushes once per step whether or not the step is saved, so this is the same cloud, bit
-for bit, only seen more often.
+every 5 minutes (scripts/run_scenarios.sbatch). `search_window` runs the scenario again with
+the same seed and keeps every step of the window. `run_ensemble` draws its random numbers
+once per step whether or not the step is saved, so this is the same cloud, bit for bit,
+only seen more often: exact, and about 2 s at 10^4 particles.
+
+Under the old random walk (sigma = 26.3) this was necessary: a straight line between
+5-minute snapshots missed a particle by ~222 m, 2.4 times the 92.6 m half-strip. Under the
+random velocity (D030, ADR005), a particle's velocity error barely changes in 5 minutes, and
+the same straight line misses by under 1 m (measured 6 Oct, steady forcing). So 5-minute
+snapshots are now close enough to sweep between too; re-running stays because it is exact.
 
 THE COMMON DATUM (D004). The marker is dropped at the cloud's centroid at arrival, the same
 point for every searcher, and drifts with the current alone (`sar.search.datum`).
 
 ARRIVAL IS A CHOICE, NOT A FLIGHT (ADR004 row 5). It is given in seconds after the call, a
-whole number of minutes, and the window must end by 4 h, where sigma is matched (D028).
+whole number of minutes, and the window must end by 4 h, just after the longest search
+(D027). Since D030 the cloud itself is calibrated to 24 h, so this is a guard on the
+scenario, not a limit of the cloud.
 
 STEADY CLOUDS. `steady_search` is a synthetic cloud carried by a uniform current, with its
 marker, for tests and the CLI.
@@ -31,7 +36,7 @@ import numpy as np
 import pandas as pd
 
 from sar.model.drift import LEEWAY_COEFFICIENT
-from sar.model.position import CALIBRATED_SIGMA, CALIBRATION_HORIZON_H
+from sar.model.position import CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H
 from sar.pipeline.ensemble import Ensemble, run_ensemble, synthetic_cloud
 from sar.pipeline.gridded import GriddedForcing
 from sar.search.datum import marker_track
@@ -40,7 +45,7 @@ from sar.search.patterns import MarkerTrack
 from sar.search.platform import STEP_S
 from sar.utils.geo import offset_position, to_store_longitude
 
-# The window must end by the horizon sigma is matched at (D028).
+# The window must end by 4 h, just after the longest search (D027).
 HORIZON_S = CALIBRATION_HORIZON_H * 3600.0
 
 # The scenario table's truth: the buoy every hour to 6 h (scripts/pick_scenario_buoys.py).
@@ -71,7 +76,7 @@ def check_arrival(arrival_s, steps: int = STEPS, horizon_s: float = HORIZON_S) -
     if (whole + steps) * STEP_S > horizon_s + 1e-6:
         latest = (horizon_s - steps * STEP_S) / 60.0
         raise ValueError(f"arrival at {arrival_s / 60:g} min ends the window past "
-                         f"{horizon_s / 3600:g} h, where sigma is matched (D028); arrive by "
+                         f"{horizon_s / 3600:g} h, after the longest search (D027); arrive by "
                          f"{latest:g} min")
     return int(whole)
 
@@ -97,7 +102,7 @@ def drift_bearing(forcing, lat: float, lon: float, time,
 
 
 def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
-                  arrival_s: float, sigma: float = CALIBRATED_SIGMA,
+                  arrival_s: float, sigma_u: float = CALIBRATED_SIGMA_U,
                   steps: int = STEPS) -> SearchSetup:
     """A scenario's cloud through the search window, every minute, and its marker.
 
@@ -107,7 +112,7 @@ def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
     """
     a = check_arrival(arrival_s, steps)
     run = run_ensemble(forcing, particles, start, lat, lon, (a + steps) * STEP_S, STEP_S,
-                       datum_sigma_km=0.0, sigma=sigma, seed=seed)
+                       datum_sigma_km=0.0, seed=seed, sigma_u=sigma_u)
     cut = slice(a, a + steps + 1)
     window = Ensemble(run.times[cut], run.lat[cut], run.lon[cut], run.weight, run.beached[cut])
     datum = centroid(window.lat[0], window.lon[0], window.weight)
@@ -140,7 +145,7 @@ def truth_track(row, arrival_s: float) -> MarkerTrack:
 
 
 def scenario_search(row, forcing, arrival_s: float, particles: int,
-                    sigma: float = CALIBRATED_SIGMA, steps: int = STEPS) -> SearchSetup:
+                    sigma_u: float = CALIBRATED_SIGMA_U, steps: int = STEPS) -> SearchSetup:
     """A row of the scenario table, ready to search: cloud, marker, and the buoy as target.
 
     `forcing` is a backend, or a data root holding raw/hycom_* and raw/era5_*.
@@ -151,7 +156,7 @@ def scenario_search(row, forcing, arrival_s: float, particles: int,
         end = start + np.timedelta64(int((a + steps) * STEP_S), "s")
         forcing = GriddedForcing.from_dir(forcing, start, end)
     setup = search_window(forcing, start, float(row["lat"]), float(row["lon"]),
-                          int(row["seed"]), particles, arrival_s, sigma, steps)
+                          int(row["seed"]), particles, arrival_s, sigma_u, steps)
     return replace(setup, target=truth_track(row, setup.arrival_s))
 
 

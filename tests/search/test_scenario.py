@@ -43,9 +43,9 @@ class TestArrival:
 class TestSearchWindow:
     def test_every_fifth_minute_is_the_5_minute_run_bit_for_bit(self):
         # The same seed draws the same pushes, saved or not (ADR004 section 3).
-        setup = search_window(FORCING, START, LAT, LON, 7, 300, 3600.0, sigma=26.3)
+        setup = search_window(FORCING, START, LAT, LON, 7, 300, 3600.0, sigma_u=0.226)
         five = run_ensemble(FORCING, 300, START, LAT, LON, (60 + 45) * 60.0, STEP_S,
-                            datum_sigma_km=0.0, sigma=26.3, seed=7, save_every=300.0)
+                            datum_sigma_km=0.0, seed=7, save_every=300.0, sigma_u=0.226)
         rows = slice(12, 22)                 # 60, 65, ..., 105 min
         assert np.array_equal(setup.window.times[::5], five.times[rows])
         assert np.array_equal(setup.window.lat[::5], five.lat[rows])

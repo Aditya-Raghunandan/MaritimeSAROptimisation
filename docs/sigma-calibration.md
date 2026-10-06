@@ -9,11 +9,73 @@ default until now, every particle follows the same path and there is no probabil
 This document is how $\sigma$ was measured against real drifters, what came out, and what
 it means. The decision it supports is vault D028.
 
-> **The engine's value, since 4 Oct 2026: $\sigma$ = 26.3 m s⁻¹ᐟ²** (95 % CI 25.3–27.6),
-> matched at **4 h**, the end of the longest search. It is `CALIBRATED_SIGMA` in
-> `sar.model.position` and the default of `sar.pipeline.ensemble --sigma`. §0 is that
-> calibration. §1–§10 are the first one, at 24 h, kept as measured: it is where the method,
-> the twin experiment and the reasons for the change come from.
+> **The engine's random term, since 6 Oct 2026: a random velocity with memory**, σ_u =
+> **0.226 m/s** per axis (95 % CI 0.217–0.236) and T_L = **25.7 h** (ADR005, vault D030). It is
+> `CALIBRATED_SIGMA_U` and `MEMORY_TIME_S` in `sar.model.position`, and the default of
+> `sar.pipeline.ensemble`. §00 is that calibration. §0 is the random walk's at 4 h,
+> σ = 26.3, kept for comparisons (`--sigma`). §1–§10 are the first, at 24 h, kept as measured:
+> they are where the method, the twin experiment and the reasons for both changes come from.
+
+## 00. The random velocity (ADR005, vault D030, 6 Oct 2026)
+
+**Why the term changed.** The random walk's gap grows as $\sqrt t$, but the drifters' grows
+as $t^{1.74\text{–}1.91}$ (§4). So one σ is right at one horizon only. The search episode
+(#47) then showed that the random walk also refills the lanes a helicopter has swept, and
+changes which search pattern wins (ADR004 §4).
+
+A velocity error that persists is what the drifters show. Taylor's (1921) spread for one,
+$s^2 = 2\sigma_u^2 T_L\,[t - T_L(1 - e^{-t/T_L})]$, fits the undrogued 90 % spread at 1–48 h
+with σ_u = 0.217 m/s and T_L = 25.7 h, to an rms log error of 0.018. One σ is off by 0.526
+(`scripts/fit_random_velocity.py`, PR #96). HYCOM's own velocity error at the start is
+0.228 m/s per axis.
+
+**What was run.** T_L was fixed at 25.7 h, and σ_u laddered in the engine exactly as σ was:
+the same 12,973 dev windows, 1,000 particles each, α = 0.02, released from one point.
+
+| Stage | Run | Result |
+|---|---|---|
+| Ladder, σ_u = 0.12, 0.15, 0.18, 0.20, 0.22, 0.24, 0.27, 0.32 m/s at leads 1–6 h | array 58974, ~15 min per process | σ_u* = **0.223** (0.215–0.233) |
+| Calibrate (slide as a velocity, σ_c / √T = 0.035 m/s) | srun, `rv/calibration.json` | σ_u = $\sqrt{0.223^2 + 0.035^2}$ = **0.226** (0.217–0.236) |
+| Confirmation at 0.226, both tiers, 1–24 h | array 58987, ~10 min per process | **90.2–91.7 %** inside at every horizon (undrogued) |
+
+The energy-score optimum is 0.204, 8.6 % below σ_u*. That is the same offset the random
+walk's ladder showed (8 %), and the twin explains it (§5).
+
+**Coverage on the ladder is flat across horizons**, which the random walk's never was
+(undrogued, inside the 90 % region):
+
+| σ_u | 1 h | 2 h | 3 h | **4 h** | 6 h |
+|---|---|---|---|---|---|
+| 0.20 | 85.9 % | 86.0 % | 86.1 % | 86.3 % | 86.6 % |
+| 0.22 | 89.4 % | 89.4 % | 89.6 % | **89.6 %** | 90.0 % |
+| 0.24 | 91.9 % | 92.0 % | 92.2 % | **92.3 %** | 92.4 % |
+| *Random walk, σ = 25 (§0)* | *98.6 %* | *96.3 %* | *92.7 %* | *88.8 %* | *80.8 %* |
+
+**The confirmation, at exactly 0.226** (array 58987; `rv/calibration.json`). Inside the 90 %
+region, with 95 % intervals by buoy group (1,000 resamples):
+
+| | 1 h | 2 h | 3 h | **4 h** | 6 h | 12 h | 24 h |
+|---|---|---|---|---|---|---|---|
+| Undrogued (≈ 9,960 windows, 109 groups) | 90.2 % (88.4–91.6) | 90.4 | 90.6 | **90.5 % (89.0–91.9)** | 90.8 | 91.4 | 91.7 % (90.2–92.7) |
+| Drogued (≈ 2,880 windows, 44 groups) | 84.6 % | 84.7 | 84.7 | 84.4 | 84.6 | 85.4 | 83.1 % |
+| Median 90 % area | 9 km² | 37 | 83 | **146** | 319 | 1,186 | 4,134 |
+| *Random walk at 26.3, undrogued (§0)* | *98.8 %* | *96.8* | *93.8* | *90.3* | *83.2* | *68.1* | *51.7 %* |
+
+- **Calibrated at every horizon, not one.** Undrogued coverage stays within 90.2–91.7 %
+  from 1 to 24 h. The random walk ran from 98.8 % to 51.7 %. This closes vault L22.
+- **Search-time clouds are much tighter.** The median 90 % area at 1 h is 9 km², against
+  36 under the random walk, and at 2 h it is 37 against 72. That is the honest size: the
+  random walk over-covered at search time.
+- **At 24 h the cloud is honest too**: 4,134 km², against the random walk's 880, which held
+  only 52 % of buoys.
+- **Shape at 4 h:** the 50, 68, 80, 90 and 95 % regions hold 58.4, 74.2, 83.6, 90.5 and
+  94.0 %. The core is a little too wide, as before (§6).
+- **Drogued buoys sit at 83–85 % at every horizon.** They don't feel the person's leeway
+  (§4), and now that is the only thing wrong with them: the shortfall is flat in time.
+
+**Commands** are in `scripts/calibrate_sigma.sbatch` (`ladder --sigmas-u`, then
+`calibrate`, then the confirmation `ladder --sigmas-u 0.226 --tiers undrogued drogued
+--leads 1 2 3 4 6 12 24`).
 
 ## 0. The 4 h calibration (vault D028, amended 4 Oct 2026)
 

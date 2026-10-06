@@ -20,7 +20,7 @@ On the real HYCOM current and ERA5 wind, replace `--constant-current` and `--con
 with `--forcing-dir <data root>`, the folder holding `raw/` (`docs/gridded-forcing.md`, #88).
 Exactly one of `--constant-current` and `--forcing-dir` is required.
 
-Everything that defines what the run is has no default: `--lat`, `--lon`, `--datum-sigma-km`, `--start`, `--timestep`, `--duration`, `--particles`, `--constant-current` and `--out`. `--sigma` defaults to zero because it is unmeasured, as it does in `position.py` and `track.py`. `--seed` is optional; the entropy the run actually used is recorded in the sidecar either way. Spans take `48h`, `15m`, `90s` or a bare number of seconds.
+Everything that defines what the run is has no default: `--lat`, `--lon`, `--datum-sigma-km`, `--start`, `--timestep`, `--duration`, `--particles`, `--constant-current` and `--out`. The random term defaults to the calibrated random velocity with memory, `--sigma-u` at `CALIBRATED_SIGMA_U` and `--memory-h` at 25.7 h (ADR005, vault D030). `--sigma` asks for the old random walk instead (D028: 26.3 m s⁻¹ᐟ²), for comparisons with earlier runs; the two are mutually exclusive. `position.py` and `track.py` keep a deterministic default. `--seed` is optional; the entropy the run actually used is recorded in the sidecar either way. Spans take `48h`, `15m`, `90s` or a bare number of seconds.
 
 On one core the command above takes 27 s and writes 1.93 million rows.
 
@@ -40,12 +40,12 @@ flowchart TD
     B -- "no" --> X["Usage error, nothing run or written"]
     B -- "yes" --> C["SeedSequence(seed).spawn(2)"]
     C --> D["Stream 1: spawn_positions<br/>100 particles drawn ONCE at t = 0<br/>Gaussian, 2 km per axis about the datum"]
-    C --> E["Stream 2: the kicks<br/>one live Generator in DriftPipeline"]
+    C --> E["Stream 2: the random term<br/>one live Generator in DriftPipeline:<br/>each velocity error u, then its updates"]
     D --> F["Step k, the same 100 particles"]
     E --> F
     F --> G["ConstantForcing.sample at all 100 positions"]
     G --> H["calculate_drift: current + 0.02 x wind"]
-    H --> I["calculate_position<br/>x + v dt + sigma sqrt(dt) Z, one Z per particle"]
+    H --> I["calculate_position<br/>x + (v + u) dt, then u = a u + sqrt(1 - a^2) sigma_u Z (ADR005)"]
     I --> J{"Forcing NaN at a particle?"}
     J -- "yes" --> K["Frozen in place, flagged beached, keeps its mass"]
     J -- "no" --> L["Moved"]
@@ -93,7 +93,7 @@ step,seconds,time,particle,lat,lon,beached
 
 Latitude and longitude are degrees, longitude in the store's 0 to 360 convention. `beached` is 0 or 1. `--with-forcing` adds `current_u`, `current_v`, `wind_u`, `wind_v`, `drift_u` and `drift_v`, empty on the final state, which has no step leaving it. `read_csv` reads a file back into an `Ensemble` with every position bit for bit what was written.
 
-The run's parameters go in a `.json` sidecar beside it: the datum, N, the datum spread, the save interval, the seed and the entropy it resolved to, and `DriftPipeline.describe()` for the step, the leeway, sigma and the forcing.
+The run's parameters go in a `.json` sidecar beside it: the datum, N, the datum spread, the save interval, the seed and the entropy it resolved to, and `DriftPipeline.describe()` for the step, the leeway, the random term (`random_term`, `sigma`, `sigma_u`, `memory_time_s`) and the forcing.
 
 ### Naming
 

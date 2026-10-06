@@ -9,7 +9,8 @@ from scipy.stats import chi2_contingency
 
 import sar.pipeline.ensemble as ens
 from sar.model.grid import ProbabilityGrid, normalise
-from sar.model.position import CALIBRATED_SIGMA, EARTH_RADIUS_M
+from sar.model.position import (CALIBRATED_SIGMA, CALIBRATED_SIGMA_U, EARTH_RADIUS_M,
+                                MEMORY_TIME_S)
 from sar.pipeline.ensemble import (
     Ensemble,
     describe_run,
@@ -393,11 +394,41 @@ class TestCli:
                                          seed=np.random.SeedSequence(run["seed_entropy"])))
         assert np.array_equal(again.lat, read_csv(path).lat)
 
-    def test_sigma_defaults_to_the_calibrated_value(self, tmp_path):
+    def test_the_default_is_the_calibrated_random_velocity(self, tmp_path):
+        # D030: the random velocity replaced the random walk as the default.
         args = list(self.ARGS)
         del args[args.index("--sigma"):args.index("--sigma") + 2]
         run = json.loads(ens._cli([*args, "--out", str(tmp_path)]).with_suffix(".json").read_text())
-        assert run["pipeline"]["sigma"] == CALIBRATED_SIGMA == 26.3
+        assert run["pipeline"]["random_term"] == "random velocity"
+        assert run["pipeline"]["sigma_u"] == CALIBRATED_SIGMA_U
+        assert run["pipeline"]["memory_time_s"] == MEMORY_TIME_S
+        assert run["pipeline"]["sigma"] == 0.0
+
+    def test_sigma_still_asks_for_the_random_walk(self, tmp_path):
+        args = list(self.ARGS)
+        args[args.index("--sigma") + 1] = str(CALIBRATED_SIGMA)
+        run = json.loads(ens._cli([*args, "--out", str(tmp_path)]).with_suffix(".json").read_text())
+        assert run["pipeline"]["random_term"] == "random walk"
+        assert run["pipeline"]["sigma"] == 26.3 and run["pipeline"]["sigma_u"] == 0.0
+
+    def test_sigma_and_sigma_u_together_are_refused(self, tmp_path):
+        with pytest.raises(SystemExit):
+            ens._cli([*self.ARGS, "--sigma-u", "0.2", "--out", str(tmp_path)])
+
+    def test_the_random_walk_ensemble_is_unchanged_bit_for_bit(self):
+        # Recorded on main (a7445eb) before the random velocity existed.
+        e = run_ensemble(ConstantForcing((1.0, 0.5), (5.0, 2.0)), 4, START, LAT, LON, 600.0,
+                         60.0, 0.0, sigma=26.3, seed=11)
+        assert e.lat[-1].tolist() == [26.510417162483517, 26.500743541636407,
+                                      26.501079238065337, 26.50828307514722]
+        assert e.lon[-1].tolist() == [281.00498042828417, 281.00111911367253,
+                                      280.9983485556627, 281.0060057226745]
+
+    def test_a_random_velocity_ensemble_is_reproducible_from_its_seed(self):
+        def run():
+            return run_ensemble(ConstantForcing((1.8, 0.0)), 50, START, LAT, LON, 3600.0, 60.0,
+                                0.0, seed=3, sigma_u=0.2).lat
+        assert np.array_equal(run(), run())
 
     @pytest.mark.parametrize("missing", ["--lat", "--datum-sigma-km", "--timestep", "--particles"])
     def test_what_defines_a_run_is_required(self, tmp_path, missing):

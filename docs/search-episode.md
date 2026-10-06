@@ -88,10 +88,14 @@ It replays headings, not positions, because a ground path already contains the c
 
 ## The cloud every minute
 
-The scenario runs save every 5 minutes, which is too seldom to sweep (ADR004 row 4).
-`search_window` therefore runs the scenario again **at its own seed** and keeps every minute
-of the window. Because the random pushes are drawn once per step whether saved or not, this
-is the same cloud, and a test checks it bit for bit against a 5-minute run.
+The scenario runs save every 5 minutes. `search_window` runs the scenario again **at its own
+seed** and keeps every minute of the window. Because the random numbers are drawn once per
+step whether saved or not, this is the same cloud, and a test checks it bit for bit against a
+5-minute run. It uses the engine's random velocity (`sigma_u`, ADR005).
+
+Under the old random walk this was the only option: a straight line between 5-minute
+snapshots missed a particle by ~222 m. Under the random velocity it misses by under 1 m, so
+the snapshots would do too. Re-running is kept because it is exact (ADR004 row 4, amended).
 
 Memory is the whole run kept every minute: 39 MB at 10⁴ particles for 4 h, 386 MB at 10⁵.
 
