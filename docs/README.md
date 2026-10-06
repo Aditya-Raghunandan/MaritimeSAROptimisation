@@ -13,6 +13,7 @@ renumbered once merged — a number that has been cited somewhere is a permanent
 | [ADR001](ADR001.md) | Dependency management tooling — `pip` and `venv` for Python, `npm` for the frontend | Decided, amended (the original `uv` choice is withdrawn; the cluster has no `uv`) |
 | [ADR002](ADR002.md) | Probability map interface — three grids not one; box anchored at arrival; cell size a required parameter; binning at N = 10⁶; coverage swept on the particles; cos φ recomputed per particle per step | **Proposed** — six rows await agreement from the search half |
 | [ADR003](ADR003.md) | Search platform, sweep width and the doctrinal patterns — W = 0.1 NM, definite-range detection, 90 kt search, 125 kt transit, 30 min launch; Expanding Square and Sector Search flown relative to a current-drifting datum marker, all cited to the USCG Addendum; amended for the Parallel Track and Trackline laid along the predicted drift (#75) | **Decided** on the build side, awaiting the search half's co-sign |
+| [ADR004](ADR004.md) | The search episode, one referee for every searcher — a step is a 60 s short path (a heading or a pattern's waypoints), detection by closest approach, every searcher flown about the drifting marker, the cloud in 60 s frames re-run at its seed, arrival a fixed offset, POS / expected time to detection / distance (#47) | **Decided** on the build side, awaiting the search half's co-sign on the clock and the interface |
 
 **These numbers are not the vault's D-numbers.** The project vault keeps its own decision series,
 `decisions/Dnnn`, covering decisions that are not about code — the case study region, the study
@@ -39,6 +40,7 @@ They may cite an ADR or a vault decision for *why*, and should not restate the r
 | [sigma-calibration.md](sigma-calibration.md) | `sar.validate.calibrate_sigma`, `drift_windows` and `region`: the size of the random kick, measured on the dev drifters; why a buoy drifts differently from the model; the 90 % region found from the particles (issue #89) |
 | [monte-carlo.md](monte-carlo.md) | `sar.pipeline.ensemble`: N particles from a perturbed datum, the CSV it writes, the heatmap and the convergence ladder (issues #46, R1e, R1f) |
 | [search-patterns.md](search-patterns.md) | `sar.search` — the helicopter's numbers, the four Coast Guard patterns, the datum and its marker, and the particle sweep (issues #44, #45, #48, #63, #75) |
+| [search-episode.md](search-episode.md) | `sar.search.episode` and `sar.search.scenario` — one search over a scenario's cloud, flown by any searcher and scored by one referee: POS, time to detection, distance, and the real buoy (issue #47) |
 | [linear_time_interpolation.md](linear_time_interpolation.md) | `sar.utils.interpolation` — why the drift model needs it |
 | [e2e-testing.md](e2e-testing.md) | `npm run test:e2e` and `npm run shots` — browser tests, and looking at the page (issue #21) |
 | [issue-template.md](issue-template.md) | the structure every new issue follows, and what "done" means |

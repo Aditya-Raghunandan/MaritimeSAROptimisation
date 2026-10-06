@@ -81,6 +81,30 @@ def closest_approach_m(r0_east, r0_north, r1_east, r1_north):
     return np.hypot(r0e + tau * de, r0n + tau * dn)
 
 
+def first_contact(r0_east, r0_north, r1_east, r1_north, radius_m):
+    """When two straight-line motions first come within radius_m: for one target, not a cloud.
+
+    The site's `closestApproach` (frontend/src/searchRun.js), for the episode's real buoy
+    (#47). r0 and r1 are the helicopter's position relative to the target at the start and
+    the end of a leg, scalars in metres. Returns (contact, closest_m, tau): contact is the
+    fraction of the leg at which the gap first closes to radius_m, or None if it never does;
+    closest_m is the least gap, reached at fraction tau.
+    """
+    de, dn = r1_east - r0_east, r1_north - r0_north
+    a = de * de + dn * dn
+    b = 2.0 * (r0_east * de + r0_north * dn)
+    c = r0_east * r0_east + r0_north * r0_north
+    tau = 0.0 if a == 0.0 else min(1.0, max(0.0, -b / (2.0 * a)))
+    closest = float(np.hypot(r0_east + tau * de, r0_north + tau * dn))
+    contact = None
+    if c <= radius_m * radius_m:
+        contact = 0.0
+    elif closest <= radius_m:
+        disc = max(0.0, b * b - 4.0 * a * (c - radius_m * radius_m))
+        contact = max(0.0, (-b - float(np.sqrt(disc))) / (2.0 * a))
+    return contact, closest, float(tau)
+
+
 def _positive(name: str, value) -> float:
     value = float(value)
     if not np.isfinite(value) or value <= 0.0:
