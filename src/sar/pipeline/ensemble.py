@@ -11,8 +11,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sar.model.position import (CALIBRATED_SIGMA, CALIBRATION_HORIZON_H, DEFAULT_SIGMA,
-                                INTEGRATION_STEP_SECONDS, calculate_position)
+from sar.model.position import (CALIBRATED_SIGMA, CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H,
+                                DEFAULT_SIGMA, DEFAULT_SIGMA_U, INTEGRATION_STEP_SECONDS,
+                                MEMORY_TIME_S, calculate_position)
 from sar.pipeline.forcing import ConstantForcing
 from sar.pipeline.gridded import GriddedForcing
 from sar.pipeline.track import _STEP_TOLERANCE, DriftPipeline
@@ -102,12 +103,19 @@ def spawn_positions(lat, lon, n, datum_sigma_km, rng) -> np.ndarray:
 
 
 def run_ensemble(forcing, particles, start, lat, lon, duration, timestep, datum_sigma_km,
-                 sigma=DEFAULT_SIGMA, seed=None, save_every=None, forcing_log=None) -> Ensemble:
-    """One DriftPipeline over the spawned cloud, keeping every save_every seconds and the end."""
+                 sigma=DEFAULT_SIGMA, seed=None, save_every=None, forcing_log=None,
+                 sigma_u=DEFAULT_SIGMA_U, memory_time_s=MEMORY_TIME_S) -> Ensemble:
+    """One DriftPipeline over the spawned cloud, keeping every save_every seconds and the end.
+
+    sigma is a random walk and sigma_u a random velocity with memory (D030); one of them.
+    The seed draws the start spread, the random walk's pushes, and the random velocity's
+    start and its pushes, all from the same spawned sequences.
+    """
     datum_seq, kick_seq = as_seed_sequence(seed).spawn(2)
     starts = spawn_positions(lat, lon, particles, datum_sigma_km,
                              np.random.default_rng(datum_seq))
-    pipeline = DriftPipeline(forcing, timestep, sigma=sigma, seed=kick_seq)
+    pipeline = DriftPipeline(forcing, timestep, sigma=sigma, seed=kick_seq, sigma_u=sigma_u,
+                             memory_time_s=memory_time_s)
     n_steps = pipeline.step_count(duration)
     stride = save_stride(save_every, pipeline.timestep)
 
@@ -161,9 +169,11 @@ def synthetic_cloud(centre, spread_km, n, rng, time=None) -> Ensemble:
 
 
 def describe_run(forcing, particles, start, lat, lon, duration, timestep, datum_sigma_km,
-                 sigma=DEFAULT_SIGMA, seed=None, save_every=None, entropy=None) -> dict:
+                 sigma=DEFAULT_SIGMA, seed=None, save_every=None, entropy=None,
+                 sigma_u=DEFAULT_SIGMA_U, memory_time_s=MEMORY_TIME_S) -> dict:
     """The sidecar: DriftPipeline.describe() at the datum, plus the datum, N and the seed."""
-    pipeline = DriftPipeline(forcing, timestep, sigma=sigma).describe(start, lat, lon, duration)
+    pipeline = DriftPipeline(forcing, timestep, sigma=sigma, sigma_u=sigma_u,
+                             memory_time_s=memory_time_s).describe(start, lat, lon, duration)
     # The datum, N and the seed are recorded above; one-particle copies of them would mislead.
     for key in ("seed", "particles", "start_lat", "start_lon"):
         pipeline.pop(key)
@@ -291,9 +301,17 @@ def add_run_arguments(parser) -> None:
                         help=f"step in seconds, required; D009 fixes {INTEGRATION_STEP_SECONDS:g}")
     parser.add_argument("--duration", type=parse_span, required=True,
                         help="how long to track, such as 48h, 90m or 3600")
-    parser.add_argument("--sigma", type=float, default=CALIBRATED_SIGMA,
-                        help=f"D009's sigma in m/s^0.5, default {CALIBRATED_SIGMA:g}: measured at "
-                        f"{CALIBRATION_HORIZON_H} h (D028); 0 for one deterministic path")
+    noise = parser.add_mutually_exclusive_group()
+    noise.add_argument("--sigma-u", type=float, default=CALIBRATED_SIGMA_U,
+                       help=f"the random velocity with memory (D030), m/s per axis, default "
+                            f"{CALIBRATED_SIGMA_U:g}: matched at {CALIBRATION_HORIZON_H} h; 0 "
+                            "for one deterministic path")
+    noise.add_argument("--sigma", type=float, default=None,
+                       help=f"instead, the random walk in m/s^0.5 (D028: {CALIBRATED_SIGMA:g} at "
+                            f"{CALIBRATION_HORIZON_H} h), for comparisons with earlier runs")
+    parser.add_argument("--memory-h", type=float, default=MEMORY_TIME_S / 3600.0,
+                        help=f"the random velocity's memory T_L in hours, default "
+                             f"{MEMORY_TIME_S / 3600.0:g} (D030)")
     parser.add_argument("--seed", type=int, help="base seed; recorded either way")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--constant-current", nargs=2, type=float,
@@ -303,6 +321,14 @@ def add_run_arguments(parser) -> None:
                              "(sar.pipeline.gridded, issue #88)")
     parser.add_argument("--constant-wind", nargs=2, type=float, metavar=("U", "V"),
                         help="uniform steady 10 m wind in m/s, default calm")
+
+
+def random_term(args) -> dict:
+    """The random term the flags ask for, as run_ensemble's keyword arguments."""
+    if args.sigma is not None:
+        return {"sigma": args.sigma, "sigma_u": 0.0, "memory_time_s": args.memory_h * 3600.0}
+    return {"sigma": DEFAULT_SIGMA, "sigma_u": args.sigma_u,
+            "memory_time_s": args.memory_h * 3600.0}
 
 
 def forcing_from(args) -> ConstantForcing | GriddedForcing:
@@ -337,7 +363,7 @@ def _cli(argv=None) -> Path:
     spec = {"forcing": forcing, "particles": args.particles, "start": args.start,
             "lat": args.lat, "lon": args.lon, "duration": args.duration,
             "timestep": args.timestep, "datum_sigma_km": args.datum_sigma_km,
-            "sigma": args.sigma, "seed": args.seed, "save_every": args.save_every}
+            **random_term(args), "seed": args.seed, "save_every": args.save_every}
     log = {} if args.with_forcing else None
     # Drawn once, so a run without --seed still records the entropy it actually used.
     seq = np.random.SeedSequence(args.seed)
