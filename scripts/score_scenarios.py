@@ -140,11 +140,17 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
 # -- provenance ---------------------------------------------------------------------------
 
 def git_commit() -> str:
-    """The checkout's commit, with -dirty if tracked files differ from it."""
+    """The checkout's commit, with -dirty if tracked files differ from it.
+
+    core.checkStat=minimal: on the cluster's compute nodes the shared disk reports file
+    metadata the head node's index does not match, and git 2.25 there called files "M"
+    whose contents were the commit's byte for byte (7 Oct, jobs 59091-59092).
+    """
     try:
         sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True,
                              text=True, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
+        dirty = subprocess.run(["git", "-c", "core.checkStat=minimal", "status", "--porcelain",
+                                "--untracked-files=no"],
                                cwd=REPO, capture_output=True, text=True, check=True).stdout
         return sha + ("-dirty" if dirty.strip() else "")
     except (OSError, subprocess.CalledProcessError):
