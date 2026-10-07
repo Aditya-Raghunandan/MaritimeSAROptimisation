@@ -11,8 +11,9 @@ again with its own copy of the referee (frontend/src/referee.js), held to this o
   <out>/<S01>/rv_2h.f32            the cloud: 46 frames x N particles x (east, north), float32
                                    little-endian, metres from the marker at that frame
   <out>/<S01>/field_2h.f32         current and wind on a 21 x 21 grid, 2 km apart about the
-                                   datum, every 5 minutes of the window: what a player sees in
-                                   "field only" mode. (u, v current, u, v wind), float32
+                                   first noise model's datum (each window's `field_centre`,
+                                   store longitude), every 5 minutes of the window: what a
+                                   player sees in "field only" mode. (u, v current, u, v wind)
 
 WHY METRES FROM THE MARKER. float32 degrees are good to about 0.4 m, which would move
 particles across the strip's edge. Metres from the marker are good to millimetres, and
@@ -129,9 +130,12 @@ def export_row(row, forcing, noises, arrivals_h, particles: int, out: Path,
     folder.mkdir(parents=True, exist_ok=True)
     windows = []
     for hours in arrivals_h:
+        centre = None
         for noise in noises:
             setup = scenario_search(row, forcing, round(hours * 3600.0), particles,
                                     **NOISE[noise])
+            if centre is None:
+                centre = setup.datum          # the field grid's centre: the first noise's datum
             weight = np.asarray(setup.window.weight, dtype=float)
             if not np.allclose(weight, weight[0]):
                 raise ValueError(f"{row['scenario']}: particle weights are not uniform")
@@ -167,11 +171,12 @@ def export_row(row, forcing, noises, arrivals_h, particles: int, out: Path,
                     "t_s": _floats(target.t_s), "lat": _floats(target.lat, 10),
                     "lon": _floats(target.lon, 10)},
                 "field": f"field_{hours:g}h.f32",
+                "field_centre": {"lat": centre[0], "lon": centre[1]},
                 "flights": flights(setup, row, hours, greedy),
             }
             (folder / f"{name}.json").write_text(json.dumps(record, separators=(",", ":")))
             windows.append(name)
-        grid = field_grid(forcing, setup.datum, setup.window.times[0])
+        grid = field_grid(forcing, centre, setup.window.times[0])
         grid.tofile(folder / f"field_{hours:g}h.f32")
     return {"scenario": row["scenario"], "set": row.get("set"), "water": row.get("stratum"),
             "group": None if pd.isna(row.get("group")) else int(row.get("group")),

@@ -80,6 +80,9 @@ def test_every_searcher_is_recorded_with_the_papers_numbers(exported):
 
 def test_the_field_grid(exported):
     out, _, _ = exported
+    meta = json.loads((out / "S01" / "rv_1h.json").read_text())
+    setup = scenario_search(row(), FORCING, 3600, 300, **NOISE["rv"])
+    assert (meta["field_centre"]["lat"], meta["field_centre"]["lon"]) == pytest.approx(setup.datum)
     grid = np.fromfile(out / "S01" / "field_1h.f32", dtype="<f4").reshape(10, 21, 21, 4)
     assert np.allclose(grid[..., 0], 1.0) and np.allclose(grid[..., 1], 0.5)
     assert np.allclose(grid[..., 2], 5.0) and np.allclose(grid[..., 3], 2.0)
