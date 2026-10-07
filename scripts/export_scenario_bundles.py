@@ -216,6 +216,30 @@ def write_index(out: Path, entries: list[dict] | None, settings: dict | None) ->
     return index
 
 
+def benchmark(summaries: dict[str, Path]) -> dict:
+    """The site's copy of the benchmark: per table, every searcher's POS and found rate.
+
+    `summaries` maps a name ("scenarios55", "dev") to a summary.csv written by
+    scripts/score_scenarios.py. Only the whole table ("all"), no slices.
+    """
+    out = {"format": FORMAT}
+    for name, path in summaries.items():
+        t = pd.read_csv(path)
+        t = t[(t["slice"] == "all") & t["measure"].isin(["pos", "found"])
+              & ~t["searcher"].str.contains(" - ", regex=False)]
+        rows = []
+        for (noise, searcher, hours), g in t.groupby(["noise", "searcher", "arrival_h"]):
+            pos = g[g["measure"] == "pos"].iloc[0]
+            found = g[g["measure"] == "found"].iloc[0]
+            rows.append({"noise": noise, "searcher": searcher, "arrival_h": float(hours),
+                         "pos": float(pos["mean"]), "pos_lo": float(pos["lo"]),
+                         "pos_hi": float(pos["hi"]), "found": float(found["mean"]),
+                         "found_lo": float(found["lo"]), "found_hi": float(found["hi"]),
+                         "n_rows": int(pos["n_rows"]), "n_groups": int(pos["n_groups"])})
+        out[name] = rows
+    return out
+
+
 def upload(src: Path, repo: str, path_in_repo: str) -> None:
     """Upload the bundles. The credential comes from the environment, never an argument."""
     from huggingface_hub import HfApi, get_token
@@ -240,6 +264,9 @@ def main(argv=None):
     e.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0])
     e.add_argument("--particles", type=int, default=10_000)
     e.add_argument("--out", required=True)
+    b = sub.add_parser("benchmark", help="benchmark.json for the site from summary.csv files")
+    b.add_argument("--summary", nargs=2, action="append", metavar=("NAME", "CSV"), required=True)
+    b.add_argument("--out", required=True)
     i = sub.add_parser("index", help="merge every process's rows into index.json")
     i.add_argument("--out", required=True)
     u = sub.add_parser("upload")
@@ -250,6 +277,12 @@ def main(argv=None):
 
     if args.command == "upload":
         upload(Path(args.src), args.repo, args.path_in_repo)
+        return
+    if args.command == "benchmark":
+        result = benchmark({name: Path(csv) for name, csv in args.summary})
+        Path(args.out).write_text(json.dumps(result, indent=1))
+        print(f"{args.out}: " + ", ".join(f"{k} {len(v)} rows" for k, v in result.items()
+                                           if k != "format"))
         return
     if args.command == "index":
         index = write_index(Path(args.out), None, None)
