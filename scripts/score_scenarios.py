@@ -200,12 +200,18 @@ def claim(out: Path, settings: dict) -> dict:
     path = out / "manifest.json"
     record = {**settings, "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "slurm_job": os.environ.get("SLURM_ARRAY_JOB_ID") or os.environ.get("SLURM_JOB_ID")}
+    # Written whole to a private file, then published by a hard link, which fails if the
+    # manifest exists. Four processes start at once on a node; opening the manifest itself
+    # with "x" let another read it half-written (7 Oct, jobs 59002-59007).
+    tmp = out / f".manifest.{os.getpid()}.{time.time_ns()}.tmp"
+    tmp.write_text(json.dumps(record, indent=1))
     try:
-        with open(path, "x") as f:
-            json.dump(record, f, indent=1)
+        os.link(tmp, path)
         return record
     except FileExistsError:
         held = json.loads(path.read_text())
+    finally:
+        tmp.unlink(missing_ok=True)
     differ = sorted(k for k in settings if held.get(k) != settings[k])
     if differ:
         raise ValueError(f"{out} already holds an experiment with different {', '.join(differ)}"

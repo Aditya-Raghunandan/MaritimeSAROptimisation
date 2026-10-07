@@ -130,6 +130,13 @@ class TestManifest:
         assert held["commit"] == "abc"
         assert json.loads((tmp_path / "manifest.json").read_text())["particles"] == 300
 
+    def test_many_claims_at_once_never_read_half_a_manifest(self, tmp_path):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(8) as pool:
+            held = list(pool.map(lambda _: score.claim(tmp_path, self.settings()), range(32)))
+        assert {h["commit"] for h in held} == {"abc"}
+        assert [p.name for p in tmp_path.iterdir()] == ["manifest.json"]
+
     def test_different_settings_are_refused(self, tmp_path):
         score.claim(tmp_path, self.settings())
         with pytest.raises(ValueError, match="commit, particles"):
