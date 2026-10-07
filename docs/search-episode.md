@@ -42,7 +42,7 @@ synthetic one. `--arrival-h` is hours from the call, in whole minutes. The windo
 | `pos` | Probability removed over the window, on the raw weights (never renormalised) |
 | `expected_ttd_s` | Σ t·Δm / Σ Δm: when, on average, the probability was found. Seconds since arrival, each sub-leg's mass credited at its end. `null` if nothing was found |
 | `distance_m` | Path flown about the marker: 125,010 m for every searcher at 90 kt for 45 min. A check, not a comparison |
-| `removed_per_step` | The 45 per-minute amounts; the RL reward is one of these |
+| `removed_per_step` | The 45 per-minute amounts: the **drain rate**, the share of the probability cleared each minute. The RL reward is one of these; POS is their sum |
 | `remaining`, `initial_mass` | What is left, and what there was (1) |
 | `target` | Scenario runs only: `found`, `found_s`, `closest_m`, `closest_s`, `gaps` against the real buoy, by the site's closest-approach rule |
 | `datum`, `first_bearing_deg` | Where the marker was dropped (the cloud's centroid at arrival) and the first leg |
@@ -88,24 +88,10 @@ It replays headings, not positions, because a ground path already contains the c
 
 ## Score the whole scenario table
 
-`scripts/score_scenarios.py` flies the Expanding Square and the Sector Search over every row,
-at each arrival, under the random velocity (`rv`) and the old random walk (`rw`) on the same
-seeds, and writes one JSON line per flight to `S##.jsonl`:
-
-- **how much:** `pos`;
-- **how fast:** `removed_per_step` (the reward, minute by minute), `pos_15m`, `pos_30m`,
-  `expected_ttd_s`;
-- **the real buoy:** `found`, `found_s`, `closest_m`.
-
-```bash
-python scripts/score_scenarios.py score --csv scenarios.csv --forcing-dir DATA \
-    --rows 1-55 --noise rv rw --arrival-h 1 2 3 --out DIR
-python scripts/score_scenarios.py summary DIR     # means, and rv minus rw paired by row
-sbatch --array=1-14 scripts/score_scenarios.sbatch   # the cluster: four rows per node
-```
-
-One row, both noises and three arrivals (12 flights) takes about 4 s on the laptop at
-N = 10⁴.
+`scripts/score_scenarios.py` flies all six searchers (the four Coast Guard patterns, greedy
+and the random floor) over every row of a scenario table, under both noise models, and
+summarises them by shared-water group. How it works, the words it uses (POS, the drain rate,
+groups, straightness) and how to run it: **[benchmark.md](benchmark.md)**.
 
 ## The cloud every minute
 
