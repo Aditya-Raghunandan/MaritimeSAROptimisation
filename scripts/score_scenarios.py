@@ -1,4 +1,4 @@
-"""score_scenarios.py: the doctrinal patterns flown over the scenario table, scored by the referee.
+"""score_scenarios.py: the non-ML benchmark, every searcher flown over the scenario table and scored.
 
 Every row of the scenario table (scripts/pick_scenario_buoys.py) is a real buoy's start. For
 each row, noise model and arrival this rebuilds the row's cloud at its own seed
@@ -6,28 +6,47 @@ each row, noise model and arrival this rebuilds the row's cloud at its own seed
 what the referee measured, one JSON line per flight:
 
   * HOW MUCH. pos, the probability the flight cleared: the RL return with no discount.
-  * HOW FAST. removed_per_step, the probability cleared in each minute, which is the RL
-    reward and the search's rate; its running total at 15 and 30 min; and expected_ttd_s,
-    when on average the probability was found.
+  * HOW FAST. drain_rate, the share of the probability cleared in each minute (the coined
+    name for the referee's removed_per_step; the RL reward). POS is its sum. Also its
+    running total at 15 and 30 min, and expected_ttd_s, when on average it was found.
   * THE REAL BUOY. found, found_s and closest_m, against the buoy's truth every hour, by the
     site's closest-approach rule. One buoy is one coin toss; pos is the measurement.
+  * THE SCENARIO. Its shared-water group (D025), water type, speed and straightness (how far
+    the buoy got over 4 h divided by how far it travelled), for the summary's slices.
+
+THE SEARCHERS. The four Coast Guard patterns, laid out by `sar.search.scenario.
+doctrinal_searcher` exactly as the site lays them; greedy and the random floor
+(`sar.search.greedy`, #49). The random floor's seed is the row's seed and the arrival, so
+both noise models are searched with the same random headings.
 
 TWO NOISE MODELS ON THE SAME SEEDS. `rv` is the engine's random velocity (D030, sigma_u =
-0.226 m/s). `rw` is the old random walk (D028, sigma = 26.3), which the first scenario runs
-and the 4 Oct training clouds used. Same row, same seed, so each flight has a pair.
+0.226 m/s). `rw` is the old random walk (D028, sigma = 26.3). Same row, same seed, so each
+flight has a pair.
+
+ONE FOLDER, ONE EXPERIMENT. `score` writes DIR/manifest.json the first time (code commit,
+the table's sha256, N, noise, arrivals, searchers) and refuses to add flights made with
+anything different, so a folder can never mix two experiments. One file per row,
+DIR/flights/<scenario>.jsonl, rewritten on a rerun.
+
+THE SUMMARY AVERAGES GROUPS, NOT ROWS. Buoys that drifted within 10 km of each other ride the
+same water (D025), and a long-lived buoy gives many rows. So every number is averaged within
+each group first and then across groups, and its 95 % interval comes from resampling whole
+groups. `summary` writes flights.parquet and summary.csv beside the rows.
 
     python scripts/score_scenarios.py score --csv scenarios.csv --forcing-dir DATA \\
         --rows 1-55 --noise rv rw --arrival-h 1 2 3 --out DIR
-    python scripts/score_scenarios.py summary DIR
-
-One file per row, DIR/S01.jsonl, rewritten on a rerun. `summary` reads them all.
+    python scripts/score_scenarios.py summary DIR [--straight-at 0.95]
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -36,45 +55,76 @@ import pandas as pd
 from sar.model.position import CALIBRATED_SIGMA, CALIBRATED_SIGMA_U
 from sar.pipeline.gridded import GriddedForcing
 from sar.search.episode import STEPS, SearchEpisode, pattern_policy, run
-from sar.search.patterns import PATTERNS
-from sar.search.platform import STEP_S, expanding_square_spacing_m
-from sar.search.scenario import read_scenarios, scenario_search
+from sar.search.greedy import greedy_policy, random_heading_policy
+from sar.search.platform import STEP_S
+from sar.search.scenario import (
+    DOCTRINAL,
+    doctrinal_searcher,
+    read_scenarios,
+    scenario_search,
+    straightness,
+)
 from sar.utils.geo import to_display_longitude
 
-SEARCHERS = ("expanding-square", "sector")
+SEARCHERS = DOCTRINAL + ("greedy", "random")
 NOISE = {"rv": {"sigma_u": CALIBRATED_SIGMA_U, "sigma": 0.0},
          "rw": {"sigma_u": 0.0, "sigma": CALIBRATED_SIGMA}}
+BASELINE = "expanding-square"          # D004: what every other searcher is compared with
+# Greedy's settings: chosen on dev, and frozen before any test set is opened.
+GREEDY = {"headings": 16, "decide_s": 60.0}
+RESAMPLES = 1000
+BOOTSTRAP_SEED = 20261007
+REPO = Path(__file__).resolve().parents[1]
 
 
 def row_names(spec, table: pd.DataFrame) -> list[str]:
-    """S01, 7 and 1-55 style row specs as scenario names, checked against the table."""
-    names = []
+    """Row specs as scenario names: a name (S01, D0007), or 1-based positions such as 7 or 1-55."""
+    names = list(table["scenario"])
+    known = set(names)
+    out = []
     for item in spec:
-        item = str(item).strip().upper()
-        if item.startswith("S"):
-            names.append(item)
-        elif "-" in item:
-            a, b = (int(x) for x in item.split("-"))
-            names += [f"S{k:02d}" for k in range(a, b + 1)]
+        item = str(item).strip()
+        if item.upper() in known:
+            out.append(item.upper())
+        elif item.isdigit() or ("-" in item and item.replace("-", "").isdigit()):
+            a, b = (int(x) for x in item.split("-")) if "-" in item else (int(item),) * 2
+            bad = [k for k in range(a, b + 1) if not 1 <= k <= len(names)]
+            if bad:
+                raise ValueError(f"row {bad[0]} is not in a table of {len(names)} rows")
+            out += names[a - 1:b]
         else:
-            names.append(f"S{int(item):02d}")
-    unknown = sorted(set(names) - set(table["scenario"]))
-    if unknown:
-        raise ValueError(f"not in the scenario table: {', '.join(unknown)}")
-    return names
+            raise ValueError(f"not in the scenario table: {item}")
+    return out
 
 
-def searcher(name: str, bearing_deg):
-    """A pattern as a searcher, its first leg along the target's drift at the datum."""
-    first = 0.0 if bearing_deg is None else float(bearing_deg)
-    if name == "expanding-square":
-        pattern = PATTERNS[name](expanding_square_spacing_m(), first)
-    else:
-        pattern = PATTERNS[name](first_bearing_deg=first)
-    return pattern_policy(pattern), first
+def searcher(name: str, setup, row, arrival_h: float, greedy: dict | None = None):
+    """A searcher for one scenario: (policy, first bearing or None, how it was laid out)."""
+    if name in DOCTRINAL:
+        lkp = (float(row["lat"]), float(row["lon"]))
+        pattern, bearing, why = doctrinal_searcher(name, setup, lkp)
+        return pattern_policy(pattern), bearing, why
+    if name == "greedy":
+        g = GREEDY if greedy is None else greedy
+        return (greedy_policy(**g), None,
+                f"map, {g['headings']} headings every {g['decide_s']:g} s")
+    if name == "random":
+        return (random_heading_policy([int(row["seed"]), int(round(arrival_h * 60))]), None,
+                "random heading each minute")
+    raise ValueError(f"unknown searcher {name!r}")
 
 
-def score_row(row, forcing, noises, arrivals_h, searchers, particles: int) -> list[dict]:
+def _scenario_fields(row) -> dict:
+    """What the summary slices by: group, water type, speed and straightness."""
+    get = lambda k: row[k] if k in row.index else None          # noqa: E731
+    group = get("group")
+    return {"ID": None if get("ID") is None else str(get("ID")),
+            "group": None if group is None or pd.isna(group) else int(group),
+            "speed_4h_ms": None if get("speed_4h_ms") is None else float(get("speed_4h_ms")),
+            "straightness_4h": straightness(row) if "lat_4h" in row.index else None}
+
+
+def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
+              greedy: dict | None = None) -> list[dict]:
     """Every (noise, arrival, searcher) flight over one row, as flat dicts.
 
     `forcing` is a backend, or a data root, opened once for the latest arrival's window.
@@ -84,6 +134,7 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int) -> li
         longest = max(arrivals_h) * 3600.0 + STEPS * STEP_S
         forcing = GriddedForcing.from_dir(forcing, start,
                                           start + np.timedelta64(int(round(longest)), "s"))
+    about = _scenario_fields(row)
     flights = []
     for noise in noises:
         for hours in arrivals_h:
@@ -91,55 +142,181 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int) -> li
                                     **NOISE[noise])
             beached = float(np.mean(setup.window.beached[-1]))
             for name in searchers:
-                policy, first = searcher(name, setup.drift_bearing_deg)
+                policy, first, layout = searcher(name, setup, row, hours, greedy)
                 m = run(policy, SearchEpisode(setup.window, setup.marker, target=setup.target))
-                removed = m["removed_per_step"]
+                drain = m["removed_per_step"]
                 target = m.get("target") or {}
                 flights.append({
-                    "scenario": row["scenario"], "set": row["set"], "water": row["stratum"],
+                    "scenario": row["scenario"], "set": row.get("set"),
+                    "water": row.get("stratum"), **about,
                     "noise": noise, **NOISE[noise], "arrival_h": hours, "searcher": name,
-                    "first_bearing_deg": first,
+                    "first_bearing_deg": first, "layout": layout,
                     "datum_lat": setup.datum[0],
                     "datum_lon": float(to_display_longitude(setup.datum[1])),
                     "pos": m["pos"],
-                    "pos_15m": float(np.sum(removed[:15])),
-                    "pos_30m": float(np.sum(removed[:30])),
+                    "pos_15m": float(np.sum(drain[:15])),
+                    "pos_30m": float(np.sum(drain[:30])),
+                    "peak_drain_rate": float(np.max(drain)),
                     "expected_ttd_s": m["expected_ttd_s"],
                     "found": target.get("found"), "found_s": target.get("found_s"),
                     "closest_m": target.get("closest_m"),
                     "closest_s": target.get("closest_s"), "gaps": target.get("gaps"),
                     "beached_share": beached, "distance_m": m["distance_m"],
-                    "particles": particles, "removed_per_step": removed})
+                    "particles": particles, "drain_rate": drain})
     return flights
 
 
+# -- provenance ---------------------------------------------------------------------------
+
+def git_commit() -> str:
+    """The checkout's commit, with -dirty if tracked files differ from it."""
+    try:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True,
+                             text=True, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
+                               cwd=REPO, capture_output=True, text=True, check=True).stdout
+        return sha + ("-dirty" if dirty.strip() else "")
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def sha256(path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def experiment(csv, noises, arrivals_h, searchers, particles: int,
+               greedy: dict | None = None) -> dict:
+    """What makes two flights comparable. A folder holds flights from one of these only."""
+    return {"commit": git_commit(), "table": Path(csv).name, "table_sha256": sha256(csv),
+            "particles": int(particles), "noise": {n: NOISE[n] for n in noises},
+            "arrival_h": [float(a) for a in arrivals_h], "searchers": list(searchers),
+            "greedy": dict(GREEDY if greedy is None else greedy),
+            "steps": STEPS, "step_s": STEP_S}
+
+
+def claim(out: Path, settings: dict) -> dict:
+    """Write DIR/manifest.json if it is new; otherwise refuse settings that differ from it."""
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "manifest.json"
+    record = {**settings, "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+              "slurm_job": os.environ.get("SLURM_ARRAY_JOB_ID") or os.environ.get("SLURM_JOB_ID")}
+    try:
+        with open(path, "x") as f:
+            json.dump(record, f, indent=1)
+        return record
+    except FileExistsError:
+        held = json.loads(path.read_text())
+    differ = sorted(k for k in settings if held.get(k) != settings[k])
+    if differ:
+        raise ValueError(f"{out} already holds an experiment with different {', '.join(differ)}"
+                         f"; use a new folder")
+    return held
+
+
+# -- the summary --------------------------------------------------------------------------
+
 def read_flights(folder) -> pd.DataFrame:
-    paths = sorted(Path(folder).glob("S*.jsonl"))
+    folder = Path(folder)
+    paths = sorted((folder / "flights").glob("*.jsonl")) or sorted(folder.glob("S*.jsonl"))
     if not paths:
-        raise FileNotFoundError(f"no S*.jsonl in {folder}")
-    return pd.DataFrame([json.loads(line) for p in paths for line in p.read_text().splitlines()
-                         if line.strip()])
+        raise FileNotFoundError(f"no flights in {folder}")
+    rows = [json.loads(line) for p in paths for line in p.read_text().splitlines()
+            if line.strip()]
+    f = pd.DataFrame(rows)
+    if "drain_rate" not in f and "removed_per_step" in f:        # flights from before 7 Oct
+        f = f.rename(columns={"removed_per_step": "drain_rate"})
+    if "group" not in f or f["group"].isna().all():
+        f["group"] = f["scenario"]                               # no groups: each row is its own
+    f["group"] = f["group"].astype(str)
+    return f
 
 
-def summarise(flights: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Means per (noise, searcher, arrival), and the paired rv - rw difference in pos."""
+def group_means(f: pd.DataFrame, value: str, keys: list[str]) -> pd.DataFrame:
+    """One number per group per key: the mean of `value` over that group's rows."""
+    return f.groupby(keys + ["group"], dropna=False)[value].mean().reset_index()
+
+
+def bootstrap(values: np.ndarray, rng, resamples: int = RESAMPLES) -> tuple[float, float]:
+    """95 % interval of the mean, resampling the given per-group values with replacement."""
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size < 2:
+        return float("nan"), float("nan")
+    draws = values[rng.integers(0, values.size, size=(resamples, values.size))].mean(axis=1)
+    return float(np.percentile(draws, 2.5)), float(np.percentile(draws, 97.5))
+
+
+def _tabulate(f: pd.DataFrame, measure: str, value: str, keys: list[str], rng,
+              resamples: int, better=None) -> list[dict]:
+    rows = []
+    per = group_means(f, value, keys)
+    windows = f.groupby(keys, dropna=False).size()
+    for key, g in per.groupby(keys, dropna=False):
+        key = key if isinstance(key, tuple) else (key,)
+        lo, hi = bootstrap(g[value].to_numpy(), rng, resamples)
+        row = {"measure": measure, **dict(zip(keys, key)), "n_rows": int(windows[key]),
+               "n_groups": int(g[value].notna().sum()), "mean": float(g[value].mean()),
+               "lo": lo, "hi": hi}
+        if better is not None:
+            row["groups_better"] = int((g[value] > 0).sum())
+        rows.append(row)
+    return rows
+
+
+def slices(f: pd.DataFrame, straight_at: float | None) -> list[tuple[str, pd.DataFrame]]:
+    """The whole table, then by water type, then straight against turning buoys."""
+    out = [("all", f)]
+    if "water" in f and f["water"].notna().any():
+        out += [(f"water: {w}", f[f["water"] == w]) for w in ("quiet", "moderate", "jet")
+                if (f["water"] == w).any()]
+    if straight_at is not None and "straightness_4h" in f:
+        s = f["straightness_4h"].astype(float)
+        out += [(f"path: straight (>= {straight_at:.3f})", f[s >= straight_at]),
+                (f"path: turning (< {straight_at:.3f})", f[s < straight_at])]
+    return [(name, part) for name, part in out if len(part)]
+
+
+def summarise(flights: pd.DataFrame, straight_at: float | None = None,
+              resamples: int = RESAMPLES) -> pd.DataFrame:
+    """Every searcher's numbers, and the paired differences, averaged by group, with 95 % CIs.
+
+    Measures: pos, found (the real buoy's found rate), ttd_min (expected time to detection),
+    pos_15m. Paired: pos with memory minus without (rv - rw, same row and seed), and each
+    searcher's pos minus the Expanding Square's on the same cloud. `straight_at` splits
+    straight from turning buoys; None takes the median of the table's own rows, which is
+    right for dev and must be replaced by the frozen dev value on any test set.
+    """
+    rng = np.random.default_rng(BOOTSTRAP_SEED)
     f = flights.assign(found=flights["found"].astype(float),
                        ttd_min=flights["expected_ttd_s"].astype(float) / 60.0)
+    if straight_at is None and "straightness_4h" in f and f["straightness_4h"].notna().any():
+        straight_at = float(f.drop_duplicates("scenario")["straightness_4h"].median())
     keys = ["noise", "searcher", "arrival_h"]
-    means = f.groupby(keys).agg(n=("pos", "size"), pos=("pos", "mean"), pos_sd=("pos", "std"),
-                                pos_15m=("pos_15m", "mean"), pos_30m=("pos_30m", "mean"),
-                                ttd_min=("ttd_min", "mean"), found=("found", "mean"),
-                                beached=("beached_share", "mean")).reset_index()
-    pairs = pd.DataFrame()
-    if set(f["noise"]) >= {"rv", "rw"}:
-        wide = f.pivot_table(index=["scenario", "searcher", "arrival_h"], columns="noise",
-                             values="pos").dropna()
-        d = (wide["rv"] - wide["rw"]).rename("diff").reset_index()
-        pairs = d.groupby(["searcher", "arrival_h"])["diff"].agg(
-            n="size", mean="mean", sd="std",
-            rv_better=lambda x: int((x > 0).sum())).reset_index()
-        pairs["se"] = pairs["sd"] / np.sqrt(pairs["n"])
-    return means, pairs
+    rows = []
+    for name, part in slices(f, straight_at):
+        for measure in ("pos", "found", "ttd_min", "pos_15m"):
+            rows += [{**r, "slice": name}
+                     for r in _tabulate(part, measure, measure, keys, rng, resamples)]
+        if set(part["noise"]) >= {"rv", "rw"}:
+            wide = part.pivot_table(index=["scenario", "group", "searcher", "arrival_h"],
+                                    columns="noise", values="pos").dropna().reset_index()
+            wide["diff"] = wide["rv"] - wide["rw"]
+            wide["noise"] = "rv - rw"
+            rows += [{**r, "slice": name} for r in _tabulate(
+                wide, "pos difference", "diff", keys, rng, resamples, better=True)]
+        if BASELINE in set(part["searcher"]):
+            wide = part.pivot_table(index=["scenario", "group", "noise", "arrival_h"],
+                                    columns="searcher", values="pos").reset_index()
+            for other in sorted(set(part["searcher"]) - {BASELINE}):
+                d = wide[["scenario", "group", "noise", "arrival_h"]].assign(
+                    searcher=f"{other} - {BASELINE}", diff=wide[other] - wide[BASELINE])
+                rows += [{**r, "slice": name} for r in _tabulate(
+                    d.dropna(subset=["diff"]), "pos difference", "diff", keys, rng, resamples,
+                    better=True)]
+    cols = ["measure", "slice", "noise", "searcher", "arrival_h", "n_rows", "n_groups",
+            "mean", "lo", "hi", "groups_better"]
+    out = pd.DataFrame(rows)
+    return out[[c for c in cols if c in out]]
 
 
 def main(argv=None):
@@ -148,35 +325,52 @@ def main(argv=None):
     s = sub.add_parser("score", help="fly and score rows of the scenario table")
     s.add_argument("--csv", required=True, help="the scenario table")
     s.add_argument("--forcing-dir", required=True, help="data root holding raw/hycom_*, raw/era5_*")
-    s.add_argument("--rows", nargs="+", required=True, help="S01, 7 or 1-55; several allowed")
+    s.add_argument("--rows", nargs="+", required=True,
+                   help="scenario names, or 1-based rows such as 7 or 1-55; several allowed")
     s.add_argument("--noise", nargs="+", choices=sorted(NOISE), default=["rv"])
     s.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0],
                    help="hours from the call to arrival, whole minutes; default 1 2 3")
     s.add_argument("--searchers", nargs="+", choices=SEARCHERS, default=list(SEARCHERS))
     s.add_argument("--particles", type=int, default=10_000)
-    s.add_argument("--out", required=True, help="folder for one S##.jsonl per row")
-    m = sub.add_parser("summary", help="tabulate a folder of scored rows")
+    s.add_argument("--greedy-headings", type=int, default=GREEDY["headings"])
+    s.add_argument("--greedy-decide-s", type=float, default=GREEDY["decide_s"],
+                   help="how often greedy chooses a heading; must divide 60 s")
+    s.add_argument("--out", required=True, help="the experiment's folder")
+    m = sub.add_parser("summary", help="tabulate an experiment's folder")
     m.add_argument("folder")
+    m.add_argument("--straight-at", type=float, default=None,
+                   help="straightness splitting straight from turning buoys; default the "
+                        "table's median (dev only: freeze it before any test set)")
+    m.add_argument("--resamples", type=int, default=RESAMPLES)
     args = parser.parse_args(argv)
 
     if args.command == "summary":
-        means, pairs = summarise(read_flights(args.folder))
-        with pd.option_context("display.width", 140, "display.float_format", "{:.4f}".format):
-            print(means.to_string(index=False))
-            if not pairs.empty:
-                print("\npaired pos, random velocity minus random walk, same seeds:")
-                print(pairs.to_string(index=False))
-        return means, pairs
+        folder = Path(args.folder)
+        flights = read_flights(folder)
+        table = summarise(flights, args.straight_at, args.resamples)
+        flights.to_parquet(folder / "flights.parquet", index=False)
+        table.to_csv(folder / "summary.csv", index=False, float_format="%.5f",
+                     lineterminator="\n")
+        overall = table[(table["slice"] == "all") & (table["measure"] == "pos")]
+        with pd.option_context("display.width", 160, "display.float_format", "{:.4f}".format):
+            print(overall.drop(columns=["measure", "slice"]).to_string(index=False))
+        print(f"\n{len(flights)} flights, {flights['scenario'].nunique()} scenarios, "
+              f"{flights['group'].nunique()} groups -> {folder / 'summary.csv'}")
+        return table
 
     table = read_scenarios(args.csv)
     out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+    greedy = {"headings": args.greedy_headings, "decide_s": args.greedy_decide_s}
+    claim(out, experiment(args.csv, args.noise, args.arrival_h, args.searchers, args.particles,
+                          greedy))
+    (out / "flights").mkdir(exist_ok=True)
     for name in row_names(args.rows, table):
         row = table[table["scenario"] == name].iloc[0]
         t0 = time.perf_counter()
         flights = score_row(row, args.forcing_dir, args.noise, args.arrival_h,
-                            args.searchers, args.particles)
-        (out / f"{name}.jsonl").write_text("".join(json.dumps(f) + "\n" for f in flights))
+                            args.searchers, args.particles, greedy)
+        (out / "flights" / f"{name}.jsonl").write_text(
+            "".join(json.dumps(f) + "\n" for f in flights))
         best = max(flights, key=lambda f: f["pos"])
         print(f"{name}: {len(flights)} flights in {time.perf_counter() - t0:.1f} s; best pos "
               f"{best['pos']:.3f} ({best['searcher']}, {best['noise']}, {best['arrival_h']:g} h)",
