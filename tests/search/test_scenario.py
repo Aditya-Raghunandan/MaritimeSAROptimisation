@@ -12,14 +12,18 @@ from sar.search.platform import STEP_S, SWEEP_WIDTH_M
 from sar.search.scenario import (
     centroid,
     check_arrival,
+    datum_line,
+    doctrinal_searcher,
     drift_bearing,
     scenario_row,
     scenario_search,
     search_window,
     steady_search,
+    straightness,
     truth_track,
 )
 from sar.search.sweep import relative_m
+from sar.utils.geo import offset_position
 
 START = "2019-06-01T06:00"
 LAT, LON = 26.5, -79.0
@@ -136,3 +140,88 @@ class TestSteady:
 
     def test_drift_bearing_of_still_water_is_none(self):
         assert drift_bearing(ConstantForcing(), LAT, LON, START) is None
+
+
+def path_row(east_km, north_km):
+    """A row whose buoy is at these (east, north) km from the start at hours 1 to 4."""
+    base = {"lat": LAT, "lon": LON}
+    for h, (e, n) in enumerate(zip(east_km, north_km), start=1):
+        lat, lon = offset_position(LAT, LON, e * 1000.0, n * 1000.0)
+        base[f"lat_{h}h"], base[f"lon_{h}h"] = float(lat), float(lon)
+    return pd.Series(base)
+
+
+class TestDatumLine:
+    def test_north_and_east(self):
+        lat, lon = offset_position(LAT, LON, 0.0, 1000.0)
+        bearing, length = datum_line((LAT, LON), (lat, lon))
+        assert bearing == pytest.approx(0.0, abs=1e-6) and length == pytest.approx(1000.0, rel=1e-6)
+        lat, lon = offset_position(LAT, LON, 1000.0, 0.0)
+        bearing, length = datum_line((LAT, LON), (lat, lon))
+        assert bearing == pytest.approx(90.0, abs=1e-6) and length == pytest.approx(1000.0, rel=1e-4)
+
+    def test_either_longitude_convention(self):
+        lat, lon = offset_position(LAT, LON + 360.0, -500.0, -500.0)
+        bearing, length = datum_line((LAT, LON), (lat, lon))
+        assert bearing == pytest.approx(225.0, abs=0.01) and length == pytest.approx(707.1, rel=1e-3)
+
+    def test_no_length_no_bearing(self):
+        assert datum_line((LAT, LON), (LAT, LON)) == (None, 0.0)
+
+
+class TestDoctrinalSearcher:
+    def setup_method(self):
+        # Drift due east; the datum line from a start 3 km south-west of the datum runs NE.
+        self.setup = steady_search((LAT, LON), 1.0, 50, np.random.default_rng(1),
+                                   current=(1.0, 0.0))
+        self.lkp = offset_position(*self.setup.datum, -2121.3, -2121.3)
+
+    def test_the_square_and_the_sector_fly_along_the_drift(self):
+        for name in ("expanding-square", "sector"):
+            pattern, bearing, why = doctrinal_searcher(name, self.setup, self.lkp)
+            assert bearing == pytest.approx(90.0) and why == "along the drift"
+            assert pattern.duration_s >= 45 * 60.0
+
+    def test_parallel_and_trackline_fly_along_the_datum_line(self):
+        for name in ("parallel", "trackline"):
+            _, bearing, why = doctrinal_searcher(name, self.setup, self.lkp)
+            assert bearing == pytest.approx(45.0, abs=0.05) and why == "along the datum line"
+
+    def test_a_datum_line_under_50_m_falls_back_to_the_drift(self):
+        near = offset_position(*self.setup.datum, 0.0, -40.0)
+        _, bearing, why = doctrinal_searcher("parallel", self.setup, near)
+        assert bearing == pytest.approx(90.0) and why == "along the drift"
+
+    def test_the_trackline_is_at_least_as_long_as_the_datum_line(self):
+        far = offset_position(*self.setup.datum, -8000.0, 0.0)
+        long_line, _, _ = doctrinal_searcher("trackline", self.setup, far)
+        short_line, _, _ = doctrinal_searcher("trackline", self.setup, self.lkp)
+        reach = lambda p: np.max(np.hypot(*p.offset_at(p.t_s)))   # noqa: E731
+        assert reach(long_line) > 7900.0 > reach(short_line)
+
+    def test_no_drift_means_north(self):
+        still = steady_search((LAT, LON), 1.0, 50, np.random.default_rng(1))
+        _, bearing, why = doctrinal_searcher("sector", still, still.datum)
+        assert bearing == 0.0 and why.startswith("no drift")
+
+    def test_only_coast_guard_patterns(self):
+        with pytest.raises(ValueError, match="greedy"):
+            doctrinal_searcher("greedy", self.setup, self.lkp)
+
+
+class TestStraightness:
+    def test_a_straight_line_is_1(self):
+        assert straightness(path_row([1, 2, 3, 4], [0, 0, 0, 0])) == pytest.approx(1.0)
+
+    def test_a_right_angle_halfway_is_0_71(self):
+        assert straightness(path_row([1, 2, 2, 2], [0, 0, 1, 2])) == pytest.approx(
+            np.sqrt(2) / 2, rel=1e-3)
+
+    def test_back_where_it_started_is_0(self):
+        assert straightness(path_row([1, 2, 1, 0], [0, 0, 0, 0])) == pytest.approx(0.0, abs=1e-9)
+
+    def test_no_motion_or_a_missing_fix_is_nan(self):
+        assert np.isnan(straightness(path_row([0, 0, 0, 0], [0, 0, 0, 0])))
+        missing = path_row([1, 2, 3, 4], [0, 0, 0, 0])
+        missing["lat_3h"] = np.nan
+        assert np.isnan(straightness(missing))
