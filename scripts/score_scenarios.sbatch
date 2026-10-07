@@ -4,16 +4,20 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=01:00:00
+#SBATCH --time=04:00:00
 #SBATCH --output=logs/score_%A_%a.out
 #SBATCH --error=logs/score_%A_%a.out
 
-# The doctrinal patterns over the scenario table, scored by the referee
-# (scripts/score_scenarios.py). Slurm gives a whole node per task, so each task scores four
-# rows at once: task k takes rows 4k-3 to 4k. Submit from the repo checkout:
+# Every searcher over a scenario table, scored by the referee (scripts/score_scenarios.py).
+# Slurm gives a whole node per task, so each task runs four processes, each scoring PER
+# consecutive rows: task k takes rows 4*PER*(k-1)+1 to 4*PER*k. Submit from the checkout:
 #
-#     sbatch --array=1-14 scripts/score_scenarios.sbatch                 # rows 1-55, both noises
-#     NOISE=rv ARRIVALS="2" sbatch --array=1-13 scripts/score_scenarios.sbatch
+#     sbatch --array=1-14 scripts/score_scenarios.sbatch                  # the 55, PER=1
+#     CSV=$DATA/derived/scenarios/bench_dev_48h.csv PER=25 OUT=... \
+#         sbatch --array=1-96 scripts/score_scenarios.sbatch              # 9,538 rows
+#     SEARCHERS=greedy GREEDY_HEADINGS=8 GREEDY_DECIDE_S=10 OUT=... sbatch ...
+#
+# One OUT folder is one experiment: the scorer refuses flights made with other settings.
 
 set -euo pipefail
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
@@ -24,14 +28,23 @@ CSV="${CSV:-$DATA/derived/scenarios/scenarios.csv}"
 N="${N:-10000}"
 NOISE="${NOISE:-rv rw}"
 ARRIVALS="${ARRIVALS:-1 2 3}"
-LAST="${LAST:-55}"
-OUT="${OUT:-$DATA/derived/scenarios/scores_N${N}}"
+SEARCHERS="${SEARCHERS:-expanding-square sector parallel trackline greedy random}"
+GREEDY_HEADINGS="${GREEDY_HEADINGS:-16}"
+GREEDY_DECIDE_S="${GREEDY_DECIDE_S:-60}"
+PER="${PER:-1}"
+LAST="${LAST:-$(( $(wc -l < "$CSV") - 1 ))}"
+OUT="${OUT:-$DATA/derived/results/$(basename "$CSV" .csv)_N${N}}"
 K="${SLURM_ARRAY_TASK_ID:?submit with --array}"
 
-for R in $(seq $((4 * K - 3)) $((4 * K))); do
-    [ "$R" -le "$LAST" ] || continue
+for P in 0 1 2 3; do
+    A=$(( 4 * PER * (K - 1) + P * PER + 1 ))
+    B=$(( A + PER - 1 ))
+    [ "$A" -le "$LAST" ] || continue
+    [ "$B" -le "$LAST" ] || B=$LAST
     PYTHONPATH=src "$PY" scripts/score_scenarios.py score --csv "$CSV" --forcing-dir "$DATA" \
-        --rows "$R" --noise $NOISE --arrival-h $ARRIVALS --particles "$N" --out "$OUT" &
+        --rows "$A-$B" --noise $NOISE --arrival-h $ARRIVALS --searchers $SEARCHERS \
+        --greedy-headings "$GREEDY_HEADINGS" --greedy-decide-s "$GREEDY_DECIDE_S" \
+        --particles "$N" --out "$OUT" &
 done
 wait
 echo "task $K done: $OUT"
