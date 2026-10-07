@@ -249,7 +249,7 @@ def upload(src: Path, repo: str, path_in_repo: str) -> None:
     api = HfApi(token=token)
     print(f"authenticated as {api.whoami()['name']}; uploading {src} -> {repo}/{path_in_repo}")
     api.upload_folder(repo_id=repo, repo_type="dataset", folder_path=str(src),
-                      path_in_repo=path_in_repo, ignore_patterns=[".index.*"])
+                      path_in_repo=path_in_repo, ignore_patterns=[".index.*", "**/.index.*"])
     print(f"done: https://huggingface.co/datasets/{repo}/tree/main/{path_in_repo}")
 
 
