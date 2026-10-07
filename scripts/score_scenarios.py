@@ -52,26 +52,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sar.model.position import CALIBRATED_SIGMA, CALIBRATED_SIGMA_U
 from sar.pipeline.gridded import GriddedForcing
-from sar.search.episode import STEPS, SearchEpisode, pattern_policy, run
-from sar.search.greedy import greedy_policy, random_heading_policy
+from sar.search.benchmark import BASELINE, GREEDY, NOISE, SEARCHERS, searcher
+from sar.search.episode import STEPS, SearchEpisode, run
 from sar.search.platform import STEP_S
-from sar.search.scenario import (
-    DOCTRINAL,
-    doctrinal_searcher,
-    read_scenarios,
-    scenario_search,
-    straightness,
-)
+from sar.search.scenario import read_scenarios, scenario_search, straightness
 from sar.utils.geo import to_display_longitude
 
-SEARCHERS = DOCTRINAL + ("greedy", "random")
-NOISE = {"rv": {"sigma_u": CALIBRATED_SIGMA_U, "sigma": 0.0},
-         "rw": {"sigma_u": 0.0, "sigma": CALIBRATED_SIGMA}}
-BASELINE = "expanding-square"          # D004: what every other searcher is compared with
-# Greedy's settings: chosen on dev, and frozen before any test set is opened.
-GREEDY = {"headings": 36, "decide_s": 60.0}
 RESAMPLES = 1000
 BOOTSTRAP_SEED = 20261007
 REPO = Path(__file__).resolve().parents[1]
@@ -95,22 +82,6 @@ def row_names(spec, table: pd.DataFrame) -> list[str]:
         else:
             raise ValueError(f"not in the scenario table: {item}")
     return out
-
-
-def searcher(name: str, setup, row, arrival_h: float, greedy: dict | None = None):
-    """A searcher for one scenario: (policy, first bearing or None, how it was laid out)."""
-    if name in DOCTRINAL:
-        lkp = (float(row["lat"]), float(row["lon"]))
-        pattern, bearing, why = doctrinal_searcher(name, setup, lkp)
-        return pattern_policy(pattern), bearing, why
-    if name == "greedy":
-        g = GREEDY if greedy is None else greedy
-        return (greedy_policy(**g), None,
-                f"map, {g['headings']} headings every {g['decide_s']:g} s")
-    if name == "random":
-        return (random_heading_policy([int(row["seed"]), int(round(arrival_h * 60))]), None,
-                "random heading each minute")
-    raise ValueError(f"unknown searcher {name!r}")
 
 
 def _scenario_fields(row) -> dict:
