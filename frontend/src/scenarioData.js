@@ -26,7 +26,7 @@ export const SEARCHER_INFO = {
   sector: { label: 'Sector', kind: 'Coast Guard pattern', colour: '#a77bf2' },
   parallel: { label: 'Parallel Track', kind: 'Coast Guard pattern', colour: '#e8b23d' },
   trackline: { label: 'Trackline', kind: 'Coast Guard pattern', colour: '#e8735a' },
-  greedy: { label: 'Greedy (the AI for now)', kind: 'reads the map', colour: '#04c951' },
+  greedy: { label: 'Greedy (AI for now)', kind: 'reads the map', colour: '#04c951' },
   random: { label: 'Random', kind: 'the floor', colour: '#8a8a80' },
 };
 
