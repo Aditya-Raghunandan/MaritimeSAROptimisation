@@ -133,13 +133,16 @@ let fieldLayer = null;
 async function fly() {
   game.name = nickname($('name').value);
   $('status').textContent = 'loading the sea…';
+  $('goBtn').disabled = true;            // one flight per click, however slow the download
   try {
     game.window = await loadWindow(game.scenario.scenario, NOISE, ARRIVAL_H);
     game.field = await loadField(game.scenario.scenario, ARRIVAL_H, game.index);
   } catch (err) {
     $('status').textContent = `could not load this buoy: ${err.message}`;
+    $('goBtn').disabled = false;
     return;
   }
+  $('goBtn').disabled = false;
   $('status').textContent = '';
   show('fly');
   if (!flyMap) {

@@ -207,15 +207,34 @@ function start() {
   render();
 }
 
+let loading = 0;
+
 async function load() {
+  // Nothing from the previous choice stays on screen while the next cloud downloads (3.7 MB
+  // from Hugging Face), and a download overtaken by a newer choice is dropped when it lands.
+  const token = ++loading;
+  state.playing = false;
+  state.window = null;
+  state.flight = null;
+  scene.probability.clear();
+  scene.heli.remove();
+  scene.strip.setLatLngs([]);
+  scene.path.setLatLngs([]);
+  scene.hideBuoy();
+  $('paper').textContent = '–';
+  $('pos').textContent = '–';
+  $('play').textContent = 'Play';
   drawControls();
   $('status').textContent = 'loading the cloud…';
+  let loaded;
   try {
-    state.window = await loadWindow(state.scenario.scenario, state.noise, state.hours);
+    loaded = await loadWindow(state.scenario.scenario, state.noise, state.hours);
   } catch (err) {
-    $('status').textContent = `could not load this scenario: ${err.message}`;
+    if (token === loading) $('status').textContent = `could not load this scenario: ${err.message}`;
     return;
   }
+  if (token !== loading) return;
+  state.window = loaded;
   $('status').textContent = `${state.window.meta.particles.toLocaleString()} possible positions, `
     + `${NOISE_INFO[state.noise].note}`;
   scene.setWindow(state.window);
