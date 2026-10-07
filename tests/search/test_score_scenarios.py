@@ -196,3 +196,23 @@ class TestSummary:
                 "removed_per_step": f["drain_rate"]} for f in flights[:2]]
         (tmp_path / "S01.jsonl").write_text("".join(json.dumps(f) + "\n" for f in old))
         assert "drain_rate" in score.read_flights(tmp_path)
+
+
+def test_a_row_across_a_forcing_gap_is_skipped_and_says_why(tmp_path, monkeypatch):
+    from sar.pipeline.gridded import ForcingGapError
+    table = pd.DataFrame([row("S01"), row("S02", seed=6)])
+    csv = tmp_path / "t.csv"
+    table.to_csv(csv, index=False)
+
+    def fake(r, *args, **kwargs):
+        if r["scenario"] == "S01":
+            raise ForcingGapError("current has a 12 h gap")
+        return [{"scenario": r["scenario"], "pos": 0.5, "searcher": "x", "noise": "rv",
+                 "arrival_h": 1.0}]
+
+    monkeypatch.setattr(score, "score_row", fake)
+    score.main(["score", "--csv", str(csv), "--forcing-dir", "x", "--rows", "1-2",
+                "--out", str(tmp_path / "out")])
+    flights = tmp_path / "out" / "flights"
+    assert json.loads((flights / "S01.skipped.json").read_text())["reason"].startswith("current")
+    assert (flights / "S02.jsonl").exists() and not (flights / "S01.jsonl").exists()

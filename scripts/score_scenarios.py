@@ -26,7 +26,8 @@ flight has a pair.
 ONE FOLDER, ONE EXPERIMENT. `score` writes DIR/manifest.json the first time (code commit,
 the table's sha256, N, noise, arrivals, searchers) and refuses to add flights made with
 anything different, so a folder can never mix two experiments. One file per row,
-DIR/flights/<scenario>.jsonl, rewritten on a rerun.
+DIR/flights/<scenario>.jsonl, rewritten on a rerun. A row whose window crosses a gap in the
+forcing (D011) is skipped and leaves DIR/flights/<scenario>.skipped.json saying why.
 
 THE SUMMARY AVERAGES GROUPS, NOT ROWS. Buoys that drifted within 10 km of each other ride the
 same water (D025), and a long-lived buoy gives many rows. So every number is averaged within
@@ -52,7 +53,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sar.pipeline.gridded import GriddedForcing
+from sar.pipeline.gridded import ForcingGapError, GriddedForcing
 from sar.search.benchmark import BASELINE, GREEDY, NOISE, SEARCHERS, searcher
 from sar.search.episode import STEPS, SearchEpisode, run
 from sar.search.platform import STEP_S
@@ -340,8 +341,10 @@ def main(argv=None):
         overall = table[(table["slice"] == "all") & (table["measure"] == "pos")]
         with pd.option_context("display.width", 160, "display.float_format", "{:.4f}".format):
             print(overall.drop(columns=["measure", "slice"]).to_string(index=False))
+        skipped = sorted((folder / "flights").glob("*.skipped.json"))
         print(f"\n{len(flights)} flights, {flights['scenario'].nunique()} scenarios, "
-              f"{flights['group'].nunique()} groups -> {folder / 'summary.csv'}")
+              f"{flights['group'].nunique()} groups, {len(skipped)} skipped (forcing gaps) "
+              f"-> {folder / 'summary.csv'}")
         return table
 
     table = read_scenarios(args.csv)
@@ -353,8 +356,15 @@ def main(argv=None):
     for name in row_names(args.rows, table):
         row = table[table["scenario"] == name].iloc[0]
         t0 = time.perf_counter()
-        flights = score_row(row, args.forcing_dir, args.noise, args.arrival_h,
-                            args.searchers, args.particles, greedy)
+        try:
+            flights = score_row(row, args.forcing_dir, args.noise, args.arrival_h,
+                                args.searchers, args.particles, greedy)
+        except ForcingGapError as err:
+            # D011: a scenario that crosses a gap in the forcing is excluded, and says why.
+            (out / "flights" / f"{name}.skipped.json").write_text(
+                json.dumps({"scenario": name, "reason": str(err)}))
+            print(f"{name}: skipped, {err}", flush=True)
+            continue
         (out / "flights" / f"{name}.jsonl").write_text(
             "".join(json.dumps(f) + "\n" for f in flights))
         best = max(flights, key=lambda f: f["pos"])
