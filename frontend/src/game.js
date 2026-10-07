@@ -80,9 +80,14 @@ function drawBoards() {
 
 function attract() {
   drawBoards();
+  // The two 3D loops (scripts/render_showcase.py), one after the other.
   const video = $('showcase');
-  video.src = `${SCENARIO_ROOT}/../showcase/mountain.webm`;
+  const loops = ['mountain', 'cube'].map((n) => `${SCENARIO_ROOT}/../showcase/${n}.webm`);
+  let i = 0;
+  video.loop = false;
+  video.onended = () => { i = (i + 1) % loops.length; video.src = loops[i]; video.play().catch(() => {}); };
   video.onerror = () => { video.style.visibility = 'hidden'; };
+  video.src = loops[0];
   show('attract');
 }
 
