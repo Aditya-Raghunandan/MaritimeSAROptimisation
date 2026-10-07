@@ -74,8 +74,22 @@ its patterns (ADR003). The patterns are laid out by one function,
 At one decision a minute a heading is a 2.78 km straight leg. With eight headings greedy
 could not lay its legs side by side and kept re-flying one line: 0.37 on S01 at 1 h against
 the Expanding Square's 0.83. More headings, or deciding more often than once a minute,
-fixed it (S01: 16 headings 0.78; 8 headings every 10 s 0.84). The settings are chosen on the
-55 dev scenarios, the table below, and frozen before any test set is opened.
+fixed it (S01: 16 headings 0.78; 8 headings every 10 s 0.84). The settings were chosen on the
+55 dev scenarios (7 Oct, jobs 59002–59007), group-first POS with memory:
+
+| Greedy | 1 h | 2 h | 3 h | Mean |
+|---|---|---|---|---|
+| 8 headings, decide every 60 s | 0.581 | 0.397 | 0.279 | 0.419 |
+| 16 headings, 60 s | 0.773 | 0.472 | 0.303 | 0.516 |
+| **36 headings, 60 s (the default)** | 0.792 | **0.491** | **0.319** | 0.534 |
+| 8 headings, every 20 s | 0.805 | 0.482 | 0.303 | 0.530 |
+| 8 headings, every 10 s | 0.815 | 0.480 | 0.283 | 0.526 |
+| 16 headings, every 10 s | **0.821** | 0.489 | 0.302 | **0.538** |
+
+**36 headings, one decision a minute**: within 0.4 points of the best on average, the best at
+2 h and 3 h (and under the old noise at every arrival), and it keeps the referee's own step,
+one heading a minute. So a learning searcher with the same action differs from it only by
+learning (D023). It is frozen with the rest before any test set is opened.
 
 ## The scenarios
 

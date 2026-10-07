@@ -71,7 +71,7 @@ NOISE = {"rv": {"sigma_u": CALIBRATED_SIGMA_U, "sigma": 0.0},
          "rw": {"sigma_u": 0.0, "sigma": CALIBRATED_SIGMA}}
 BASELINE = "expanding-square"          # D004: what every other searcher is compared with
 # Greedy's settings: chosen on dev, and frozen before any test set is opened.
-GREEDY = {"headings": 16, "decide_s": 60.0}
+GREEDY = {"headings": 36, "decide_s": 60.0}
 RESAMPLES = 1000
 BOOTSTRAP_SEED = 20261007
 REPO = Path(__file__).resolve().parents[1]

@@ -97,7 +97,7 @@ class TestScore:
         for name in ("parallel", "trackline"):
             assert flight(flights, "rv", 2.0, name)["layout"] == "along the datum line"
         assert flight(flights, "rv", 2.0, "greedy")["first_bearing_deg"] is None
-        assert flight(flights, "rv", 2.0, "greedy")["layout"] == "map, 16 headings every 60 s"
+        assert flight(flights, "rv", 2.0, "greedy")["layout"] == "map, 36 headings every 60 s"
 
     def test_greedy_takes_its_settings(self):
         fl = score.score_row(row(), FORCING, ["rv"], [1.0], ["greedy"], 300,
