@@ -17,6 +17,9 @@ What it records:
     flights    every searcher (four Coast Guard patterns, greedy, random) as the Waypoints
                it flew each step, and the referee's removed_per_step, pos, expected time to
                detection and target result
+    player     a scripted "player": a heading every 5 s, flown by `replay_policy`, as the
+               site's PlayerFlight records one (frontend/src/playback.js), so a person's
+               flight is scored by the paper's referee and the browser's alike
     encoded    one frame as the scenario bundles store it (float32 metres from the marker)
                and the positions Python rebuilds from it, for the bundle decoder
 
@@ -34,7 +37,7 @@ import pandas as pd
 
 from sar.pipeline.forcing import ConstantForcing
 from sar.search.benchmark import NOISE, SEARCHERS, recorded, searcher
-from sar.search.episode import SearchEpisode, run
+from sar.search.episode import SearchEpisode, replay_policy, run
 from sar.search.platform import SEARCH_SPEED_MS, SWEEP_WIDTH_M
 from sar.search.scenario import scenario_search
 from sar.search.sweep import relative_m
@@ -72,6 +75,13 @@ def build() -> dict:
             "removed_per_step": m["removed_per_step"], "pos": m["pos"],
             "expected_ttd_s": m["expected_ttd_s"], "target": m["target"]}
 
+    # A player who circles out from the marker, changing heading every 5 s.
+    t = np.arange(0.0, 45 * 60.0, 5.0)
+    record = {"t_s": floats(t), "heading_deg": floats((90.0 + 2.5 * t / 5.0) % 360.0)}
+    m = run(replay_policy(record), SearchEpisode(w, setup.marker, target=setup.target))
+    player = {"record": record, "removed_per_step": m["removed_per_step"], "pos": m["pos"],
+              "target": m["target"]}
+
     k = 30
     mlat, mlon = setup.marker.at(np.arange(w.lat.shape[0]) * 60.0)
     east, north = relative_m(w.lat[k], w.lon[k], mlat[k], mlon[k])
@@ -88,6 +98,7 @@ def build() -> dict:
         "target": {"t_s": floats(setup.target.t_s), "lat": floats(setup.target.lat),
                    "lon": floats(setup.target.lon)},
         "flights": flights,
+        "player": player,
         "encoded": {"frame": k, "marker_lat": float(mlat[k]), "marker_lon": float(mlon[k]),
                     "east_f32": floats(e32), "north_f32": floats(n32),
                     "lat": floats(lat), "lon": floats(lon)},
