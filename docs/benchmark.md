@@ -43,7 +43,8 @@ patch are 18 independent tests, and give a range that is too narrow.
 | Straightness | What the buoy's 4 hours looked like |
 |---|---|
 | **1.00** | a straight line |
-| **0.90** | a gentle bend, like a quarter of a circle |
+| **0.95** | a curve turning through about 60° |
+| **0.90** | a bend through a quarter of a circle (90°) |
 | **0.71** | a sharp right-angle turn halfway |
 | **0.64** | a U-shaped half circle |
 | **0** | it came back to where it started |
@@ -52,7 +53,13 @@ No buoy is removed for turning. A turn is either a data error (a GPS glitch, a b
 ship's deck, a buoy aground), which GDP's quality control and the scenario rules already
 remove, or real ocean (an eddy, a front, a wind shift), which is exactly what a person in
 the water goes through. Instead every result is also reported for **straight against
-turning** buoys, split at the median straightness of the dev buoys.
+turning** buoys, split at **0.95**.
+
+Over 4 hours most buoys hardly turn. In the 9,538 dev scenarios the median straightness is
+0.995, a straight line to half a percent; 12 % are below 0.95, 6.8 % below 0.90 and 2.1 %
+below 0.71. Quiet water turns more than the jet (medians 0.990 and 0.9996). That is why the
+split is a fixed 0.95 and not the median: the median would call buoys "turning" that are
+straight to within half a percent.
 
 ## The searchers
 
@@ -145,6 +152,6 @@ dated, and are not changed after:
 - the noise: σ_u = 0.226 m/s, T_L = 25.7 h (D030);
 - N = 10,000, and arrivals at 1, 2 and 3 h;
 - each pattern's layout rule, and greedy's settings;
-- the scorer, and the straightness split (the dev median).
+- the scorer, and the straightness split (0.95).
 
 A bug fix after opening is allowed and logged. Retuning is not.

@@ -35,7 +35,7 @@ groups. `summary` writes flights.parquet and summary.csv beside the rows.
 
     python scripts/score_scenarios.py score --csv scenarios.csv --forcing-dir DATA \\
         --rows 1-55 --noise rv rw --arrival-h 1 2 3 --out DIR
-    python scripts/score_scenarios.py summary DIR [--straight-at 0.95]
+    python scripts/score_scenarios.py summary DIR [--straight-at 0.90]
 """
 
 from __future__ import annotations
@@ -60,6 +60,10 @@ from sar.search.scenario import read_scenarios, scenario_search, straightness
 from sar.utils.geo import to_display_longitude
 
 RESAMPLES = 1000
+# Straight against turning: 0.95 is a curve turning through about 60 degrees over the 4 h.
+# The dev median is 0.995, a straight line to half a percent, so it would split straight
+# buoys from straight buoys (7 Oct: 12 % of the 9,538 dev rows are below 0.95).
+STRAIGHT_AT = 0.95
 BOOTSTRAP_SEED = 20261007
 REPO = Path(__file__).resolve().parents[1]
 
@@ -259,15 +263,14 @@ def slices(f: pd.DataFrame, straight_at: float | None) -> list[tuple[str, pd.Dat
     return [(name, part) for name, part in out if len(part)]
 
 
-def summarise(flights: pd.DataFrame, straight_at: float | None = None,
+def summarise(flights: pd.DataFrame, straight_at: float | None = STRAIGHT_AT,
               resamples: int = RESAMPLES) -> pd.DataFrame:
     """Every searcher's numbers, and the paired differences, averaged by group, with 95 % CIs.
 
     Measures: pos, found (the real buoy's found rate), ttd_min (expected time to detection),
     pos_15m. Paired: pos with memory minus without (rv - rw, same row and seed), and each
     searcher's pos minus the Expanding Square's on the same cloud. `straight_at` splits
-    straight from turning buoys; None takes the median of the table's own rows, which is
-    right for dev and must be replaced by the frozen dev value on any test set.
+    straight from turning buoys (STRAIGHT_AT); None takes the table's own median.
     """
     rng = np.random.default_rng(BOOTSTRAP_SEED)
     f = flights.assign(found=flights["found"].astype(float),
@@ -321,9 +324,9 @@ def main(argv=None):
     s.add_argument("--out", required=True, help="the experiment's folder")
     m = sub.add_parser("summary", help="tabulate an experiment's folder")
     m.add_argument("folder")
-    m.add_argument("--straight-at", type=float, default=None,
-                   help="straightness splitting straight from turning buoys; default the "
-                        "table's median (dev only: freeze it before any test set)")
+    m.add_argument("--straight-at", type=float, default=STRAIGHT_AT,
+                   help=f"straightness splitting straight from turning buoys, default "
+                        f"{STRAIGHT_AT} (a curve through about 60 degrees)")
     m.add_argument("--resamples", type=int, default=RESAMPLES)
     args = parser.parse_args(argv)
 
