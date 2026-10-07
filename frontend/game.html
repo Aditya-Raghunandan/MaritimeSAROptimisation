@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Survive the Triangle</title>
+    <style>
+      :root {
+        --surface-0: #121211;
+        --surface-1: #1a1a19;
+        --surface-2: #262624;
+        --ink: #ffffff;
+        --ink-2: #c3c2b7;
+        --ink-3: #8a8a80;
+        --line: #3a3a37;
+        --accent: #3987e5;
+        --win: #04c951;
+        --warm: #eb6834;
+        --font: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        font: 14px/1.45 var(--font); color: var(--ink); background: var(--surface-0);
+        display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden;
+      }
+      header {
+        display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+        border-bottom: 1px solid var(--line); background: var(--surface-1);
+      }
+      header h1 { font-size: 16px; margin: 0; }
+      header nav { margin-left: auto; display: flex; gap: 14px; }
+      header a { color: var(--ink-2); text-decoration: none; }
+      .screen { display: none; min-height: 0; height: 100%; }
+      .screen.on { display: grid; }
+      button { font: inherit; color: var(--ink); cursor: pointer; }
+      .big {
+        background: var(--accent); border: 0; border-radius: 10px; padding: 12px 26px;
+        font-size: 18px; font-weight: 600;
+      }
+      .ghost { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; }
+      .muted { color: var(--ink-3); }
+      .card { background: var(--surface-1); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+
+      /* attract */
+      #attract { grid-template-columns: 1.3fr 1fr; gap: 24px; padding: 28px 36px; align-items: center; }
+      #attract h2 { font-size: 44px; line-height: 1.05; margin: 0 0 12px; }
+      #attract p { font-size: 17px; color: var(--ink-2); max-width: 38em; }
+      #showcase { width: 100%; max-height: 52vh; border-radius: 12px; background: #000; object-fit: contain; }
+      .board h3 { margin: 0 0 6px; font-size: 14px; }
+      .board ol { margin: 0; padding-left: 22px; }
+      .board li { display: flex; justify-content: space-between; gap: 10px; }
+      .boards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+
+      /* pick */
+      #pick { grid-template-columns: 1fr 380px; }
+      #pickMap, #flyMap { min-height: 0; height: 100%; background: #111; }
+      #pick aside { padding: 16px; display: flex; flex-direction: column; gap: 12px; background: var(--surface-1); border-left: 1px solid var(--line); }
+      .modes { display: grid; gap: 8px; }
+      .modes button { text-align: left; background: var(--surface-2); border: 2px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+      .modes button[aria-pressed=true] { border-color: var(--accent); }
+      .modes b { display: block; }
+      input[type=text] { font: inherit; color: var(--ink); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
+
+      /* fly */
+      #fly { position: relative; grid-template-columns: 1fr; }
+      .hud {
+        position: absolute; z-index: 500; top: 12px; left: 50%; transform: translateX(-50%);
+        display: flex; gap: 10px; pointer-events: none;
+      }
+      .hud .card { padding: 8px 14px; text-align: center; min-width: 120px; }
+      .hud b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+      .hint {
+        position: absolute; z-index: 500; bottom: 18px; left: 50%; transform: translateX(-50%);
+        background: #000b; padding: 8px 14px; border-radius: 10px; color: #ffcd8d; pointer-events: none;
+      }
+
+      /* reveal */
+      #reveal { grid-template-rows: auto 1fr; }
+      #reveal .bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; }
+      .panels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 0 6px 6px; min-height: 0; }
+      .panel { position: relative; min-height: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+      .panel .map { position: absolute; inset: 0; background: #111; }
+      .panel .tag {
+        position: absolute; z-index: 500; top: 8px; left: 8px; right: 8px; display: flex;
+        justify-content: space-between; background: #000a; border-radius: 8px; padding: 6px 10px;
+      }
+      .panel .tag b { font-variant-numeric: tabular-nums; }
+
+      /* results */
+      #results { grid-template-columns: 1.1fr 1fr; gap: 18px; padding: 20px 28px; align-content: start; overflow: hidden; }
+      .verdict { font-size: 30px; font-weight: 700; margin: 0 0 6px; }
+      .verdict.win { color: var(--win); }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+      td.n { text-align: right; font-variant-numeric: tabular-nums; }
+      .explain { color: var(--ink-2); font-size: 13px; }
+      .scene-label { position: absolute; left: 16px; top: -3px; white-space: nowrap; font-size: 11px; color: #fff; text-shadow: 0 0 3px #000; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Can you survive the Bermuda Triangle?</h1>
+      <span class="muted" id="status"></span>
+      <nav><a href="./bench.html">the scenarios</a><a href="./index.html">the map</a></nav>
+    </header>
+
+    <section class="screen on" id="attract">
+      <div>
+        <h2>Someone has fallen into the sea.<br />Can you find them before the AI does?</h2>
+        <p>
+          The ocean carries a person kilometres in a few hours, and nobody knows exactly where.
+          Our drift model turns one splash into 10,000 places they could be. You get one
+          helicopter, a 185 m strip of sea it can see, and 45 minutes. Then the Coast Guard's
+          pattern and the AI search the same sea, and we reveal where the person really was.
+        </p>
+        <p class="muted">Beat both the Coast Guard and the AI and you win a prize.</p>
+        <button class="big" id="startBtn">Start</button>
+        <div class="boards">
+          <div class="card board"><h3>Best with the probability map</h3><ol id="boardMap"></ol></div>
+          <div class="card board"><h3>Best with currents only</h3><ol id="boardCurrents"></ol></div>
+        </div>
+      </div>
+      <video id="showcase" autoplay muted loop playsinline></video>
+    </section>
+
+    <section class="screen" id="pick">
+      <div id="pickMap"></div>
+      <aside>
+        <div><b>1. Pick where they fell in</b><div class="muted" id="pickInfo">Click a dot. Each one is a real drifting buoy we tracked by satellite.</div></div>
+        <button class="ghost" id="surprise">Surprise me</button>
+        <div><b>2. What can you see?</b>
+          <div class="modes" id="modes">
+            <button data-mode="map" aria-pressed="true"><b>The probability map</b><span class="muted">See the 10,000 places they could be.</span></button>
+            <button data-mode="currents" aria-pressed="false"><b>Currents only (hard)</b><span class="muted">See only how the water flows, like a real pilot.</span></button>
+          </div>
+        </div>
+        <div><b>3. Your name for the board</b><input type="text" id="name" maxlength="16" placeholder="Player" /></div>
+        <button class="big" id="goBtn" disabled>Fly</button>
+      </aside>
+    </section>
+
+    <section class="screen" id="fly">
+      <div id="flyMap"></div>
+      <div class="hud">
+        <div class="card"><b id="hudTime">45:00</b><span class="muted">left</span></div>
+        <div class="card" id="hudPosCard"><b id="hudPos">0 %</b><span class="muted">searched</span></div>
+      </div>
+      <div class="hint" id="hint">Arrow keys or WASD to steer. Press any arrow to take off.</div>
+    </section>
+
+    <section class="screen" id="reveal">
+      <div class="bar"><b>Same sea, same 45 minutes, three searchers.</b><span class="muted" id="revealNote"></span>
+        <button class="ghost" id="skipBtn" style="margin-left:auto">Skip to the results</button></div>
+      <div class="panels">
+        <div class="panel"><div class="map" id="mapYou"></div><div class="tag"><span>You</span><b id="posYou">0 %</b></div></div>
+        <div class="panel"><div class="map" id="mapCg"></div><div class="tag"><span>Coast Guard (Expanding Square)</span><b id="posCg">0 %</b></div></div>
+        <div class="panel"><div class="map" id="mapAi"></div><div class="tag"><span>The AI</span><b id="posAi">0 %</b></div></div>
+      </div>
+    </section>
+
+    <section class="screen" id="results">
+      <div>
+        <p class="verdict" id="verdict"></p>
+        <p class="explain" id="verdictWhy"></p>
+        <table id="scoreTable"></table>
+        <p class="explain">
+          <b>Searched</b> is the share of all the places the person could be that each helicopter
+          looked at: the paper calls it POS. The person is in exactly one of those places, so if
+          the drift model is right, a search that covers 60 % finds them about 6 times in 10. <b>The AI</b> here is a greedy
+          search that always flies to where the most probability is left; a trained agent will
+          take its place.
+        </p>
+        <div class="row" style="display:flex;gap:10px;margin-top:10px">
+          <button class="big" id="againBtn">Play again</button>
+          <button class="ghost" id="exportBtn">Save the board as a file</button>
+        </div>
+      </div>
+      <div>
+        <div class="card board"><h3 id="boardTitle">The board</h3><ol id="boardNow"></ol></div>
+        <div class="card" style="margin-top:12px">
+          <h3 style="margin:0 0 6px;font-size:14px">Across every buoy we tested</h3>
+          <div class="explain" id="benchNote"></div>
+          <table id="benchTable"></table>
+        </div>
+      </div>
+    </section>
+
+    <script type="module" src="./src/game.js"></script>
+  </body>
+</html>
