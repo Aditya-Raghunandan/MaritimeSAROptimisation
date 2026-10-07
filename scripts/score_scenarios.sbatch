@@ -35,6 +35,9 @@ PER="${PER:-1}"
 LAST="${LAST:-$(( $(wc -l < "$CSV") - 1 ))}"
 OUT="${OUT:-$DATA/derived/results/$(basename "$CSV" .csv)_N${N}}"
 K="${SLURM_ARRAY_TASK_ID:?submit with --array}"
+# The commit, asked of git once here rather than by every process at once (the scorer reads it).
+# Best set at submission: SAR_COMMIT=$(git rev-parse HEAD) sbatch ...
+export SAR_COMMIT="${SAR_COMMIT:-$(git rev-parse HEAD)$(git -c core.checkStat=minimal diff --quiet HEAD -- || echo -dirty)}"
 
 for P in 0 1 2 3; do
     A=$(( 4 * PER * (K - 1) + P * PER + 1 ))

@@ -216,3 +216,8 @@ def test_a_row_across_a_forcing_gap_is_skipped_and_says_why(tmp_path, monkeypatc
     flights = tmp_path / "out" / "flights"
     assert json.loads((flights / "S01.skipped.json").read_text())["reason"].startswith("current")
     assert (flights / "S02.jsonl").exists() and not (flights / "S01.jsonl").exists()
+
+
+def test_the_batch_jobs_commit_wins(monkeypatch):
+    monkeypatch.setenv("SAR_COMMIT", "abc123")
+    assert score.git_commit() == "abc123"

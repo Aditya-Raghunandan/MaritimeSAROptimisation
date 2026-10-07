@@ -151,6 +151,12 @@ def git_commit() -> str:
     metadata the head node's index does not match, and git 2.25 there called files "M"
     whose contents were the commit's byte for byte (7 Oct, jobs 59091-59092).
     """
+    held = os.environ.get("SAR_COMMIT")
+    if held:
+        # Computed once by the batch job (score_scenarios.sbatch). Forty-eight processes each
+        # asking git at the same moment on a shared disk did not all get the same answer
+        # (7 Oct, job 59217: six tasks refused by their own manifest).
+        return held
     try:
         sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True,
                              text=True, check=True).stdout.strip()
@@ -197,6 +203,7 @@ def claim(out: Path, settings: dict) -> dict:
     differ = sorted(k for k in settings if held.get(k) != settings[k])
     if differ:
         raise ValueError(f"{out} already holds an experiment with different {', '.join(differ)}"
+                         f" ({'; '.join(f'{k}: {held.get(k)!r} there, {settings[k]!r} here' for k in differ if k == 'commit')})"
                          f"; use a new folder")
     return held
 
