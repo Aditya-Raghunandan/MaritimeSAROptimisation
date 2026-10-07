@@ -29,7 +29,9 @@ starts at the marker. On the ground it is the marker's position plus the offset.
 that flew over the ground instead would spend ~4.9 km of a 125 km window keeping up with a
 1.8 m/s current that the patterns are carried by for free.
 
-WHAT IS MEASURED (row 6). POS; the expected time to detection, sum(t x dm) / sum(dm) with t
+WHAT IS MEASURED (row 6). POS, and the probability removed in each step: `removed_per_step`,
+which the project calls the DRAIN RATE (the share of the probability cleared per minute;
+POS is its sum; docs/benchmark.md). The expected time to detection, sum(t x dm) / sum(dm) with t
 the END of each sub-leg in seconds since arrival (late by at most one sub-leg, never early);
 the distance flown in the marker frame, which is speed x time for every searcher, so a check
 and not a comparison. With a target track (the real buoy) also whether and when it came

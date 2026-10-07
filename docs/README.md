@@ -42,6 +42,7 @@ They may cite an ADR or a vault decision for *why*, and should not restate the r
 | [monte-carlo.md](monte-carlo.md) | `sar.pipeline.ensemble`: N particles from a perturbed datum, the CSV it writes, the heatmap and the convergence ladder (issues #46, R1e, R1f) |
 | [search-patterns.md](search-patterns.md) | `sar.search` — the helicopter's numbers, the four Coast Guard patterns, the datum and its marker, and the particle sweep (issues #44, #45, #48, #63, #75) |
 | [search-episode.md](search-episode.md) | `sar.search.episode` and `sar.search.scenario` — one search over a scenario's cloud, flown by any searcher and scored by one referee: POS, time to detection, distance, and the real buoy (issue #47) |
+| [benchmark.md](benchmark.md) | The benchmark: every searcher (four Coast Guard patterns, greedy, the random floor) over every buoy, scored by the referee and averaged by shared-water group; POS, the drain rate, straightness, and the test sets (issues #48, #49) |
 | [linear_time_interpolation.md](linear_time_interpolation.md) | `sar.utils.interpolation` — why the drift model needs it |
 | [e2e-testing.md](e2e-testing.md) | `npm run test:e2e` and `npm run shots` — browser tests, and looking at the page (issue #21) |
 | [issue-template.md](issue-template.md) | the structure every new issue follows, and what "done" means |

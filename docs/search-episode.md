@@ -42,7 +42,7 @@ synthetic one. `--arrival-h` is hours from the call, in whole minutes. The windo
 | `pos` | Probability removed over the window, on the raw weights (never renormalised) |
 | `expected_ttd_s` | Σ t·Δm / Σ Δm: when, on average, the probability was found. Seconds since arrival, each sub-leg's mass credited at its end. `null` if nothing was found |
 | `distance_m` | Path flown about the marker: 125,010 m for every searcher at 90 kt for 45 min. A check, not a comparison |
-| `removed_per_step` | The 45 per-minute amounts; the RL reward is one of these |
+| `removed_per_step` | The 45 per-minute amounts: the **drain rate**, the share of the probability cleared each minute. The RL reward is one of these; POS is their sum |
 | `remaining`, `initial_mass` | What is left, and what there was (1) |
 | `target` | Scenario runs only: `found`, `found_s`, `closest_m`, `closest_s`, `gaps` against the real buoy, by the site's closest-approach rule |
 | `datum`, `first_bearing_deg` | Where the marker was dropped (the cloud's centroid at arrival) and the first leg |
@@ -85,6 +85,13 @@ A **flight record** for `replay_policy` is JSON, in one of two forms:
 - `{"t_s": [0, 12.5, ...], "heading_deg": [...]}`, each heading from that second on.
 
 It replays headings, not positions, because a ground path already contains the current.
+
+## Score the whole scenario table
+
+`scripts/score_scenarios.py` flies all six searchers (the four Coast Guard patterns, greedy
+and the random floor) over every row of a scenario table, under both noise models, and
+summarises them by shared-water group. How it works, the words it uses (POS, the drain rate,
+groups, straightness) and how to run it: **[benchmark.md](benchmark.md)**.
 
 ## The cloud every minute
 
