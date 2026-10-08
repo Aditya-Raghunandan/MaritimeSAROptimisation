@@ -35,6 +35,13 @@ twin and calibrate picks T (default 24), so both calibrations re-run from the sa
 fit records the hour it used, and calibrate refuses a fit made at another hour, because
 the crosswind slide in it is matched at that hour.
 
+THE RANDOM VELOCITY (vault D030, 4-6 Oct). The ladder can also run the random term as a
+velocity error with memory (`--sigmas-u`, `--memory-h`): the same engine, sigma = 0, and
+sigma_u laddered with T_L fixed. Its rows say so in a `model` column, and calibrate adds the
+person's crosswind slide as a velocity, sigma_c / sqrt(T): over the hours of a search both
+grow in a straight line, so their velocities add in quadrature as the random walk's kicks
+did.
+
 docs/sigma-calibration.md sets out the maths, the decisions and the results.
 """
 
@@ -52,6 +59,7 @@ from scipy import stats
 
 from sar.model.drift import LEEWAY_COEFFICIENT
 from sar.model.interpolate import OutOfCoverageError
+from sar.model.position import MEMORY_TIME_S
 from sar.pipeline.gridded import GriddedForcing
 from sar.pipeline.track import DriftPipeline
 from sar.utils.geo import M_PER_DEG_LAT, metres_per_degree_lon
@@ -73,6 +81,7 @@ STRATA_MS = (0.3, 1.0)                   # current speed at the start: < 0.3, 0.
 BETA_HOURS = (6, 48)
 N_BOOT = 1000
 FORCING_ERRORS = (OutOfCoverageError, FileNotFoundError)   # ForcingGapError is one of the first
+RANDOM_WALK, RANDOM_VELOCITY = "random walk", "random velocity"   # the ladder's two models
 
 
 # ---------------------------------------------------------------------------- forcing
@@ -114,7 +123,7 @@ class SlidingForcing:
 # ---------------------------------------------------------------------------- running
 
 def run_batch(forcing, t0, lats, lons, hours: int, leeway: float, sigma: float, seed,
-              record_hours) -> dict:
+              record_hours, sigma_u: float = 0.0, memory_time_s: float = MEMORY_TIME_S) -> dict:
     """One run of the engine from t0 for every particle given.
 
     Returns, at each recorded hour: positions (H, N, 2); the wind run, the integral of the
@@ -122,7 +131,8 @@ def run_batch(forcing, t0, lats, lons, hours: int, leeway: float, sigma: float, 
     downwind frame and whose length is what the leeway term multiplies; and whether the
     particle has had finite forcing at every step so far (H, N).
     """
-    pipeline = DriftPipeline(forcing, TIMESTEP_S, leeway=leeway, sigma=sigma, seed=seed)
+    pipeline = DriftPipeline(forcing, TIMESTEP_S, leeway=leeway, sigma=sigma, seed=seed,
+                             sigma_u=sigma_u, memory_time_s=memory_time_s)
     per_hour = round(3600.0 / TIMESTEP_S)
     want = {int(h) * per_hour: i for i, h in enumerate(record_hours)}
     n = np.size(lats)
@@ -259,13 +269,18 @@ def score_rows(windows_rows, sigma, lead, pos, alive, truth_lat, truth_lon, trut
 
 def ladder(windows: Windows, open_forcing, batches, sigmas, particles: int, seed: int,
            leads=HORIZONS_H, truth=None, bandwidths=(1.0,), subsample=(), tag="real",
-           log=print) -> pd.DataFrame:
+           log=print, model: str = RANDOM_WALK,
+           memory_time_s: float = MEMORY_TIME_S) -> pd.DataFrame:
     """Stage 2: real ensembles at each sigma, scored against the buoy at each lead.
 
     The engine exactly as it will be used: alpha = 0.02, datum spread 0 (D026), 60 s
     steps, beached particles frozen and kept (D016). `truth` replaces the real buoys
-    with (lat, lon, ok) arrays shaped like windows.lat (the twin).
+    with (lat, lon, ok) arrays shaped like windows.lat (the twin). With model = random
+    velocity, `sigmas` are sigma_u in m/s and T_L is memory_time_s (D030); the rows keep
+    the ladder value in `sigma` and say which model in `model`.
     """
+    if model not in (RANDOM_WALK, RANDOM_VELOCITY):
+        raise ValueError(f"model must be {RANDOM_WALK!r} or {RANDOM_VELOCITY!r}, got {model!r}")
     tab = windows.table
     t_lat, t_lon, t_ok = truth if truth is not None else (windows.lat, windows.lon, windows.ok)
     out = []
@@ -278,15 +293,18 @@ def ladder(windows: Windows, open_forcing, batches, sigmas, particles: int, seed
             with open_forcing(t0, end) as forcing:
                 for j, sigma in enumerate(sigmas):
                     seq = np.random.SeedSequence([seed, b, j])
+                    walk = sigma if model == RANDOM_WALK else 0.0
+                    flight = sigma if model == RANDOM_VELOCITY else 0.0
                     m = run_batch(forcing, t0, lat0, lon0, max(leads), LEEWAY_COEFFICIENT,
-                                  sigma, seq, leads)
+                                  walk, seq, leads, sigma_u=flight, memory_time_s=memory_time_s)
                     pos = m["pos"].reshape(len(leads), len(rows), particles, 2)
                     alive = m["alive"].reshape(len(leads), len(rows), particles)
                     for i, lead in enumerate(leads):
                         for r in score_rows(rows, sigma, lead, pos[i], alive[i],
                                             t_lat[rows, lead], t_lon[rows, lead],
                                             t_ok[rows, lead], bandwidths, subsample):
-                            out.append({**r, "tag": tag})
+                            out.append({**r, "tag": tag, "model": model,
+                                        "memory_h": memory_time_s / 3600.0})
         except FORCING_ERRORS as error:
             log(f"batch {b} at {t0}: skipped, {type(error).__name__}: {error}")
     return pd.DataFrame(out)
@@ -675,9 +693,11 @@ def _cmd_ladder(args) -> None:
     w = w.subset(keep)
     t = clock.perf_counter()
     batches = task_batches(w, args.task, args.tasks, args.days, args.seed)
-    rows = ladder(w, gridded(args.data), batches, args.sigmas, args.particles, args.seed,
-                  tuple(args.leads), bandwidths=tuple(args.bandwidths),
-                  subsample=tuple(args.subsample))
+    model = RANDOM_WALK if args.sigmas else RANDOM_VELOCITY
+    rows = ladder(w, gridded(args.data), batches, args.sigmas or args.sigmas_u, args.particles,
+                  args.seed, tuple(args.leads), bandwidths=tuple(args.bandwidths),
+                  subsample=tuple(args.subsample), model=model,
+                  memory_time_s=args.memory_h * 3600.0)
     if len(rows):
         rows["w"] = keep[rows["w"].to_numpy()]
     out = Path(args.out)
@@ -764,6 +784,29 @@ def twin_summary(windows: Windows, twin_dir, n_boot=N_BOOT,
     return out
 
 
+def ladder_model(rows: pd.DataFrame) -> str:
+    """Which random term a ladder ran; rows from before D030 have no column and were walks."""
+    if "model" not in rows:
+        return RANDOM_WALK
+    models = set(rows["model"].unique())
+    if len(models) != 1:
+        raise ValueError(f"a ladder must run one model, these rows hold {sorted(models)}")
+    return models.pop()
+
+
+def slide_for(sigma_c: dict, model: str, hour: int) -> dict:
+    """The crosswind slide in the ladder's units: m/s^0.5 for a walk, m/s for a velocity.
+
+    The fit matches the slide as a random walk, sigma_c sqrt(T) = a_c |wind run| at T.
+    A slide is a steady velocity a_c |wind|, so as a velocity it is sigma_c / sqrt(T).
+    """
+    if model == RANDOM_WALK:
+        return sigma_c
+    root_t = np.sqrt(hour * 3600.0)
+    return {"value": float(sigma_c["value"] / root_t),
+            "ci95": [float(v / root_t) for v in sigma_c["ci95"]]}
+
+
 def _cmd_calibrate(args) -> None:
     w = _load_windows(args)
     fit_result = json.loads(Path(args.fit).read_text())
@@ -779,17 +822,22 @@ def _cmd_calibrate(args) -> None:
         lad = _read_all(args.ladder, "ladder-*.parquet")
         out["ladder"] = calibrate_sigma_star(lad, w, n_boot=args.boot, hour=args.hour)
         star = out["ladder"]["sigma_star"]
-        sc = fit_result["sigma_c"]["crosswind_axis"]
+        model = ladder_model(lad)
+        sc = slide_for(fit_result["sigma_c"]["crosswind_axis"], model, args.hour)
+        out["model"] = model
         out["sigma_final"] = {
             "value": float(np.hypot(star["value"], sc["value"])),
             "ci95": [float(np.hypot(star["ci95"][0], sc["ci95"][0])),
                      float(np.hypot(star["ci95"][1], sc["ci95"][1]))],
-            "rule": "sqrt(sigma*^2 + sigma_c^2), sigma_c matched on the crosswind axis"}
+            "slide": sc,
+            "rule": ("sqrt(sigma*^2 + sigma_c^2), sigma_c matched on the crosswind axis"
+                     if model == RANDOM_WALK else
+                     "sqrt(sigma_u*^2 + (sigma_c / sqrt(T))^2): the slide as a velocity")}
     if args.twin:
         out["twin"] = twin_summary(w, args.twin, args.boot, args.hour)
     if args.confirm:
         conf = _read_all(args.confirm, "ladder-*.parquet")
-        out["confirm"] = {"sigma": float(conf["sigma"].iloc[0]),
+        out["confirm"] = {"sigma": float(conf["sigma"].iloc[0]), "model": ladder_model(conf),
                           "reliability": reliability(conf, w)}
     if args.check:
         chk = _read_all(args.check, "ladder-*.parquet")
@@ -840,7 +888,13 @@ def main(argv=None) -> None:
 
     lad = sub.add_parser("ladder", help="ensembles at each sigma, scored on the 90 % region")
     common(lad)
-    lad.add_argument("--sigmas", type=float, nargs="+", required=True)
+    rungs = lad.add_mutually_exclusive_group(required=True)
+    rungs.add_argument("--sigmas", type=float, nargs="+",
+                       help="random-walk sigmas, m/s^0.5 (D028)")
+    rungs.add_argument("--sigmas-u", type=float, nargs="+",
+                       help="random-velocity sigma_u values, m/s per axis (D030)")
+    lad.add_argument("--memory-h", type=float, default=MEMORY_TIME_S / 3600.0,
+                     help=f"T_L for --sigmas-u, hours, default {MEMORY_TIME_S / 3600.0:g}")
     lad.add_argument("--particles", type=int, default=1000)
     lad.add_argument("--seed", type=int, default=20261002)
     lad.add_argument("--tiers", nargs="+", default=["undrogued"])

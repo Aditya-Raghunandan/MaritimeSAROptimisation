@@ -214,3 +214,54 @@ class TestHorizon:
         at_4 = cs.calibrate_sigma_star(rows, w, n_boot=20, hour=4)["sigma_star"]["value"]
         assert at_4 == pytest.approx(10.0 * 4.0 ** 0.8)      # 0.9 is 4/5 of the way, in log
         assert np.isnan(cs.calibrate_sigma_star(rows, w, n_boot=20, hour=24)["sigma_star"]["value"])
+
+
+class TestRandomVelocityLadder:
+    """D030: the same ladder over sigma_u, with T_L fixed."""
+
+    def test_the_ladder_brackets_the_buoys_with_sigma_u(self):
+        # Buoys from a random walk of 50 m/s^0.5: at 12 h, sigma sqrt(t) = 10.4 km per axis.
+        # A random velocity with T_L = 1 h spreads sqrt(2 su^2 T_L (t - T_L (1 - e^-12))),
+        # 16.9 km x su, so su = 0.615 m/s matches them.
+        w = synthetic(days=3, per_day=20, sigma=50.0, seed=2)
+        rows = cs.ladder(w, cs.fixed(ConstantForcing(CURRENT, WIND)),
+                         list(enumerate(w.batches())), [0.2, 0.6, 1.8], 200, seed=3,
+                         leads=(HOURS,), model=cs.RANDOM_VELOCITY, memory_time_s=3600.0)
+        assert set(rows["model"]) == {cs.RANDOM_VELOCITY}
+        assert set(rows["memory_h"]) == {1.0}
+        cover = rows.groupby("sigma")["rank"].apply(lambda r: np.mean(r <= 0.9))
+        assert cover[0.2] < cover[0.6] < cover[1.8]
+        assert cover[0.6] == pytest.approx(0.9, abs=0.1)
+
+    def test_an_unknown_model_is_refused(self):
+        w = synthetic(days=1, per_day=2, sigma=0.0)
+        with pytest.raises(ValueError, match="model must be"):
+            cs.ladder(w, cs.fixed(ConstantForcing()), [], [1.0], 2, seed=0, model="flight")
+
+    def test_old_ladder_rows_are_a_random_walk(self):
+        assert cs.ladder_model(pd.DataFrame({"sigma": [1.0]})) == cs.RANDOM_WALK
+        with pytest.raises(ValueError, match="one model"):
+            cs.ladder_model(pd.DataFrame({"model": [cs.RANDOM_WALK, cs.RANDOM_VELOCITY]}))
+
+    def test_the_slide_becomes_a_velocity(self):
+        # sigma_c sqrt(T) = a_c |wind| T, so the slide's velocity a_c |wind| is sigma_c / sqrt(T).
+        sigma_c = {"value": cs.CROSSWIND_SLIDE * 6.0 * np.sqrt(4 * 3600.0), "ci95": [1.0, 2.0]}
+        v = cs.slide_for(sigma_c, cs.RANDOM_VELOCITY, 4)
+        assert v["value"] == pytest.approx(cs.CROSSWIND_SLIDE * 6.0)
+        assert v["ci95"] == pytest.approx([1.0 / 120.0, 2.0 / 120.0])
+        assert cs.slide_for(sigma_c, cs.RANDOM_WALK, 4) is sigma_c
+
+    def test_the_cli_takes_sigmas_u(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def fake_ladder(w, open_forcing, batches, sigmas, particles, seed, leads, **kw):
+            seen.update(sigmas=sigmas, **kw)
+            return pd.DataFrame()
+
+        w = synthetic(days=1, per_day=4, sigma=0.0)
+        w.save(tmp_path / "windows")
+        monkeypatch.setattr(cs, "ladder", fake_ladder)
+        cs.main(["ladder", "--windows", str(tmp_path / "windows"), "--data", str(tmp_path),
+                 "--sigmas-u", "0.2", "0.3", "--memory-h", "10", "--out", str(tmp_path / "o")])
+        assert seen["sigmas"] == [0.2, 0.3] and seen["model"] == cs.RANDOM_VELOCITY
+        assert seen["memory_time_s"] == 36000.0

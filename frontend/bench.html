@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Search a Scenario</title>
+    <style>
+      :root {
+        --surface-0: #121211;
+        --surface-1: #1a1a19;
+        --surface-2: #262624;
+        --ink: #ffffff;
+        --ink-2: #c3c2b7;
+        --ink-3: #8a8a80;
+        --line: #3a3a37;
+        --accent: #3987e5;
+        --font: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        font: 13px/1.4 var(--font);
+        color: var(--ink);
+        background: var(--surface-0);
+        display: grid;
+        grid-template-rows: auto 1fr;
+        height: 100vh;
+        overflow: hidden;
+      }
+      header {
+        display: flex; align-items: center; gap: 16px;
+        padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--surface-1);
+      }
+      header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+      header nav { margin-left: auto; display: flex; gap: 14px; }
+      header a { color: var(--ink-2); text-decoration: none; }
+      header a:hover { color: var(--ink); }
+      main { display: grid; grid-template-columns: 1fr 370px; min-height: 0; }
+      #map { min-height: 0; background: #0b1a2a; }
+      aside {
+        display: flex; flex-direction: column; gap: 7px; padding: 10px 12px;
+        background: var(--surface-1); border-left: 1px solid var(--line); min-height: 0; overflow: hidden;
+      }
+      .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+      .label { color: var(--ink-3); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+      select, button, input[type=range] { font: inherit; color: var(--ink); }
+      select { background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; flex: 1; }
+      .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+      .seg button { background: var(--surface-2); border: 0; padding: 4px 10px; cursor: pointer; color: var(--ink-2); }
+      .seg button[aria-pressed=true] { background: var(--accent); color: #fff; }
+      .searchers { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+      .searchers label {
+        display: flex; gap: 6px; align-items: center; padding: 3px 6px; border-radius: 6px;
+        background: var(--surface-2); cursor: pointer; font-size: 12px;
+      }
+      .searchers label.off { opacity: .45; cursor: not-allowed; }
+      .swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+      .facts { color: var(--ink-2); font-size: 12px; }
+      .play { background: var(--accent); border: 0; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+      input[type=range] { flex: 1; accent-color: var(--accent); }
+      .clock { font-variant-numeric: tabular-nums; color: var(--ink-2); min-width: 92px; text-align: right; }
+      .numbers { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+      .num { background: var(--surface-2); border-radius: 8px; padding: 6px 8px; }
+      .num b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+      .num span { color: var(--ink-3); font-size: 11px; }
+      .buoy { font-size: 12px; color: var(--ink-2); min-height: 17px; }
+      #chart { flex: 1 1 auto; min-height: 110px; }
+      .help { color: var(--ink-3); font-size: 11.5px; border-top: 1px solid var(--line); padding-top: 7px; }
+      .help b { color: var(--ink-2); font-weight: 600; }
+      .scene-label { position: absolute; left: 16px; top: -3px; white-space: nowrap; font-size: 11px; color: #fff; text-shadow: 0 0 3px #000; }
+      .status { color: var(--ink-3); font-size: 12px; }
+      .keys { font-size: 12px; color: #ffcd8d; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Search a scenario</h1>
+      <span class="status" id="status">loading the scenarios…</span>
+      <nav><a href="./index.html">the map</a><a href="./game.html">play the game</a></nav>
+    </header>
+    <main>
+      <div id="map"></div>
+      <aside>
+        <div>
+          <div class="label">The buoy</div>
+          <div class="row"><select id="scenario" aria-label="scenario"></select></div>
+          <div class="facts" id="facts"></div>
+        </div>
+        <div class="row">
+          <div><div class="label">Drift model</div><div class="seg" id="noise"></div></div>
+          <div><div class="label">Helicopter arrives</div><div class="seg" id="arrival"></div></div>
+        </div>
+        <div>
+          <div class="label">Who searches</div>
+          <div class="searchers" id="searchers"></div>
+          <div class="keys" id="keys" hidden>Steer with the arrow keys or WASD. Press play to take off.</div>
+        </div>
+        <div class="row">
+          <button class="play" id="play">Play</button>
+          <select id="speed" aria-label="speed" style="flex:none">
+            <option value="30">30×</option><option value="60" selected>60×</option><option value="120">120×</option>
+          </select>
+          <input type="range" id="time" min="0" max="2700" step="1" value="0" aria-label="time" />
+          <span class="clock" id="clock">0:00 / 45:00</span>
+        </div>
+        <div class="numbers">
+          <div class="num"><b id="pos">0 %</b><span>POS so far</span></div>
+          <div class="num"><b id="drain">0.0</b><span>drain rate, % per min</span></div>
+          <div class="num"><b id="paper">–</b><span>the paper's POS</span></div>
+        </div>
+        <div class="buoy" id="buoy"></div>
+        <label class="row" style="font-size:12px;color:var(--ink-2)"><input type="checkbox" id="showBuoy" /> show the real buoy now</label>
+        <div id="chart"></div>
+        <div class="help">
+          <b>POS</b>: the share of all the places the person could be that the helicopter has
+          looked at. <b>Drain rate</b>: the share it clears each minute. Bright cells are where
+          the person most likely is; they go dark under the 185 m strip.
+        </div>
+      </aside>
+    </main>
+    <script type="module" src="./src/bench.js"></script>
+  </body>
+</html>

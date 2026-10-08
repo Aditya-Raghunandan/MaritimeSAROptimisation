@@ -8,6 +8,10 @@ import pytest
 from sar.model.position import (
     DEFAULT_SIGMA,
     EARTH_RADIUS_M,
+    MEMORY_TIME_S,
+    evolve_velocity_error,
+    start_velocity_error,
+    velocity_memory,
     INTEGRATION_STEP_SECONDS,
     POLAR_LIMIT_DEG,
     _cli,
@@ -275,3 +279,58 @@ class TestCLI:
 
     def test_the_output_is_json_serialisable(self):
         json.dumps(_cli(["--position", "26.5", "281.4", "--drift", "1.2", "0.9"]))
+
+
+class TestRandomVelocity:
+    """D030: a velocity error per particle that forgets itself over T_L (Ornstein-Uhlenbeck)."""
+
+    def test_the_memory_is_exp_of_minus_dt_over_t_l(self):
+        assert velocity_memory(60.0, MEMORY_TIME_S) == pytest.approx(np.exp(-60.0 / (25.7 * 3600)))
+        assert velocity_memory(60.0, MEMORY_TIME_S) == pytest.approx(0.99935, abs=1e-5)
+
+    def test_the_memory_time_is_the_fit(self):
+        assert MEMORY_TIME_S == 25.7 * 3600.0
+
+    def test_the_start_is_the_steady_state(self):
+        u = start_velocity_error((200_000, 2), 0.2, np.random.default_rng(1))
+        assert u.std(axis=0) == pytest.approx([0.2, 0.2], rel=0.01)
+        assert u.mean(axis=0) == pytest.approx([0.0, 0.0], abs=0.002)
+
+    def test_the_variance_stays_sigma_u_squared_whatever_the_step(self):
+        rng = np.random.default_rng(2)
+        for dt in (60.0, 600.0, 7200.0):
+            u = start_velocity_error((100_000, 2), 0.2, rng)
+            for _ in range(50):
+                u = evolve_velocity_error(u, dt, 0.2, 3600.0, rng)
+            assert u.std() == pytest.approx(0.2, rel=0.015)
+
+    @pytest.mark.parametrize("lag_steps", [1, 45, 60])
+    def test_the_correlation_falls_as_exp_of_minus_lag_over_t_l(self, lag_steps):
+        # One minute: 0.99935. 45 minutes, one search: 0.971. One hour at T_L = 1 h: 0.37.
+        memory = 3600.0 if lag_steps == 60 else MEMORY_TIME_S
+        rng = np.random.default_rng(3)
+        u0 = start_velocity_error((200_000,), 0.2, rng)
+        u = u0
+        for _ in range(lag_steps):
+            u = evolve_velocity_error(u, 60.0, 0.2, memory, rng)
+        expected = np.exp(-lag_steps * 60.0 / memory)
+        assert np.corrcoef(u0, u)[0, 1] == pytest.approx(expected, abs=0.004)
+
+    def test_zero_sigma_u_is_no_random_velocity(self):
+        assert np.all(start_velocity_error((5, 2), 0.0) == 0.0)
+        assert np.all(evolve_velocity_error(np.zeros((5, 2)), 60.0, 0.0) == 0.0)
+
+    def test_the_same_generator_state_gives_the_same_draws(self):
+        a = evolve_velocity_error(np.ones(4), 60.0, 0.2, rng=np.random.default_rng(9))
+        b = evolve_velocity_error(np.ones(4), 60.0, 0.2, rng=np.random.default_rng(9))
+        assert a.tolist() == b.tolist()
+
+    @pytest.mark.parametrize("bad", [-0.1, np.nan, np.inf])
+    def test_a_bad_sigma_u_raises(self, bad):
+        with pytest.raises(ValueError, match="sigma_u"):
+            start_velocity_error((3, 2), bad)
+
+    @pytest.mark.parametrize("bad", [0.0, -1.0, np.nan])
+    def test_a_bad_memory_time_raises(self, bad):
+        with pytest.raises(ValueError, match="memory time"):
+            velocity_memory(60.0, bad)

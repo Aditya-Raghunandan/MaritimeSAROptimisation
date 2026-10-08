@@ -1,4 +1,8 @@
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 /*
   BASE PATH. GitHub Pages serves a project site from
@@ -18,6 +22,14 @@ export default defineConfig({
     // this only silences the size warning for it, which is expected and not a
     // problem because it is fetched lazily and only when a store is opened.
     chunkSizeWarningLimit: 900,
+    // Three pages: the map, a scenario searched by any searcher, and the open-day game.
+    rollupOptions: {
+      input: {
+        main: resolve(here, 'index.html'),
+        bench: resolve(here, 'bench.html'),
+        game: resolve(here, 'game.html'),
+      },
+    },
   },
   test: {
     // Tests live in frontend/tests/, moved there on review feedback.

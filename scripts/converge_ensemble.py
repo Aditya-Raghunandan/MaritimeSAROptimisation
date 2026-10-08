@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sar.pipeline.ensemble import add_run_arguments, forcing_from, run_ensemble
+from sar.pipeline.ensemble import add_run_arguments, forcing_from, random_term, run_ensemble
 from sar.utils.geo import M_PER_DEG_LAT, metres_per_degree_lon
 
 _HEATMAP = importlib.util.spec_from_file_location(
@@ -27,8 +27,8 @@ def rung(args, forcing, n, seeds) -> dict:
     runs = []
     for seq in seeds:
         ensemble = run_ensemble(forcing, n, args.start, args.lat, args.lon, args.duration,
-                                args.timestep, args.datum_sigma_km, args.sigma, seq,
-                                save_every=args.duration)
+                                args.timestep, args.datum_sigma_km, seed=seq,
+                                save_every=args.duration, **random_term(args))
         reduced = ensemble_heatmap.reduce_cloud(ensemble.lat[-1], ensemble.lon[-1], args.cell_m,
                                                 beached=ensemble.beached[-1])
         runs.append({key: reduced[key] for key in (*STATISTICS, "lost", "beached_mass")})

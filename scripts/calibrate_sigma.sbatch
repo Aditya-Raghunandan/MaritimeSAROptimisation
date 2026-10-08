@@ -36,6 +36,21 @@
 #         --out $D/h4/ladder
 #     sbatch scripts/calibrate_sigma.sbatch calibrate --windows $D/windows --hour 4 \
 #         --fit $D/h4/fit.json --ladder $D/h4/ladder --out $D/h4/calibration.json
+#
+# The random velocity (D030, 6 Oct): the same ladder with --sigmas-u (m/s) and T_L fixed at
+# 25.7 h; calibrate reads the model from the rows and adds the slide as a velocity. Then the
+# confirmation at sigma_u final, both tiers, every horizon:
+#     SIGMA_PROCS=4 sbatch --array=0-11 --cpus-per-task=4 scripts/calibrate_sigma.sbatch \
+#         ladder --windows $D/windows --sigmas-u 0.12 0.15 0.18 0.21 0.24 0.27 0.32 0.40 \
+#         --leads 1 2 3 4 6 --out $D/rv/ladder
+#     sbatch scripts/calibrate_sigma.sbatch calibrate --windows $D/windows --hour 4 \
+#         --fit $D/h4/fit.json --ladder $D/rv/ladder --out $D/rv/calibration.json
+#     SIGMA_PROCS=4 sbatch --array=0-11 --cpus-per-task=4 scripts/calibrate_sigma.sbatch \
+#         ladder --windows $D/windows --sigmas-u <final> --tiers undrogued drogued \
+#         --leads 1 2 3 4 6 12 24 --out $D/rv/confirm
+#     sbatch scripts/calibrate_sigma.sbatch calibrate --windows $D/windows --hour 4 \
+#         --fit $D/h4/fit.json --ladder $D/rv/ladder --confirm $D/rv/confirm \
+#         --out $D/rv/calibration.json
 
 set -euo pipefail
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1

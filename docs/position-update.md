@@ -15,10 +15,30 @@ step and $\sigma$ the diffusivity. All four are supplied by the caller;
 
 $\sigma$ defaults to zero in the code, which makes the step deterministic and reduces it to
 explicit Euler. A run with $\sigma = 0$ is the mean path, not a sample from the distribution,
-and no spread can be read off it. **The calibrated value is $\sigma$ = 26.3 m s$^{-1/2}$**
-(95 % CI 25.3–27.6), matched at 4 h on the dev drifters (`docs/sigma-calibration.md` §0,
-vault D028 as amended 4 Oct). It is `CALIBRATED_SIGMA` here and the default of the ensemble
-command (`sar.pipeline.ensemble --sigma`). The first calibration, at 24 h, gave 54.4.
+and no spread can be read off it. The random walk was calibrated at $\sigma$ = 26.3
+m s$^{-1/2}$, matched at 4 h (`docs/sigma-calibration.md` §0, vault D028); the first
+calibration, at 24 h, gave 54.4. It is `CALIBRATED_SIGMA`, kept for comparisons.
+
+### The random velocity (ADR005, vault D030, 6 Oct 2026)
+
+**The engine's random term is now a velocity with memory, not a random walk.** Each
+particle carries a velocity error $\vec u$ that forgets itself over $T_L$:
+
+$$\vec x_{n+1} = \vec x_n + (\vec v_d + \vec u_n)\,\Delta t, \qquad
+\vec u_{n+1} = a\,\vec u_n + \sqrt{1-a^2}\,\sigma_u \vec Z_n, \qquad a = e^{-\Delta t/T_L}$$
+
+with $\vec u_0 \sim \mathcal N(0, \sigma_u^2 I)$, the process's steady state. The update of
+$\vec u$ is exact for the Ornstein–Uhlenbeck process, so its variance stays $\sigma_u^2$ at any
+step. **$T_L$ = 25.7 h** (`MEMORY_TIME_S`) is fitted to the dev drifters' spread at 1–48 h.
+**$\sigma_u$ = 0.226 m/s per axis** (95 % CI 0.217–0.236, `CALIBRATED_SIGMA_U`) is matched at
+4 h in the engine. At 60 s, $a$ = 0.99935, so a particle's velocity error 45 minutes on is
+97 % the one it had: it drifts almost in a straight line, as a buoy does.
+
+It is still D002's third term, $\eta$, and still integrated by Euler–Maruyama on the pair
+$(\vec x, \vec u)$. `calculate_position` is unchanged: the pipeline adds $\vec u$ to the drift
+it passes in. The functions are `start_velocity_error` and `evolve_velocity_error`.
+`DriftPipeline` takes `sigma` or `sigma_u` (with `memory_time_s`), never both. The random walk
+is unchanged bit for bit.
 
 ## Metres into degrees
 
@@ -56,6 +76,9 @@ Two consequences look like bugs to a reader who has not met them:
 | Position | `[lat, lon]` | degrees, longitude 0 to 360 |
 | Drift, current, wind | `[u, v]` | m/s, eastward then northward |
 | $\sigma$ | scalar | m s$^{-1/2}$ |
+| $\sigma_u$ | scalar | m/s, per axis |
+| $T_L$ (`memory_time_s`) | scalar | s |
+| Velocity error $\vec u$ | `[u, v]`, one per particle | m/s |
 
 The two vector orders are crossed, deliberately: `lat` and `lon` name axes, in the order
 D020 stores them and `sar.utils.geo` enforces, while `u` and `v` name components, in the
@@ -89,7 +112,9 @@ visits $n+1$ positions**, so an hour at a 60 s step yields 61 states and not 60.
 
 Each `TrackState` carries the positions, and the current, wind and drift belonging to the
 step that **leaves** that state. The final state has none of the three, because nothing
-leaves it.
+leaves it. With a random velocity it also carries each particle's `velocity_error`. `track`
+keeps that error from step to step and hands it to `advance(positions, time,
+velocity_error)`, so `advance` stays a function of what it is given.
 
 A duration that is not a whole number of steps is refused rather than silently shortened,
 because a track that stops early looks exactly like a track that drifted less far.
@@ -196,6 +221,20 @@ forcing. `EARTH_RADIUS_M` is defined once, in `sar.utils.geo`, so the change wou
 
 ### 4. The stochastic term
 
+**Since ADR005 it is a random velocity:** σ_u = 0.226 m/s per axis with T_L = 25.7 h. Its
+spread is Taylor's, $\sqrt{2\sigma_u^2 T_L\,[t - T_L(1 - e^{-t/T_L})]}$:
+
+| | One 60 s step | 1 h | 3 h | 4 h | 24 h | 48 h |
+|---|---|---|---|---|---|---|
+| Random velocity, σ_u = 0.226 | 14 m | 0.81 km | 2.39 km | 3.17 km | 16.9 km | 29.9 km |
+| Random walk, σ = 26.3 | 204 m | 1.58 km | 2.73 km | 3.16 km | 7.7 km | 10.9 km |
+| Dev drifters, 90 % spread per axis | | 0.78 km | 2.32 km | 3.07 km | 15.8 km | 29.4 km |
+
+Both are matched at 4 h. Only the random velocity matches the drifters either side of it.
+On the σ_u ladder, coverage of the 90 % region is flat from 1 to 6 h (89.4 to 90.0 % at
+σ_u = 0.22), where the random walk ran from 98 % to 74 %. The rest of this section describes
+the random walk, which is kept for comparisons.
+
 A spread rather than a bias: it grows as $\sqrt{t}$, has zero mean, and is the only term
 here that an ensemble is meant to expose rather than remove.
 
@@ -250,7 +289,7 @@ about 1.5 micrometres, and the spacing of a double at a longitude of 281 degrees
 | Forcing and leeway uncertainty | 9 to 26 km | dominates everything |
 | Sphere against ellipsoid | about 600 m | systematic, independent of $\Delta t$ |
 | Euler truncation | 35 m | linear in $\Delta t$ |
-| Stochastic term | 7.7 km per component at the calibrated $\sigma$ = 26.3 (3.2 km at 4 h, where it is matched) | spread, grows as $\sqrt{t}$; stands for the forcing error above |
+| Stochastic term | 16.9 km per component at the calibrated σ_u = 0.226 m/s (3.2 km at 4 h, where it is matched) | spread, grows as $t$ for hours and $\sqrt{t}$ after days; it is the forcing error above, held for T_L = 25.7 h (ADR005) |
 | Frozen $\cos\varphi$ | 0.21 m | linear in $\Delta t$ |
 | Floating point | micrometres | negligible |
 
@@ -267,6 +306,9 @@ One step, by hand:
 python -m sar.model.position --position 26.53 281.4 --drift 1.2 0.9
 python -m sar.model.position --position 26.53 281.4 --drift 1.2 0.9 --sigma 0.1 --seed 7
 ```
+
+A track with the random velocity: `python -m sar.pipeline.track ... --sigma-u 0.226
+--memory-h 25.7 --seed 7`.
 
 A whole track in a steady field, where the answer can be checked on paper. A 1 m/s
 eastward current for an hour moves a particle 3,600 m east, which at 26.53 N is 0.03619

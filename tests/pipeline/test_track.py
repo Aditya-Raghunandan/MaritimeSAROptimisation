@@ -192,6 +192,86 @@ class TestTheStochasticTerm:
         assert abs(np.corrcoef(east, north)[0, 1]) < 0.03
 
 
+class TestRandomVelocity:
+    """D030: the random term as a velocity error with memory, through the whole pipeline."""
+
+    @staticmethod
+    def spread_m(state):
+        return (state.positions[:, 0] - LAT).std() / DEG_PER_M
+
+    def test_the_random_walk_is_unchanged_bit_for_bit(self):
+        # Recorded on main (a7445eb) before the random velocity existed.
+        pipe = DriftPipeline(ConstantForcing((1.0, 0.5), (5.0, 2.0)), STEP, sigma=26.3, seed=7)
+        last = list(pipe.track("2019-06-01T06:00", [26.5, 27.0, 25.0], [-79.0, -78.0, -80.0],
+                               600.0))[-1]
+        assert last.positions.tolist() == [[26.50730737358863, 280.99599590168816],
+                                           [26.994505856631992, 281.997076176443],
+                                           [25.000291765366455, 280.00840646578536]]
+
+    def test_the_cloud_grows_as_taylor_says(self):
+        """Taylor (1921): s^2 = 2 sigma_u^2 T_L (t - T_L (1 - exp(-t / T_L))). In a straight
+        line while t << T_L, as sqrt(t) once t >> T_L. T_L = 1 h shows both in 6 h."""
+        su, tl, n = 0.2, HOUR, 20_000
+        pipe = DriftPipeline(ConstantForcing(), STEP, sigma_u=su, memory_time_s=tl, seed=4)
+        spread = {s.seconds: self.spread_m(s)
+                  for s in pipe.track(START, [LAT] * n, [LON] * n, 6 * HOUR)
+                  if s.seconds in (600.0, HOUR, 6 * HOUR)}
+        assert len(spread) == 3
+        for t, got in spread.items():
+            want = np.sqrt(2 * su**2 * tl * (t - tl * (1 - np.exp(-t / tl))))
+            assert got == pytest.approx(want, rel=0.04), t
+
+    def test_over_a_search_a_particle_moves_almost_straight(self):
+        # At T_L = 25.7 h the velocity error 45 minutes on is 97 % the one it started with.
+        pipe = DriftPipeline(ConstantForcing(), STEP, sigma_u=0.2, seed=5)
+        states = list(pipe.track(START, [LAT] * 20_000, [LON] * 20_000, 45 * 60.0))
+        u0, u45 = states[0].velocity_error[:, 0], states[-1].velocity_error[:, 0]
+        assert np.corrcoef(u0, u45)[0, 1] == pytest.approx(np.exp(-0.75 / 25.7), abs=0.005)
+
+    def test_the_velocity_error_is_added_to_the_drift(self):
+        pipe = DriftPipeline(ConstantForcing(current=(1.0, 0.0)), STEP, sigma_u=0.2, seed=6)
+        first, second = list(pipe.track(START, LAT, LON, STEP))
+        moved_east = (second.positions[0, 1] - LON) / DEG_PER_M * np.cos(np.radians(LAT))
+        assert moved_east == pytest.approx((1.0 + first.velocity_error[0, 0]) * STEP, rel=1e-6)
+        assert first.drift.tolist() == [[1.0, 0.0]]
+
+    def test_the_same_seed_reproduces_the_track(self):
+        def run():
+            pipe = DriftPipeline(ConstantForcing((1.0, 0.0)), STEP, sigma_u=0.2, seed=8)
+            return [s.positions.tolist() for s in pipe.track(START, [LAT] * 3, [LON] * 3, HOUR)]
+        assert run() == run()
+
+    def test_a_beached_particle_stays_frozen(self):
+        class Land(ConstantForcing):
+            def sample(self, lats, lons, time):
+                current, wind = super().sample(lats, lons, time)
+                current[0] = np.nan
+                return current, wind
+        pipe = DriftPipeline(Land(current=(1.0, 0.0)), STEP, sigma_u=0.2, seed=1)
+        last = list(pipe.track(START, [LAT, LAT], [LON, LON], HOUR))[-1]
+        assert last.positions[0].tolist() == [LAT, LON]
+        assert last.positions[1].tolist() != [LAT, LON]
+
+    def test_both_random_terms_at_once_is_refused(self):
+        with pytest.raises(ValueError, match="choose one random term"):
+            DriftPipeline(ConstantForcing(), STEP, sigma=1.0, sigma_u=0.2)
+
+    def test_it_is_described(self):
+        run = DriftPipeline(ConstantForcing(), STEP, sigma_u=0.2, seed=1).describe(
+            START, LAT, LON, HOUR)
+        assert run["random_term"] == "random velocity"
+        assert run["sigma_u"] == 0.2 and run["memory_time_s"] == 25.7 * HOUR
+        assert DriftPipeline(ConstantForcing(), STEP).describe(
+            START, LAT, LON, HOUR)["random_term"] == "none"
+
+    def test_the_cli_takes_sigma_u(self):
+        out = _cli(["--constant-current", "1", "0", "--start", START, "--lat", str(LAT),
+                    "--lon", str(LON), "--duration", "600", "--timestep", "60",
+                    "--sigma-u", "0.2", "--memory-h", "10", "--seed", "1"])
+        assert out["run"]["random_term"] == "random velocity"
+        assert out["run"]["memory_time_s"] == 36000.0
+
+
 class TestTheEnsembleItIsBuiltFor:
     def test_a_scalar_start_is_one_particle(self, eastward):
         assert eastward.start_positions(LAT, LON).shape == (1, 2)

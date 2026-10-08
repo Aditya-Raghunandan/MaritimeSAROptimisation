@@ -21,6 +21,18 @@ scored against the truth. The rules, each for a reason:
 
     python scripts/pick_scenario_buoys.py --data C:/maritime-data \
         --land C:/maritime-data/raw/hycom_<box>_<dates>.nc --out <dir>/scenarios.csv
+
+THE BENCHMARK TABLE, --every 48h. Instead of one start per group, every buoy is walked from
+its first valid start to its last, taking a new start every 48 h: every buoy, until its
+track ends, under the same rules as above. Aditya, 7 Oct: the benchmark should use the
+buoys we have, not 55 of them. Why 48 h and not back to back: the drift model's error
+persists (D030, T_L = 25.7 h), so two starts 48 h apart share e^(-48/25.7) ~ 15 % of it,
+and two starts 4 h apart 86 %. Rows of one buoy are still not independent, which is why
+the scorer's summary averages each shared-water group first and resamples whole groups.
+Rows are named D0001, D0002, ... in time order, with their own seeds.
+
+    python scripts/pick_scenario_buoys.py --data C:/maritime-data \
+        --land C:/maritime-data/raw/hycom_<box>_<dates>.nc --every 48h --out <dir>/bench.csv
 """
 
 from __future__ import annotations
@@ -48,6 +60,7 @@ TARGETS = {"jet": 15, "moderate": 20, "quiet": 15}
 SPARES = 5
 VALIDATION = {"jet": 3, "moderate": 4, "quiet": 3}
 SEED = 20261004
+TILE_SEED = 20261007
 
 
 def flat_xy(lat, lon):
@@ -169,13 +182,61 @@ def pick(cands: pd.DataFrame, seed=SEED) -> pd.DataFrame:
     return picked
 
 
+def tile(cands: pd.DataFrame, every_h: float, seed=TILE_SEED, prefix="D") -> pd.DataFrame:
+    """Every buoy, from its first valid start to its last, a new start every `every_h` hours.
+
+    Within a unit the first valid start is taken, then the first valid start at least
+    `every_h` later, and so on, so a gap in valid starts (near land, a missing fix) is
+    skipped rather than ending the buoy. Rows are named in time order.
+    """
+    if not every_h > 0:
+        raise ValueError(f"every_h must be positive, got {every_h}")
+    step = pd.Timedelta(hours=float(every_h))
+    taken = []
+    for _, g in cands.sort_values(["unit", "start"]).groupby("unit", sort=True):
+        due = None
+        for k, start in zip(g.index, g["start"]):
+            if due is None or start >= due:
+                taken.append(k)
+                due = start + step
+    out = cands.loc[taken].sort_values(["start", "ID"]).reset_index(drop=True)
+    width = max(4, len(str(len(out))))
+    out.insert(0, "scenario", [f"{prefix}{k + 1:0{width}d}" for k in range(len(out))])
+    out["set"] = "dev"
+    out["seed"] = seed + np.arange(len(out))
+    return out
+
+
+def hours(text: str) -> float:
+    """'48h', '2d' or '48' as hours."""
+    text = str(text).strip().lower()
+    if text.endswith("d"):
+        return float(text[:-1]) * 24.0
+    return float(text[:-1] if text.endswith("h") else text)
+
+
 def main(argv=None) -> pd.DataFrame:
     a = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     a.add_argument("--data", required=True, help="archive root holding raw/ and derived/")
     a.add_argument("--land", required=True, help="any HYCOM NetCDF over the box, for its land mask")
+    a.add_argument("--every", default=None,
+                   help="the benchmark table: every buoy, a start this often (48h, 2d); "
+                        "default the 55-row scenario table")
     a.add_argument("--out", required=True)
     args = a.parse_args(argv)
     cands = candidates(args.data, land_tree(args.land))
+    if args.every is not None:
+        tiled = tile(cands, hours(args.every))
+        tiled["start"] = pd.to_datetime(tiled["start"]).dt.strftime("%Y-%m-%dT%H:%M")
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        tiled.to_csv(args.out, index=False, float_format="%.5f", lineterminator="\n")
+        print(json.dumps({"candidates": len(cands), "rows": len(tiled),
+                          "buoys": int(tiled["ID"].nunique()),
+                          "groups": int(tiled["group"].nunique()),
+                          "rows_by_water": tiled["stratum"].value_counts().to_dict(),
+                          "years": tiled["start"].str[:4].value_counts().sort_index().to_dict()},
+                         indent=1, default=str))
+        return tiled
     picked = pick(cands)
     picked["start"] = pd.to_datetime(picked["start"]).dt.strftime("%Y-%m-%dT%H:%M")
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
