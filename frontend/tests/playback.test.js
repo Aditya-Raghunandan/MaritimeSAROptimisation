@@ -6,7 +6,7 @@ function window() {
   const flights = {};
   for (const [name, f] of Object.entries(golden.flights)) {
     flights[name] = {
-      steps: f.steps.map((s) => ({ tS: s.t_s, eastM: s.east_m, northM: s.north_m })),
+      steps: f.steps.map((s) => ({ tS: s.t_s, eastM: s.east_m, northM: s.north_m, headingDeg: s.heading_deg })),
       python: { pos: f.pos },
     };
   }
@@ -21,6 +21,8 @@ function window() {
     marker: { tS: golden.marker.t_s, lat: golden.marker.lat, lon: golden.marker.lon },
     target: { tS: golden.target.t_s, lat: golden.target.lat, lon: golden.target.lon },
     flights,
+    turnRateDegS: golden.constants.turn_rate_deg_s,
+    arrivalHeadingDeg: golden.constants.arrival_heading_deg,
   };
 }
 
@@ -63,6 +65,15 @@ describe('a player', () => {
     expect(f.record().t_s).toEqual(record.t_s);
     expect(f.record().heading_deg.map((h) => Math.round(h * 1e9) / 1e9))
       .toEqual(record.heading_deg.map((h) => Math.round(h * 1e9) / 1e9));
+    expect(f.record().turn_rate_deg_s).toBeCloseTo(record.turn_rate_deg_s, 12);
+  });
+
+  it('turns to what it is asked for at the turn rate, and is drawn on the turn', () => {
+    const f = new PlayerFlight(window(), { heading: 0 });
+    f.steer(180);
+    f.advanceTo(10);
+    expect(f.heading).toBeCloseTo(10 * f.turnRateDegS, 9);     // 70 degrees round, not 180
+    expect(f.pose(12).heading).toBeCloseTo(12 * f.turnRateDegS, 9);
   });
 
   it('holds a heading for one leg, and flies a minute at a time', () => {

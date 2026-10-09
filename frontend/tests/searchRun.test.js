@@ -9,7 +9,10 @@ import { describe, expect, it } from 'vitest';
 import { SWEEP_WIDTH_M } from '../src/geo.js';
 import { M_PER_DEG_LAT, offsetPosition } from '../src/patterns.js';
 import { M_PER_DEG, constantSampler } from '../src/pointDrift.js';
-import { NM_M, searchEffortM2, sectorRadiusM } from '../src/platform.js';
+import { checkTurns } from '../src/kinematics.js';
+import {
+  NM_M, SEARCH_SPEED_MS, TURN_RADIUS_M, TURN_RATE_DEG_S, searchEffortM2, sectorRadiusM,
+} from '../src/platform.js';
 import {
   ManualFlight, bearingOf, closestApproach, datumErrorM, detect, formatDuration, formatElapsed, freePlan,
   headingFromKeys, helicopterAt, keyDirection, markerPositionAt, planSearch, searchPath,
@@ -24,12 +27,14 @@ function baseWest(nm) {
   return { lat: LKP.lat, lon: LKP.lon - (nm * NM_M) / (M_PER_DEG * Math.cos(LKP.lat * Math.PI / 180)) };
 }
 
-function still() {
+/** Nothing moving; the first leg north. `extra` may set turnRateDegS (Infinity: as drawn). */
+function still(extra = {}) {
   return planSearch({
     base: baseWest(100), lkp: LKP, reportMs: REPORT, sample: constantSampler([0, 0]),
-    firstBearingDeg: 0,
+    firstBearingDeg: 0, ...extra,
   });
 }
+const AS_DRAWN = { turnRateDegS: Infinity };
 
 describe('planSearch', () => {
   it('launches after 30 minutes and flies 100 NM at 125 kt', () => {
@@ -154,6 +159,26 @@ describe('the helicopter through the search', () => {
     expect(markerPositionAt(plan, plan.arriveS - 1)).toBeNull();
   });
 
+  it('flies the pattern with the autopilot, arriving on its transit bearing (D032)', () => {
+    const plan = still();
+    const p = plan.pattern;
+    expect(p.drawn.kind).toBe('expanding_square');
+    expect(p.tS[p.tS.length - 1]).toBeCloseTo(2700, 9);
+    // Arriving from the west on 90 degrees, it cannot turn north at once.
+    const h = [90];
+    for (let i = 1; i < p.eastM.length; i += 1) {
+      h.push(Math.atan2(p.eastM[i] - p.eastM[i - 1], p.northM[i] - p.northM[i - 1]) * 180 / Math.PI);
+    }
+    expect(p.eastM[1]).toBeGreaterThan(0);
+    expect(p.durationS).toBeCloseTo(2700, 9);
+  });
+
+  it('flies the drawn pattern itself when the helicopter turns at once', () => {
+    const plan = still(AS_DRAWN);
+    expect(plan.pattern.drawn).toBeUndefined();
+    expect(plan.pattern.eastM[1]).toBeCloseTo(0, 9);
+  });
+
   it('holds every waypoint in its ground path', () => {
     const plan = still();
     const path = searchPath(plan);
@@ -183,7 +208,7 @@ describe('closestApproach', () => {
 
 describe('detect', () => {
   it('finds a still target on the first leg', () => {
-    const plan = still();   // first leg north from the LKP, S = W long
+    const plan = still(AS_DRAWN);   // first leg north from the LKP, S = W long
     const target = offsetPosition(LKP.lat, LKP.lon, 0, 100);
     const res = detect(plan, () => target);
     expect(res.found).toBe(true);
@@ -199,7 +224,7 @@ describe('detect', () => {
   });
 
   it('catches a fast target crossing a leg between path points', () => {
-    const plan = still();
+    const plan = still(AS_DRAWN);
     // Crosses the first leg's line (east = 0) eastward at 20 m/s, level with the
     // helicopter as it passes, starting 100 m west.
     const t0 = plan.reportMs + plan.arriveS * 1000;
@@ -271,8 +296,9 @@ describe('a helicopter flown by hand', () => {
   const START = Date.parse('2019-06-01T06:00Z');
   const spawn = { lat: 26.5, lon: -79.0 };
 
-  function flight(targetAt = () => null) {
-    return new ManualFlight(freePlan({ spawn, startMs: START }), targetAt);
+  /** The geometry tests below are for the helicopter that turns at once; turning is tested after. */
+  function flight(targetAt = () => null, turnRateDegS = Infinity) {
+    return new ManualFlight(freePlan({ spawn, startMs: START }), targetAt, { turnRateDegS });
   }
 
   it('starts on the spot, with no base, transit or marker', () => {
@@ -341,6 +367,29 @@ describe('a helicopter flown by hand', () => {
     expect(eastM).toBeCloseTo(46.3 * 30, 0);
     expect(mid.heading).toBeCloseTo(90, 3);
     expect(f.pathUpTo(90)).toHaveLength(3);   // spawn, the turn, and where it was at 90 s
+  });
+
+  it('swings round at the turn rate rather than at once (D032)', () => {
+    const f = flight(() => null, TURN_RATE_DEG_S);
+    f.advance(60, 90);
+    const p = f.position();
+    const northM = (p.lat - spawn.lat) * M_PER_DEG_LAT;
+    expect(northM).toBeCloseTo(TURN_RADIUS_M, -1);       // a quarter circle north first
+    expect(f.heading).toBeCloseTo(90, 9);
+    f.advance(10, 270);                                  // a reversal takes 26 s
+    expect(f.heading).toBeCloseTo(90 + 10 * TURN_RATE_DEG_S, 6);
+  });
+
+  it('flies a path the referee would accept', () => {
+    const f = flight(() => null, TURN_RATE_DEG_S);
+    f.advance(30, 200);
+    f.advance(30, 20);
+    const cos = Math.cos(spawn.lat * Math.PI / 180);
+    const east = f.lon.map((lo) => (lo - spawn.lon) * M_PER_DEG_LAT * cos);
+    const north = f.lat.map((la) => (la - spawn.lat) * M_PER_DEG_LAT);
+    expect(f.tS.length).toBeGreaterThan(10);
+    expect(Math.hypot(east[east.length - 1], north[north.length - 1])).toBeLessThan(SEARCH_SPEED_MS * 60);
+    expect(() => checkTurns([1], [0], [SEARCH_SPEED_MS], [0], [0, 0, 0], SEARCH_SPEED_MS, TURN_RATE_DEG_S)).not.toThrow();
   });
 
   it('refuses a plan that has a pattern', () => {
