@@ -750,26 +750,43 @@ def _inside_at(sets, n: int, log_sigma) -> np.ndarray:
     return out
 
 
+SHAPES = ("quadrature", "linear")
+
+
+def shape_core(shape: str, a, b, speed):
+    """The rule's core before the slide: a + b s, or sqrt(a^2 + (b s)^2).
+
+    quadrature: a floor of model error that does not care about the current, and an error
+    proportional to the current, independent of each other, so their variances add (as the
+    crosswind slide's already does). Flat in slow water, then rising with slope b.
+    """
+    if shape == "linear":
+        return a + b * speed
+    if shape == "quadrature":
+        return np.hypot(a, b * speed)
+    raise ValueError(f"shape must be one of {SHAPES}, got {shape!r}")
+
+
 def fit_speed_rule(ladder_rows: pd.DataFrame, windows: Windows, speeds, hour: int = 4,
                    edges=SPEED_BINS_MS, min_groups: int = MIN_GROUPS, slide: dict | None = None,
-                   n_boot: int = N_BOOT, seed: int = 0) -> dict:
-    """sigma_u = a + b x start speed, chosen so that every speed bin is covered 90 % (D033).
+                   n_boot: int = N_BOOT, seed: int = 0, shapes=SHAPES) -> dict:
+    """sigma_u as a function of the start speed, chosen so every speed bin is covered 90 % (D033).
 
     Two steps, both resampled by whole shared-water groups for their intervals:
 
       1. PER BIN, what one sigma_u would do: sigma_u*, where the share of buoys inside the
-         90 % region crosses 90 % (`crossing`). Descriptive: it shows the trend, and it is
-         where the line starts. A bin counts only with at least `min_groups` groups.
-      2. THE LINE, fitted directly. Every window gets its own sigma_u = a + b x min(speed,
-         cap), its chance of being inside read off its own ladder between the rungs either
-         side, and (a, b) minimise sum over bins of groups x (coverage - 90 %)^2: the
-         confirmation's own test made the objective. The weighted line through the bins'
-         sigma_u* is kept beside it (`through_the_bins`) as a check. On windows planted with
-         a known line (9 Oct) both give it back inside their 95 % intervals.
+         90 % region crosses 90 % (`crossing`). It shows the shape, and seeds the fit. A bin
+         counts only with at least `min_groups` groups.
+      2. EACH SHAPE, fitted directly (`shape_core`, two numbers a and b). Every window gets
+         its own sigma_u = core(a, b, min(speed, cap)), its chance of being inside read off
+         its own ladder between the rungs either side, and (a, b) minimise sum over bins of
+         groups x (coverage - 90 %)^2: the confirmation's own test made the objective. The
+         shape with the smaller loss is `chosen`; both are reported. On windows planted with
+         a known line (9 Oct) the fit gives it back inside its 95 % interval.
 
-    The cap is the 95th percentile of the start speeds fitted on, so the rule is never
-    extrapolated into faster water than the buoys measured; faster windows are fitted at the
-    cap too, as the engine will run them.
+    The cap is the 95th percentile of the start speeds in the fastest bin used: the rule is
+    never extrapolated into faster water than the buoys measured, and faster windows are
+    fitted at the cap too, as the engine will run them.
     """
     from scipy.optimize import minimize
 
@@ -814,7 +831,7 @@ def fit_speed_rule(ladder_rows: pd.DataFrame, windows: Windows, speeds, hour: in
     a0, b0 = _line(xs, stars, 1.0 / np.maximum(var, 1e-12))
 
     in_fit = np.isin(bins, used)
-    cap = float(np.percentile(sp[in_fit], 95))
+    cap = float(np.percentile(sp[bins == used[-1]], 95))
     block = inside.iloc[np.flatnonzero(in_fit)]
     sets = _rung_sets(block)
     n_fit = len(block)
@@ -822,54 +839,70 @@ def fit_speed_rule(ladder_rows: pd.DataFrame, windows: Windows, speeds, hour: in
     s_fit = np.minimum(sp[in_fit], cap)
     g_bin = np.array([out_bins[k]["groups"] for k in used], float)
     members = [fit_bins == k for k in used]
+    boot_fit = boot_w[:, np.flatnonzero(in_fit)]
 
-    def coverage(params, weight):
-        a, b = params
-        sigma = a + b * s_fit
-        if np.any(sigma <= 0.0):
+    def coverage(shape, params, weight):
+        sigma = shape_core(shape, params[0], params[1], s_fit)
+        if np.any(sigma <= 0.0) or params[1] < 0.0:
             return None
         v = _inside_at(sets, n_fit, np.log(sigma))
         return np.array([np.sum(weight[m] * v[m]) / np.sum(weight[m]) for m in members])
 
-    def loss(params, weight):
-        c = coverage(params, weight)
+    def loss(params, shape, weight):
+        c = coverage(shape, params, weight)
         return 1e6 if c is None else float(np.sum(g_bin * (c - LEVEL) ** 2))
 
-    def solve(weight):
-        r = minimize(loss, [a0, b0], args=(weight,), method="Nelder-Mead",
-                     options={"xatol": 1e-5, "fatol": 1e-9, "maxiter": 2000})
-        return r.x
+    def solve(shape, weight, start):
+        r = minimize(loss, start, args=(shape, weight), method="Nelder-Mead",
+                     options={"xatol": 1e-5, "fatol": 1e-10, "maxiter": 4000})
+        return r.x, float(r.fun)
 
     ones = np.ones(n_fit)
-    a, b = (float(v) for v in solve(ones))
-    cov = coverage((a, b), ones)
-    for k, c in zip(used, cov):
-        out_bins[k]["coverage_under_rule"] = float(c)
-    boot_fit = boot_w[:, np.flatnonzero(in_fit)]
-    draws = np.array([solve(wt) for wt in boot_fit if all(wt[m].sum() > 0 for m in members)])
+    fits = {}
+    for shape in shapes:
+        start = [a0, b0] if shape == "linear" else [float(stars[0]), max(b0, 0.1) * 1.5]
+        (a, b), point_loss = solve(shape, ones, start)
+        cov = coverage(shape, (a, b), ones)
+        draws = np.array([solve(shape, wt, [a, b])[0] for wt in boot_fit
+                          if all(wt[m].sum() > 0 for m in members)])
+        fits[shape] = {"a": float(a), "b": float(b),
+                       "a_ci95": np.percentile(draws[:, 0], [2.5, 97.5]).tolist(),
+                       "b_ci95": np.percentile(draws[:, 1], [2.5, 97.5]).tolist(),
+                       "loss": point_loss,
+                       "coverage_under_rule": {f"{out_bins[k]['from_ms']:g}-"
+                                               f"{out_bins[k]['to_ms']:g} m/s": float(c)
+                                               for k, c in zip(used, cov)},
+                       "sigma_u_at_bins": {f"{x:.3f} m/s": float(shape_core(shape, a, b,
+                                                                            min(x, cap)))
+                                           for x in xs}}
+    chosen = min(fits, key=lambda k: fits[k]["loss"])
     out = {"hour": int(hour), "level": LEVEL, "model": RANDOM_VELOCITY,
            "speed": "HYCOM surface current at the window's start (stage 1 current0), m/s",
-           "method": "each window at a + b min(speed, cap); (a, b) minimise sum over bins of "
-                     "groups x (coverage - 0.9)^2; coverage read off each window's ladder",
+           "method": "each window at core(a, b, min(speed, cap)); (a, b) minimise sum over "
+                     "bins of groups x (coverage - 0.9)^2; coverage read off each window's "
+                     "ladder; the shape with the smaller loss is chosen",
            "bins": out_bins,
-           "line": {"a": a, "b": b,
-                    "a_ci95": np.percentile(draws[:, 0], [2.5, 97.5]).tolist(),
-                    "b_ci95": np.percentile(draws[:, 1], [2.5, 97.5]).tolist(),
+           "fits": fits,
+           "chosen": chosen,
+           "line": {"shape": chosen, "a": fits[chosen]["a"], "b": fits[chosen]["b"],
+                    "a_ci95": fits[chosen]["a_ci95"], "b_ci95": fits[chosen]["b_ci95"],
                     "cap_speed_ms": cap,
-                    "through_the_bins": {"a": a0, "b": b0}},
-           "windows_in_fit": int(n_fit), "boot": int(len(draws))}
+                    "through_the_bins": {"shape": "linear", "a": a0, "b": b0}},
+           "windows_in_fit": int(n_fit), "boot": int(n_boot)}
     if slide is not None:
         out["slide"] = slide
-        out["formula"] = "sigma_u = sqrt((a + b min(speed, cap))^2 + slide^2)"
-        out["examples"] = {f"{v:g} m/s": float(np.hypot(a + b * min(v, cap), slide["value"]))
+        out["formula"] = ("sigma_u = sqrt(core(a, b, min(speed, cap))^2 + slide^2); "
+                          "core = sqrt(a^2 + (b s)^2) or a + b s")
+        out["examples"] = {f"{v:g} m/s": float(rule_sigma_u(out, v))
                            for v in (0.0, 0.1, 0.3, 0.5, 1.0, 1.5, 2.0)}
     return out
 
 
 def rule_sigma_u(rule: dict, speed) -> np.ndarray:
     """The rule written by `fit_speed_rule` at these speeds: what the engine will use."""
-    speed = np.clip(np.asarray(speed, float), 0.0, rule["line"]["cap_speed_ms"])
-    core = rule["line"]["a"] + rule["line"]["b"] * speed
+    line = rule["line"]
+    speed = np.clip(np.asarray(speed, float), 0.0, line["cap_speed_ms"])
+    core = shape_core(line.get("shape", "linear"), line["a"], line["b"], speed)
     slide = rule.get("slide", {}).get("value", 0.0)
     return np.hypot(core, slide)
 

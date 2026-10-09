@@ -59,6 +59,40 @@ DEFAULT_SIGMA_U = 0.0
 MEMORY_TIME_S = 25.7 * 3600.0
 CALIBRATED_SIGMA_U = 0.226
 
+# sigma_u BY THE CURRENT AT THE START (vault D033, docs/ADR007.md, 9 Oct 2026). One pooled
+# sigma_u covers 90 % on average and not by water: in quiet water the cloud is too wide, in
+# the Gulf Stream far too narrow (L23, L35). The undrogued dev windows, split by HYCOM's
+# current speed at the start, need sigma_u = a + b x speed: a floor of model error plus a
+# share of the current the model predicts. Fitted by `calibrate_sigma rule` at 4 h so every
+# speed bin is covered 90 %, on ladders 58974 (all windows, 0.12-0.32 m/s) and 59359 (start
+# current >= 0.5 m/s, 0.36-0.9 m/s): derived/sigma/rvc/rule.json. Capped at the fastest
+# speeds measured; the person's crosswind slide is added in quadrature, as for the pooled
+# value. The speed is the model's own, at the last known position at the call: what a
+# forecaster has, never the buoy's later speed.
+SIGMA_U_RULE = {"a": 0.17, "b": 0.25, "cap_speed_ms": 1.2, "slide_ms": 0.035}
+# The word that asks for it, in place of a number.
+BY_CURRENT = "by-current"
+
+
+def sigma_u_for_current(speed_ms, rule: dict = SIGMA_U_RULE):
+    """The random velocity's size for a cloud whose start sits in a current of this speed.
+
+    s = min(speed, cap); the core is sqrt(a^2 + (b s)^2) for the "quadrature" shape (a floor
+    of error and an error proportional to the current, independent, so their variances add)
+    or a + b s for "linear"; then sigma_u = sqrt(core^2 + slide^2), m/s per axis (D033).
+    Scalar or array.
+    """
+    speed = np.asarray(speed_ms, dtype=float)
+    if np.any(~np.isfinite(speed)) or np.any(speed < 0.0):
+        raise ValueError(f"a current speed must be a non-negative number of m/s, got {speed_ms}")
+    s = np.minimum(speed, rule["cap_speed_ms"])
+    if rule.get("shape", "linear") == "quadrature":
+        core = np.hypot(rule["a"], rule["b"] * s)
+    else:
+        core = rule["a"] + rule["b"] * s
+    out = np.hypot(core, rule["slide_ms"])
+    return float(out) if out.ndim == 0 else out
+
 
 def as_position(value, name: str = "position") -> np.ndarray:
     """One [lat, lon] pair in degrees, or a stack of them, as a float array."""

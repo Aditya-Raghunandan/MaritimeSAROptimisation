@@ -273,12 +273,13 @@ class TestSigmaUByTheCurrent:
     @staticmethod
     def planted(a=0.17, b=0.25, n=3000, seed=4, rungs=(0.12, 0.15, 0.18, 0.2, 0.22, 0.24,
                                                       0.27, 0.32, 0.36, 0.42, 0.5, 0.6, 0.75,
-                                                      0.9)):
-        """Windows whose 90 % crossing is exactly a + b x speed, as ladder rows at 4 h."""
+                                                      0.9), shape="linear"):
+        """Windows whose 90 % crossing is exactly core(a, b, speed), as ladder rows at 4 h."""
         rng = np.random.default_rng(seed)
         speed = rng.uniform(0.0, 1.4, n)
-        # A window is inside at sigma >= tau; tau <= a + b s with probability 0.9.
-        tau = (a + b * speed) * np.exp(0.25 * (rng.standard_normal(n) - 1.2815516))
+        # A window is inside at sigma >= tau; tau <= core(a, b, s) with probability 0.9.
+        tau = (cs.shape_core(shape, a, b, speed)
+               * np.exp(0.25 * (rng.standard_normal(n) - 1.2815516)))
         tab = pd.DataFrame({"group": np.arange(n) // 3, "tier": "undrogued",
                             "month": "2021-01"})
         w = Windows(tab, np.zeros((n, 5)), np.zeros((n, 5)), np.ones((n, 5), bool), 4)
@@ -291,6 +292,7 @@ class TestSigmaUByTheCurrent:
     def test_the_line_through_the_bins_is_the_planted_one(self):
         w, rows, speed = self.planted()
         out = cs.fit_speed_rule(rows, w, speed, hour=4, n_boot=60)
+        assert out["chosen"] == "linear"
         line = out["line"]
         assert line["a_ci95"][0] < 0.17 < line["a_ci95"][1]
         assert line["b_ci95"][0] < 0.25 < line["b_ci95"][1]
@@ -299,7 +301,18 @@ class TestSigmaUByTheCurrent:
         assert len(used) == 6 and line["cap_speed_ms"] > 1.0
         # The objective is the confirmation's test: every bin near 90 % under the rule (two
         # numbers cannot put six bins at exactly 90 %).
-        assert [b["coverage_under_rule"] for b in used] == pytest.approx([0.9] * 6, abs=0.02)
+        assert list(out["fits"]["linear"]["coverage_under_rule"].values()) ==             pytest.approx([0.9] * 6, abs=0.02)
+
+    def test_a_planted_quadrature_is_told_from_a_line(self):
+        # Errors that add in quadrature: flat in slow water, then rising.
+        w, rows, speed = self.planted(a=0.18, b=0.4, shape="quadrature", seed=6)
+        out = cs.fit_speed_rule(rows, w, speed, hour=4, n_boot=40)
+        assert out["chosen"] == "quadrature"
+        q = out["fits"]["quadrature"]
+        # b comes back ~3 % high: reading coverage between rungs leans a little wide (the
+        # safe side), measured here and stated in ADR007.
+        assert q["a_ci95"][0] < 0.18 < q["a_ci95"][1] and q["b"] == pytest.approx(0.4, rel=0.05)
+        assert out["fits"]["linear"]["loss"] > q["loss"]
 
     def test_a_bin_with_too_few_groups_is_left_out_and_caps_the_rule(self):
         w, rows, speed = self.planted(n=1500)
@@ -316,6 +329,9 @@ class TestSigmaUByTheCurrent:
         got = cs.rule_sigma_u(rule, [0.0, 0.5, 1.0, 3.0])
         assert got[0] == pytest.approx(np.hypot(0.17, 0.035))
         assert got[1] == pytest.approx(np.hypot(0.295, 0.035))
+        quad = {"line": {"shape": "quadrature", "a": 0.18, "b": 0.4, "cap_speed_ms": 1.0},
+                "slide": {"value": 0.035}}
+        assert cs.rule_sigma_u(quad, 0.5) == pytest.approx(np.sqrt(0.18**2 + 0.2**2 + 0.035**2))
         assert got[3] == got[2]                                     # capped
         assert np.all(np.diff(got[:3]) > 0)
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from sar.model.position import CALIBRATED_SIGMA, CALIBRATED_SIGMA_U
+from sar.model.position import BY_CURRENT, CALIBRATED_SIGMA, CALIBRATED_SIGMA_U, SIGMA_U_RULE
 from sar.search.episode import Waypoints, pattern_policy
 from sar.search.greedy import greedy_policy, random_heading_policy
 from sar.search.platform import STEP_S
@@ -22,8 +22,15 @@ from sar.search.scenario import DOCTRINAL, doctrinal_searcher
 from sar.utils.geo import east_north
 
 SEARCHERS = DOCTRINAL + ("greedy", "random")
-NOISE = {"rv": {"sigma_u": CALIBRATED_SIGMA_U, "sigma": 0.0},
+# The drift engine's random term, by name. rvc is the calibrated one since D033: the random
+# velocity sized by the current at the start. rv is D030's pooled size, kept as the
+# comparison; rw the old random walk (D028).
+NOISE = {"rvc": {"sigma_u": BY_CURRENT, "sigma": 0.0},
+         "rv": {"sigma_u": CALIBRATED_SIGMA_U, "sigma": 0.0},
          "rw": {"sigma_u": 0.0, "sigma": CALIBRATED_SIGMA}}
+# What a results folder's manifest records for each, so a rule change can't hide in a name.
+NOISE_RECORD = {"rvc": {**NOISE["rvc"], "rule": SIGMA_U_RULE}, "rv": NOISE["rv"],
+                "rw": NOISE["rw"]}
 BASELINE = "expanding-square"          # D004: what every other searcher is compared with
 # Greedy's settings, chosen on the 55 dev rows (D031), frozen before any test set is opened.
 GREEDY = {"headings": 36, "decide_s": 60.0}

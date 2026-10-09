@@ -110,6 +110,22 @@ class TestScore:
         assert rv["sigma"] == 0.0 and rv["sigma_u"] == pytest.approx(0.226)
         assert rw["sigma_u"] == 0.0 and rw["sigma"] == pytest.approx(26.3)
 
+    def test_rvc_is_sized_by_the_current_at_the_start_and_says_so(self):
+        # D033: the steady current here is 1.12 m/s, so sigma_u comes from the rule there.
+        from sar.model.position import sigma_u_for_current
+        fl = score.score_row(row(), FORCING, ["rvc"], [1.0], ["expanding-square"], 300)
+        speed = float(np.hypot(1.0, 0.5))
+        assert fl[0]["noise"] == "rvc"
+        assert fl[0]["start_current_ms"] == pytest.approx(speed)
+        assert fl[0]["sigma_u"] == pytest.approx(sigma_u_for_current(speed))
+
+    def test_the_manifest_records_the_rule(self, tmp_path):
+        csv = tmp_path / "t.csv"
+        csv.write_text("scenario\nS01\n")
+        rec = score.experiment(csv, ["rvc", "rv"], [1.0], ["random"], 300)
+        assert rec["noise"]["rvc"]["sigma_u"] == "by-current"
+        assert set(rec["noise"]["rvc"]["rule"]) == {"a", "b", "cap_speed_ms", "slide_ms"}
+
     def test_it_is_repeatable_random_floor_included(self, flights):
         again = score.score_row(row(), FORCING, ["rv"], [1.0], ["expanding-square", "random"],
                                 300)
@@ -190,6 +206,12 @@ class TestSummary:
     def test_the_slices(self, table):
         _, t = table
         assert {"all", "water: jet", "water: quiet", "path: straight (>= 0.500)"} <= set(t["slice"])
+
+    def test_a_slice_by_the_forecast_current_when_rows_carry_it(self):
+        f = pd.DataFrame({"start_current_ms": [0.1, 0.5, 1.4, None], "water": None})
+        names = [name for name, _ in score.slices(f, None)]
+        assert names == ["all", "forecast current: < 0.3 m/s", "forecast current: 0.3-1 m/s",
+                         "forecast current: > 1 m/s"]
 
     def test_old_flights_are_read_with_the_new_name(self, flights, tmp_path):
         old = [{**{k: v for k, v in f.items() if k != "drain_rate"},
