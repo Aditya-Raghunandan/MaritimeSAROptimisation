@@ -11,17 +11,24 @@ import { expect, test } from '@playwright/test';
   end lands on it, which is the whole promise of the page.
 
   The fixture is one scenario at the 2 h arrival, 200 particles, constant forcing, written by
-  scripts/make_e2e_scenarios.py with the same exporter as the published bundles.
+  scripts/make_e2e_scenarios.py with the same exporter as the published bundles: scenarios/v2,
+  flown by the D032 helicopter that turns at 7 deg/s. scenarios/v1 beside it is the older
+  format, flown by the helicopter that turned at once; one test hides v2 to check the site
+  still plays from a data root that only has v1.
 */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, 'fixtures');
 const LAPTOP = { width: 1366, height: 768 };
 
-async function serveFixture(page) {
+async function serveFixture(page, { hide = null } = {}) {
   await page.route('**/e2e.invalid/**', async (route) => {
     const url = new URL(route.request().url());
     const rel = normalize(url.pathname.replace(/^\/archive\/?/, '')).replace(/^(\.\.[/\\])+/, '');
+    if (hide && url.pathname.includes(hide)) {
+      await route.fulfill({ status: 404, body: '' });
+      return;
+    }
     try {
       const body = await readFile(join(FIXTURES, rel));
       await route.fulfill({
@@ -72,8 +79,8 @@ async function painted(page, selector) {
   }, selector);
 }
 
-async function fixtureFlight(noise, searcher) {
-  const meta = JSON.parse(await readFile(join(FIXTURES, 'scenarios/v1/S01', `${noise}_2h.json`), 'utf8'));
+async function fixtureFlight(noise, searcher, version = 'v2') {
+  const meta = JSON.parse(await readFile(join(FIXTURES, `scenarios/${version}/S01`, `${noise}_2h.json`), 'utf8'));
   return meta.flights[searcher].python;
 }
 
@@ -145,6 +152,48 @@ test.describe('the open-day game', () => {
     await expect(page.locator('#verdict')).not.toBeEmpty();
     await expect(page.locator('#boardNow')).toContainText('E2E');
     await expect(page.locator('#benchTable tr')).toHaveCount(7);
+    expect(errors).toEqual([]);
+  });
+
+  test('flies with the mouse: toward the pointer, turning at the rate, with the bend drawn ahead', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=4');
+    await page.click('#startBtn');
+    await page.click('#surprise');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await expect(page.locator('#hint')).toContainText(/mouse/);
+    const box = await page.locator('#flyMap').boundingBox();
+    // Click well to one side to take off, then hold the pointer there.
+    await page.mouse.move(box.x + box.width * 0.15, box.y + box.height * 0.5);
+    await page.mouse.click(box.x + box.width * 0.15, box.y + box.height * 0.5);
+    await expect(page.locator('#hint')).toBeHidden();
+    await expect(page.locator('#hudTime')).not.toHaveText('45:00', { timeout: 5000 });
+    // The dashed line ahead of the helicopter is drawn while it flies.
+    await expect(page.locator('#flyMap path[stroke-dasharray]')).toHaveCount(1);
+    await expect(page.locator('#flyMap .scene-heli svg')).toHaveAttribute('style', /rotate\(/);
+    await page.mouse.move(box.x + box.width * 0.85, box.y + box.height * 0.3);
+    await page.waitForTimeout(800);
+    expect(errors).toEqual([]);
+  });
+
+  test('still plays from a data root that only has the older v1 bundles', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page, { hide: '/scenarios/v2/' });
+    await page.goto('game.html?speed=20');
+    await page.click('#startBtn');
+    await page.click('#surprise');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowRight');
+    await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
+    await page.keyboard.up('ArrowRight');
+    await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
+    const cg = await fixtureFlight('rv', 'expanding-square', 'v1');
+    await expect(page.locator('#scoreTable')).toContainText(`${(100 * cg.pos).toFixed(1)} %`);
     expect(errors).toEqual([]);
   });
 
