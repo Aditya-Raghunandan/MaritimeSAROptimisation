@@ -149,7 +149,8 @@ The sealed buoys are the test. They are opened **once**, after these are written
 dated, and are not changed after:
 
 - the drift model's pass thresholds (D025);
-- the noise: σ_u = 0.226 m/s, T_L = 25.7 h (D030);
+- the noise: `rvc`, σ_u = √(0.176² + (0.407 s)²) + slide, capped at 1.66 m/s (D033,
+  ADR007), T_L = 25.7 h (D030); the pooled 0.226 (`rv`) as the comparison;
 - N = 10,000, and arrivals at 1, 2 and 3 h;
 - each pattern's layout rule, and greedy's settings;
 - the scorer, and the straightness split (0.95).
