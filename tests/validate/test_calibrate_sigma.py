@@ -265,3 +265,92 @@ class TestRandomVelocityLadder:
                  "--sigmas-u", "0.2", "0.3", "--memory-h", "10", "--out", str(tmp_path / "o")])
         assert seen["sigmas"] == [0.2, 0.3] and seen["model"] == cs.RANDOM_VELOCITY
         assert seen["memory_time_s"] == 36000.0
+
+
+class TestSigmaUByTheCurrent:
+    """D033: sigma_u sized by HYCOM's current at the start, a straight line through bins."""
+
+    @staticmethod
+    def planted(a=0.17, b=0.25, n=3000, seed=4, rungs=(0.12, 0.15, 0.18, 0.2, 0.22, 0.24,
+                                                      0.27, 0.32, 0.36, 0.42, 0.5, 0.6, 0.75,
+                                                      0.9)):
+        """Windows whose 90 % crossing is exactly a + b x speed, as ladder rows at 4 h."""
+        rng = np.random.default_rng(seed)
+        speed = rng.uniform(0.0, 1.4, n)
+        # A window is inside at sigma >= tau; tau <= a + b s with probability 0.9.
+        tau = (a + b * speed) * np.exp(0.25 * (rng.standard_normal(n) - 1.2815516))
+        tab = pd.DataFrame({"group": np.arange(n) // 3, "tier": "undrogued",
+                            "month": "2021-01"})
+        w = Windows(tab, np.zeros((n, 5)), np.zeros((n, 5)), np.ones((n, 5), bool), 4)
+        rows = pd.DataFrame([{"w": k, "sigma": s, "lead": 4, "n": 1000, "bandwidth": 1.0,
+                              "rank": 0.5 if s >= tau[k] else 0.99, "area90_km2": 1.0,
+                              "model": cs.RANDOM_VELOCITY}
+                             for k in range(n) for s in rungs])
+        return w, rows, speed
+
+    def test_the_line_through_the_bins_is_the_planted_one(self):
+        w, rows, speed = self.planted()
+        out = cs.fit_speed_rule(rows, w, speed, hour=4, n_boot=60)
+        line = out["line"]
+        assert line["a_ci95"][0] < 0.17 < line["a_ci95"][1]
+        assert line["b_ci95"][0] < 0.25 < line["b_ci95"][1]
+        assert line["through_the_bins"]["b"] == pytest.approx(0.25, abs=0.02)
+        used = [b for b in out["bins"] if b["used"]]
+        assert len(used) == 6 and line["cap_speed_ms"] > 1.0
+        # The objective is the confirmation's test: every bin near 90 % under the rule (two
+        # numbers cannot put six bins at exactly 90 %).
+        assert [b["coverage_under_rule"] for b in used] == pytest.approx([0.9] * 6, abs=0.02)
+
+    def test_a_bin_with_too_few_groups_is_left_out_and_caps_the_rule(self):
+        w, rows, speed = self.planted(n=1500)
+        fast = np.flatnonzero(speed > 1.0)
+        keep = np.setdiff1d(np.arange(len(speed)), fast[6:])     # two groups' worth above 1 m/s
+        rows = rows[rows["w"].isin(keep)]
+        out = cs.fit_speed_rule(rows, w, speed, hour=4, n_boot=20)
+        last = out["bins"][-1]
+        assert not last["used"] and last["groups"] < cs.MIN_GROUPS
+        assert out["line"]["cap_speed_ms"] < 1.0
+
+    def test_the_rule_adds_the_slide_and_never_extrapolates(self):
+        rule = {"line": {"a": 0.17, "b": 0.25, "cap_speed_ms": 1.0}, "slide": {"value": 0.035}}
+        got = cs.rule_sigma_u(rule, [0.0, 0.5, 1.0, 3.0])
+        assert got[0] == pytest.approx(np.hypot(0.17, 0.035))
+        assert got[1] == pytest.approx(np.hypot(0.295, 0.035))
+        assert got[3] == got[2]                                     # capped
+        assert np.all(np.diff(got[:3]) > 0)
+
+    def test_speeds_come_from_stage1_and_bins_from_the_edges(self, tmp_path):
+        pd.DataFrame({"w": [0, 1, 2], "status": ["ok", "ok", "FileNotFoundError"],
+                      "current0_u": [0.3, 0.0, np.nan], "current0_v": [0.4, 1.2, np.nan]}
+                     ).to_parquet(tmp_path / "status-000.parquet")
+        speed = cs.start_speeds(tmp_path, 4)
+        assert speed[:2] == pytest.approx([0.5, 1.2]) and np.isnan(speed[2:]).all()
+        assert cs.speed_bin([0.1, 0.3, 0.74, 1.2, np.nan]).tolist() == [0, 2, 3, 5, -1]
+
+    def test_a_window_at_its_own_sigma_u_matches_the_scalar_rung(self):
+        w = synthetic(days=1, per_day=6, sigma=20.0, seed=5)
+        batches = list(enumerate(w.batches()))
+        forcing = cs.fixed(ConstantForcing(CURRENT, WIND))
+        scalar = cs.ladder(w, forcing, batches, [0.3], 50, seed=7, leads=(4,),
+                           model=cs.RANDOM_VELOCITY)
+        each = cs.ladder(w, forcing, batches, [], 50, seed=7, leads=(4,),
+                         model=cs.RANDOM_VELOCITY, sigma_u_per_window=np.full(6, 0.3))
+        assert set(each["rung"]) == {"rule"} and np.allclose(each["sigma"], 0.3)
+        assert each["rank"].tolist() == scalar["rank"].tolist()
+
+    def test_the_cli_ladders_only_the_fast_windows(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def fake_ladder(w, open_forcing, batches, sigmas, particles, seed, leads, **kw):
+            seen.update(n=len(w.table), sigmas=sigmas)
+            return pd.DataFrame()
+
+        w = synthetic(days=1, per_day=4, sigma=0.0)
+        w.save(tmp_path / "windows")
+        pd.DataFrame({"w": [0, 1, 2, 3], "status": "ok", "current0_u": [0.1, 0.6, 0.9, 0.2],
+                      "current0_v": 0.0}).to_parquet(tmp_path / "status-000.parquet")
+        monkeypatch.setattr(cs, "ladder", fake_ladder)
+        cs.main(["ladder", "--windows", str(tmp_path / "windows"), "--data", str(tmp_path),
+                 "--sigmas-u", "0.4", "--stage1", str(tmp_path), "--min-start-speed", "0.5",
+                 "--out", str(tmp_path / "o")])
+        assert seen == {"n": 2, "sigmas": [0.4]}

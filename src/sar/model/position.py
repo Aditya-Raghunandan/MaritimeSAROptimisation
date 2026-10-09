@@ -13,6 +13,12 @@ Two random terms live here, and a run uses one of them (D030):
 The dev drifters say the second (vault D030): their spread at 1-48 h fits it to 2 %, where
 one random-walk sigma is off by 50 %, and sigma_u matches HYCOM's measured velocity error.
 The model stays three terms (D002): u is eta, with memory.
+
+HOW BIG, BY WATER (vault D033, docs/ADR007.md). One pooled sigma_u made the cloud too wide in
+quiet water and far too narrow in the Gulf Stream (vault L23, L35). So sigma_u is sized by
+the model's own current at the start, the one thing a forecaster knows when the call comes
+in: sigma_u = a + b x speed, capped, with the person's crosswind slide added in quadrature
+(`sigma_u_for_current`). sigma_u may be one value or one per particle.
 """
 
 from __future__ import annotations
@@ -92,28 +98,39 @@ def velocity_memory(timestep: float, memory_time_s: float = MEMORY_TIME_S) -> fl
     return float(np.exp(-abs(timestep) / memory_time_s))
 
 
-def _check_sigma_u(sigma_u: float) -> float:
-    sigma_u = float(sigma_u)
-    if not np.isfinite(sigma_u) or sigma_u < 0.0:
-        raise ValueError(f"sigma_u must be a non-negative speed in m/s, got {sigma_u}")
-    return sigma_u
+def _check_sigma_u(sigma_u):
+    """One sigma_u as a float, or one per particle as an (N, 1) column for an (N, 2) error."""
+    if np.ndim(sigma_u) == 0:
+        sigma_u = float(sigma_u)
+        if not np.isfinite(sigma_u) or sigma_u < 0.0:
+            raise ValueError(f"sigma_u must be a non-negative speed in m/s, got {sigma_u}")
+        return sigma_u
+    values = np.asarray(sigma_u, dtype=float).reshape(-1, 1)
+    if not np.all(np.isfinite(values)) or np.any(values < 0.0):
+        raise ValueError("every particle's sigma_u must be a non-negative speed in m/s")
+    return values
 
 
-def start_velocity_error(shape, sigma_u: float = DEFAULT_SIGMA_U, rng=None) -> np.ndarray:
+def _is_zero(sigma_u) -> bool:
+    return bool(np.all(np.asarray(sigma_u) == 0.0))
+
+
+def start_velocity_error(shape, sigma_u=DEFAULT_SIGMA_U, rng=None) -> np.ndarray:
     """Each particle's velocity error at the start, [east, north] m/s, N(0, sigma_u^2) per axis.
 
     The process's own steady state, so a cloud released from one point (D026) spreads in a
     straight line from the first step, as the drifters do. Starting it at zero would grow the
     cloud too slowly through exactly the hours a search happens in. Zeros when sigma_u is 0.
+    sigma_u is one value, or one per particle (the rows of `shape`).
     """
     sigma_u = _check_sigma_u(sigma_u)
-    if sigma_u == 0.0:
+    if _is_zero(sigma_u):
         return np.zeros(shape)
     return sigma_u * np.random.default_rng(rng).standard_normal(shape)
 
 
 def evolve_velocity_error(velocity_error, timestep: float = INTEGRATION_STEP_SECONDS,
-                          sigma_u: float = DEFAULT_SIGMA_U,
+                          sigma_u=DEFAULT_SIGMA_U,
                           memory_time_s: float = MEMORY_TIME_S, rng=None) -> np.ndarray:
     """The velocity error one step later: a u + sqrt(1 - a^2) sigma_u Z, a = exp(-dt / T_L).
 
@@ -124,7 +141,7 @@ def evolve_velocity_error(velocity_error, timestep: float = INTEGRATION_STEP_SEC
     sigma_u = _check_sigma_u(sigma_u)
     a = velocity_memory(timestep, memory_time_s)
     u = np.asarray(velocity_error, dtype=float)
-    if sigma_u == 0.0:
+    if _is_zero(sigma_u):
         return a * u
     noise = np.random.default_rng(rng).standard_normal(u.shape)
     return a * u + np.sqrt(1.0 - a * a) * sigma_u * noise

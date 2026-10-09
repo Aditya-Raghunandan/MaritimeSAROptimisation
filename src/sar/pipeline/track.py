@@ -74,20 +74,23 @@ class DriftPipeline:
     The random term is either a random walk (sigma, m/s^0.5) or a random velocity with
     memory (sigma_u, m/s, and memory_time_s; vault D030), never both. With neither the run
     is deterministic. The velocity error is carried by `track` and handed to `advance`
-    explicitly, so `advance` stays a function of what it is given.
+    explicitly, so `advance` stays a function of what it is given. sigma_u may be one value
+    or one per particle (D033: the calibration runs each window at its own).
     """
 
     def __init__(self, forcing, timestep: float, leeway: float = LEEWAY_COEFFICIENT,
-                 sigma: float = DEFAULT_SIGMA, seed=None, sigma_u: float = DEFAULT_SIGMA_U,
+                 sigma: float = DEFAULT_SIGMA, seed=None, sigma_u=DEFAULT_SIGMA_U,
                  memory_time_s: float = MEMORY_TIME_S):
         # timestep has no default: every error in a run is linear in it, so a run must state it.
         if not np.isfinite(timestep) or timestep <= 0.0:
             raise ValueError(f"timestep must be a positive number of seconds, got {timestep}")
         if sigma < 0.0:
             raise ValueError(f"sigma must not be negative, got {sigma}")
-        if not np.isfinite(sigma_u) or sigma_u < 0.0:
+        per_particle = np.ndim(sigma_u) > 0
+        values = np.asarray(sigma_u, dtype=float)
+        if not np.all(np.isfinite(values)) or np.any(values < 0.0):
             raise ValueError(f"sigma_u must not be negative, got {sigma_u}")
-        if sigma > 0.0 and sigma_u > 0.0:
+        if sigma > 0.0 and np.any(values > 0.0):
             raise ValueError("choose one random term: sigma (a random walk) or sigma_u (a "
                              "random velocity, D030), not both")
         velocity_memory(timestep, memory_time_s)   # refuses a memory time that is not positive
@@ -95,7 +98,7 @@ class DriftPipeline:
         self.timestep = float(timestep)
         self.leeway = float(leeway)
         self.sigma = float(sigma)
-        self.sigma_u = float(sigma_u)
+        self.sigma_u = values.ravel().copy() if per_particle else float(sigma_u)
         self.memory_time_s = float(memory_time_s)
         self.seed = seed
         self.rng = np.random.default_rng(seed)
@@ -122,14 +125,16 @@ class DriftPipeline:
 
     @property
     def random_term(self) -> str:
-        if self.sigma_u > 0.0:
+        if np.any(np.asarray(self.sigma_u) > 0.0):
             return "random velocity"
         return "random walk" if self.sigma > 0.0 else "none"
 
     def start_velocity_error(self, n: int) -> np.ndarray | None:
         """Each particle's velocity error at t = 0 (D030), or None without one."""
-        if self.sigma_u == 0.0:
+        if np.all(np.asarray(self.sigma_u) == 0.0):
             return None
+        if np.ndim(self.sigma_u) > 0 and np.size(self.sigma_u) != int(n):
+            raise ValueError(f"{np.size(self.sigma_u)} values of sigma_u for {int(n)} particles")
         return start_velocity_error((int(n), 2), self.sigma_u, self.rng)
 
     def evolve_velocity_error(self, velocity_error):
@@ -188,7 +193,9 @@ class DriftPipeline:
                 "leeway": self.leeway,
                 "random_term": self.random_term,
                 "sigma": self.sigma,
-                "sigma_u": self.sigma_u,
+                "sigma_u": (self.sigma_u if np.ndim(self.sigma_u) == 0 else
+                            {"per_particle": True, "min": float(np.min(self.sigma_u)),
+                             "max": float(np.max(self.sigma_u))}),
                 "memory_time_s": self.memory_time_s,
                 "seed": self.seed,
                 "forcing": self.forcing.describe()}
