@@ -59,7 +59,29 @@ export class Scene {
   }
 
   /** A new window: the cloud at arrival sets the view and the colour scale. */
-  setWindow(window, { fit = true } = {}) {
+  /**
+   * About 400 particles at arrival and at the end of the window, for fitting the view: a
+   * sample, so the few far outliers of 10,000 do not set the zoom.
+   */
+  cloudPoints({ startOnly = false } = {}) {
+    const { cloud } = this.window;
+    const n = cloud.particles;
+    const last = cloud.lat.length - n;
+    const pts = [];
+    for (let j = 0; j < n; j += Math.max(1, Math.floor(n / 400))) {
+      pts.push(ll(cloud.lat[j], cloud.lon[j]));
+      if (!startOnly) pts.push(ll(cloud.lat[last + j], cloud.lon[last + j]));
+    }
+    return pts;
+  }
+
+  /**
+   * A new window: the cloud at arrival sets the view and the colour scale. The view fits the
+   * cloud at arrival and where it has drifted to by the end; `startOnly` fits the arrival
+   * alone, and `zoomOut` steps back that many whole zoom levels: the game flies with room to
+   * turn in, and its camera follows the drift.
+   */
+  setWindow(window, { fit = true, zoomOut = 0, startOnly = false } = {}) {
     this.window = window;
     const { cloud, marker } = window;
     const n = cloud.particles;
@@ -73,14 +95,22 @@ export class Scene {
     this.heli.remove();
     this.hideBuoy();
     if (fit) {
-      const last = cloud.lat.length - n;
-      const pts = [];
-      for (let j = 0; j < n; j += Math.max(1, Math.floor(n / 400))) {
-        pts.push(ll(cloud.lat[j], cloud.lon[j]), ll(cloud.lat[last + j], cloud.lon[last + j]));
-      }
-      this.map.fitBounds(L.latLngBounds(pts).pad(0.05), { animate: false });
+      this.map.fitBounds(L.latLngBounds(this.cloudPoints({ startOnly })).pad(0.05), { animate: false });
+      if (zoomOut) this.map.setZoom(this.map.getZoom() - zoomOut, { animate: false });
     }
     this.restyle();
+  }
+
+  /** Zoom out to the cloud, the flown path and where the real buoy went up to t. */
+  fitAll(t, { pad = 0.08 } = {}) {
+    const pts = [...this.cloudPoints(), ...this.path.getLatLngs()];
+    const target = this.window?.target;
+    if (target) {
+      const end = Math.min(t, target.tS[target.tS.length - 1]);
+      for (let s = Math.max(target.tS[0], 0); s < end; s += 300) pts.push(ll(...trackAt(target, s)));
+      pts.push(ll(...trackAt(target, Math.max(Math.max(target.tS[0], 0), end))));
+    }
+    this.map.fitBounds(L.latLngBounds(pts).pad(pad), { animate: true });
   }
 
   /** The search at t seconds after arrival, as `flight` has flown it so far. */
