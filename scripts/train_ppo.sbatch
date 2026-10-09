@@ -17,7 +17,9 @@
 set -euo pipefail
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
-PY="${SAR_PYTHON:-/home/26p67/envs/sar/bin/python}"
-[ -x "$PY" ] || { echo "no interpreter at $PY -- see D017 on micromamba"; exit 1; }
+PY="${SAR_PYTHON:-/home/26p67/envs/sar-rl/bin/python}"   # PPO's own environment, not the pipeline's
+[ -x "$PY" ] || { echo "no interpreter at $PY -- run: bash scripts/setup_rl_env.sh"; exit 1; }
+"$PY" -c "import stable_baselines3" 2>/dev/null \
+    || { echo "stable_baselines3 is not installed in $PY -- run: bash scripts/setup_rl_env.sh"; exit 1; }
 
 PYTHONPATH=src "$PY" -m sar.rl.train "$@"

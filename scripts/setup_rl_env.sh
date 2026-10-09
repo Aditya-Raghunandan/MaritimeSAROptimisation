@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# Adds PPO's packages (sar.rl) to the cluster's micromamba environment, then proves a training run
-# starts on a compute node. No sudo: the environment is in the home folder. Run from the repo root:
+# Builds PPO's own micromamba environment (sar.rl) and proves a training run starts on a compute node.
+# Separate from the pipeline's /home/26p67/envs/sar, which it never touches: installing torch there
+# would replace that environment's pip-installed numpy and fsspec. No sudo. Run from the repo root:
 #     bash scripts/setup_rl_env.sh
-# Safe to rerun. --freeze-installed leaves every package the pipeline already uses as it is.
+# Safe to rerun.
 
 set -euo pipefail
 
-ENV="${SAR_ENV:-/home/26p67/envs/sar}"
+ENV="${SAR_RL_ENV:-/home/26p67/envs/sar-rl}"
 WINDOWS="${WINDOWS:-/home/26p67/data/derived/rl/windows}"
 PARTITION="${PARTITION:-jaguarcluster}"
-TORCH=2.13.0      # the newest CPU build on conda-forge on 9 Oct 2026; pip has 2.14.1
-SB3=2.9.0
-GYM=1.3.0
+# torch 2.13.0 is the newest CPU build on conda-forge on 9 Oct 2026; numpy matches the pipeline's.
+SPECS=(python=3.12 pytorch-cpu=2.13.0 stable-baselines3=2.9.0 gymnasium=1.3.0 numpy=2.5.3
+       pandas xarray cftime pyarrow scipy)
 
 fail() { echo; echo "FAILED: $*"; exit 1; }
 
 [ -f src/sar/rl/train.py ] || fail "run this from the repository root (the folder with src/ in it)"
-[ -x "$ENV/bin/python" ] || fail "no environment at $ENV"
+[ -d "$WINDOWS" ] || fail "no windows at $WINDOWS"
 
 MAMBA="${MAMBA_EXE:-}"
 for candidate in "$(command -v micromamba 2>/dev/null || true)" "$HOME/bin/micromamba" \
@@ -26,20 +27,28 @@ for candidate in "$(command -v micromamba 2>/dev/null || true)" "$HOME/bin/micro
 done
 [ -n "$MAMBA" ] || fail "micromamba not found; set MAMBA_EXE=/path/to/micromamba and rerun"
 
-echo "== 1/4 installing pytorch-cpu $TORCH, stable-baselines3 $SB3, gymnasium $GYM into $ENV"
-"$MAMBA" install -y -p "$ENV" --override-channels -c conda-forge --freeze-installed \
-    "pytorch-cpu=$TORCH" "stable-baselines3=$SB3" "gymnasium=$GYM" \
-    || fail "the install did not solve without changing packages already in $ENV; nothing was changed. Send this output to Claude"
+if [ -x "$ENV/bin/python" ]; then
+    echo "== 1/4 $ENV exists; making sure it has ${SPECS[*]}"
+    "$MAMBA" install -y -p "$ENV" --override-channels -c conda-forge "${SPECS[@]}" \
+        || fail "the install into $ENV did not solve; send the output above to Claude"
+else
+    echo "== 1/4 creating $ENV with ${SPECS[*]} (about 300 MB)"
+    "$MAMBA" create -y -p "$ENV" --override-channels -c conda-forge "${SPECS[@]}" \
+        || fail "creating $ENV did not solve; send the output above to Claude"
+fi
 
-CHECK='import torch, gymnasium, stable_baselines3 as sb3
+CHECK='import sys, torch, gymnasium, stable_baselines3 as sb3, numpy, pandas, xarray
+import sar.rl.train, sar.rl.env, sar.rl.fly
 assert torch.version.cuda is None, "a CUDA build of torch was installed"
-print("torch", torch.__version__, "| gymnasium", gymnasium.__version__, "| stable-baselines3", sb3.__version__)'
+print("python", sys.version.split()[0], "| torch", torch.__version__, "| gymnasium", gymnasium.__version__,
+      "| stable-baselines3", sb3.__version__, "| numpy", numpy.__version__, "| pandas", pandas.__version__,
+      "| xarray", xarray.__version__)'
 
 echo "== 2/4 importing on this node ($(hostname))"
-"$ENV/bin/python" -c "$CHECK" || fail "the packages do not import on $(hostname)"
+PYTHONPATH=src "$ENV/bin/python" -c "$CHECK" || fail "the packages do not import on $(hostname)"
 
 echo "== 3/4 importing on a compute node (waits for a slot in $PARTITION)"
-srun --partition="$PARTITION" --time=00:05:00 --mem=2G "$ENV/bin/python" -c "$CHECK" \
+PYTHONPATH=src srun --partition="$PARTITION" --time=00:05:00 --mem=2G "$ENV/bin/python" -c "$CHECK" \
     || fail "the packages do not import on a compute node"
 
 echo "== 4/4 a 256-step training run on a compute node, on the real windows"
