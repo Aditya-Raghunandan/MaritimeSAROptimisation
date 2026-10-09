@@ -23,6 +23,12 @@ whole number of minutes, and the window must end by 4 h, just after the longest 
 (D027). Since D030 the cloud itself is calibrated to 24 h, so this is a guard on the
 scenario, not a limit of the cloud.
 
+THE ARRIVAL HEADING (D032). A helicopter that cannot turn on the spot arrives pointing
+somewhere, and that is a fact about the search, not about the searcher, so every searcher
+arrives on the same one: along the target's drift at the datum, which is where the Coast
+Guard lays the first leg of its Expanding Square and Sector (Addendum p. 3-26); north if
+there is no drift. `search_episode` builds the referee with it.
+
 STEADY CLOUDS. `steady_search` is a synthetic cloud carried by a uniform current, with its
 marker, for tests and the CLI.
 """
@@ -40,7 +46,7 @@ from sar.model.position import CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H, DEFAUL
 from sar.pipeline.ensemble import Ensemble, resolve_sigma_u, run_ensemble, synthetic_cloud
 from sar.pipeline.gridded import GriddedForcing
 from sar.search.datum import marker_track
-from sar.search.episode import STEPS
+from sar.search.episode import STEPS, SearchEpisode
 from sar.search.patterns import (
     MarkerTrack,
     Pattern,
@@ -49,7 +55,13 @@ from sar.search.patterns import (
     sector_search,
     trackline_return,
 )
-from sar.search.platform import STEP_S, expanding_square_spacing_m, sector_radius_m
+from sar.search.platform import (
+    ON_SCENE_WINDOW_S,
+    STEP_S,
+    TURN_RATE_DEG_S,
+    expanding_square_spacing_m,
+    sector_radius_m,
+)
 from sar.utils.geo import (
     M_PER_DEG_LAT,
     metres_per_degree_lon,
@@ -69,6 +81,9 @@ ALONG_THE_DATUM_LINE = ("parallel", "trackline")
 
 # A datum line shorter than this has no direction worth flying along (frontend/src/searchRun.js).
 MIN_DATUM_LINE_M = 50.0
+
+# How many windows of an endless pattern to draw, so the autopilot never runs out (D032).
+DRAWN_WINDOWS = 2
 
 DEFAULT_TIME = "2019-01-01T00:00"
 
@@ -187,6 +202,19 @@ def scenario_search(row, forcing, arrival_s: float, particles: int,
     return replace(setup, target=truth_track(row, setup.arrival_s))
 
 
+def arrival_heading(setup: SearchSetup) -> float:
+    """The heading every searcher arrives on: along the drift at the datum, else north (D032)."""
+    return 0.0 if setup.drift_bearing_deg is None else float(setup.drift_bearing_deg)
+
+
+def search_episode(setup: SearchSetup, turn_rate_deg_s: float = TURN_RATE_DEG_S,
+                   **kw) -> SearchEpisode:
+    """The referee for a scenario: its cloud, marker and buoy, arriving on its drift."""
+    return SearchEpisode(setup.window, setup.marker, target=setup.target,
+                         heading_deg=arrival_heading(setup), turn_rate_deg_s=turn_rate_deg_s,
+                         **kw)
+
+
 def datum_line(lkp, datum) -> tuple[float | None, float]:
     """The drift model's prediction as a line, last known position to datum: (bearing, metres).
 
@@ -216,6 +244,10 @@ def doctrinal_searcher(name: str, setup: SearchSetup, lkp) -> tuple[Pattern, flo
       * Trackline half-length: the datum line's length, at least a Sector radius, so a
         near-still datum still gets a real line: the buoy may have drifted anywhere from not
         at all to twice as far as predicted (frontend/src/searchRun.js).
+      * The patterns that go on for ever (all but the Parallel Track, whose area is the
+        window's) are drawn for DRAWN_WINDOWS windows. The autopilot rounds corners and so
+        gets along the drawing faster than the clock (D032); it must not run out of legs.
+        A helicopter that turns at once flies only the first window, as before.
     """
     if name not in DOCTRINAL:
         raise ValueError(f"{name!r} is not a Coast Guard pattern; one of {', '.join(DOCTRINAL)}")
@@ -225,14 +257,16 @@ def doctrinal_searcher(name: str, setup: SearchSetup, lkp) -> tuple[Pattern, flo
     line_bearing, line_m = datum_line(lkp, setup.datum)
     if name in ALONG_THE_DATUM_LINE and line_bearing is not None and line_m > MIN_DATUM_LINE_M:
         bearing, why = line_bearing, "along the datum line"
+    drawn = DRAWN_WINDOWS * ON_SCENE_WINDOW_S
     if name == "expanding-square":
-        pattern = expanding_square(expanding_square_spacing_m(), bearing)
+        pattern = expanding_square(expanding_square_spacing_m(), bearing, duration_s=drawn)
     elif name == "sector":
-        pattern = sector_search(first_bearing_deg=bearing)
+        pattern = sector_search(first_bearing_deg=bearing, duration_s=drawn)
     elif name == "parallel":
         pattern = parallel_track(first_bearing_deg=bearing)
     else:
-        pattern = trackline_return(max(line_m, sector_radius_m()), first_bearing_deg=bearing)
+        pattern = trackline_return(max(line_m, sector_radius_m()), first_bearing_deg=bearing,
+                                   duration_s=drawn)
     return pattern, bearing, why
 
 

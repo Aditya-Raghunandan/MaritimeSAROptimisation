@@ -6,20 +6,17 @@ searchers here, so a searcher is the same searcher wherever it is flown, and the
 replay is the paper's flight.
 
 `recorded` keeps every step a searcher flew as the `Waypoints` the referee was given, which
-is what the browser replays: a heading becomes the one straight sub-leg the referee would
-have flown for it, bit for bit.
+is what the browser replays: a heading becomes the path the referee flies for it (the turn
+at the turn rate and the straight leg after, with the heading at every waypoint; D032), bit
+for bit.
 """
 
 from __future__ import annotations
 
-import numpy as np
-
 from sar.model.position import BY_CURRENT, CALIBRATED_SIGMA, CALIBRATED_SIGMA_U, SIGMA_U_RULE
-from sar.search.episode import Waypoints, pattern_policy
+from sar.search.episode import Turn, Waypoints, pattern_policy
 from sar.search.greedy import greedy_policy, random_heading_policy
-from sar.search.platform import STEP_S
 from sar.search.scenario import DOCTRINAL, doctrinal_searcher
-from sar.utils.geo import east_north
 
 SEARCHERS = DOCTRINAL + ("greedy", "random")
 # The drift engine's random term, by name. rvc is the calibrated one since D033: the random
@@ -53,16 +50,19 @@ def searcher(name: str, setup, row, arrival_h: float, greedy: dict | None = None
 
 
 def recorded(policy):
-    """The policy, and the list it fills with every step it flies, as `Waypoints`."""
+    """The policy, and the list it fills with every step it flies, as `Waypoints`.
+
+    A heading or a `Turn` is recorded as the path the referee flies for it, with the
+    heading at every waypoint, so a replay of the steps is the same flight (D032).
+    """
     steps: list[Waypoints] = []
 
     def flying(episode):
         action = policy(episode)
-        if not isinstance(action, Waypoints):
-            de, dn = east_north(float(action), episode.speed_ms * STEP_S)
-            x, y = episode.offset
-            action = Waypoints(np.array([STEP_S]), np.array([x + float(de)]),
-                               np.array([y + float(dn)]))
+        if isinstance(action, Turn):
+            action = episode.waypoints_for(turn_deg=action.deg)
+        elif not isinstance(action, Waypoints):
+            action = episode.waypoints_for(float(action))
         steps.append(action)
         return action
 

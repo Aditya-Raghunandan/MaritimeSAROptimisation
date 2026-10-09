@@ -80,7 +80,7 @@ class TestScore:
             assert len(f["drain_rate"]) == 45
             assert sum(f["drain_rate"]) == pytest.approx(f["pos"])
             assert f["peak_drain_rate"] == max(f["drain_rate"])
-            assert f["pos_15m"] <= f["pos_30m"] <= f["pos"] + 1e-12
+            assert f["pos_15m"] <= f["pos_30m"] + 1e-12 <= f["pos"] + 2e-12
             assert 0.0 <= f["pos"] < 1.0
 
     def test_the_buoy_is_scored(self, flights):

@@ -4,7 +4,9 @@
  * last known position and, when revealed, the real buoy (D031, Stages 4 and 5).
  *
  * The scenario page draws one of these and the game's reveal draws three side by side; the
- * flight (playback.js) decides everything, this only draws it.
+ * flight (playback.js) decides everything, this only draws it. The helicopter points the
+ * way it is flying, and a flight being steered by a person shows, dashed, the turn it is
+ * about to make (D032: it cannot turn on the spot, so the bend is worth seeing coming).
  */
 
 import L from 'leaflet';
@@ -46,6 +48,9 @@ export class Scene {
     this.strip = L.polyline([], { color: colour, opacity: 0.45, lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(map);
     this.path = L.polyline([], { color: '#fff', weight: 1, opacity: 0.9, interactive: false }).addTo(map);
     this.heli = L.marker([0, 0], { icon: HELI(colour), interactive: false });
+    this.ahead = L.polyline([], {
+      color: '#ffcd8d', weight: 2, opacity: 0.85, dashArray: '6 6', interactive: false,
+    });
     this.marker = L.marker([0, 0], { icon: DOT('#ffcd8d', 10), interactive: false });
     this.lkp = L.marker([0, 0], { icon: DOT('#c3c2b7', 9, 'last known position'), interactive: false });
     this.buoy = L.marker([0, 0], { icon: DOT('#ff4d6d', 14, 'the real buoy'), interactive: false });
@@ -89,6 +94,12 @@ export class Scene {
     this.path.setLatLngs(trail);
     this.heli.setLatLng(trail[trail.length - 1]);
     if (!this.map.hasLayer(this.heli)) this.heli.addTo(this.map);
+    const svg = this.heli.getElement()?.querySelector('svg');
+    if (svg && flight.headingAt) svg.style.transform = `rotate(${flight.headingAt(t)}deg)`;
+    if (flight.preview && t < flight.duration) {
+      this.ahead.setLatLngs(flight.preview(t).map(([la, lo]) => ll(la, lo)));
+      if (!this.map.hasLayer(this.ahead)) this.ahead.addTo(this.map);
+    } else this.ahead.remove();
     this.marker.setLatLng(ll(...trackAt(this.window.marker, Math.min(t, 2700))));
     if (this.map.hasLayer(this.buoy)) this.placeBuoy(t);
   }
@@ -125,7 +136,7 @@ export class Scene {
 
   destroy() {
     this.map.off('zoomend', this.restyle, this);
-    for (const layer of [this.probability, this.strip, this.path, this.heli, this.marker, this.lkp,
-      this.buoy, this.buoyTrail]) layer.remove();
+    for (const layer of [this.probability, this.strip, this.path, this.heli, this.ahead, this.marker,
+      this.lkp, this.buoy, this.buoyTrail]) layer.remove();
   }
 }

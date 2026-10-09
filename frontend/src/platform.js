@@ -34,6 +34,27 @@ export const ON_SCENE_WINDOW_S = 45 * 60;
 /** The integration step and the agent's decision interval (D009, ADR002). */
 export const STEP_S = 60;
 
+/**
+ * How fast it can turn (D032, ADR006): a level, coordinated turn at bank phi turns at
+ * omega = g tan(phi) / V. 30 degrees is the most the FAA's procedures use for a routine
+ * turn (AIM 5-3, Holding) and what autopilot flight directors limit a turn to: 7.0 deg/s on
+ * a 379 m radius at 90 kt. The FAA's standard rate, 3 deg/s, is the gentler bracket.
+ */
+export const STANDARD_GRAVITY_MS2 = 9.80665;
+export const MAX_BANK_DEG = 30;
+export const STANDARD_RATE_DEG_S = 3;
+
+export function turnRateDegS(bankDeg = MAX_BANK_DEG, speedMs = SEARCH_SPEED_MS) {
+  return ((STANDARD_GRAVITY_MS2 * Math.tan(bankDeg * (Math.PI / 180))) / speedMs) * (180 / Math.PI);
+}
+
+export function turnRadiusM(rateDegS, speedMs = SEARCH_SPEED_MS) {
+  return speedMs / (rateDegS * (Math.PI / 180));
+}
+
+export const TURN_RATE_DEG_S = turnRateDegS();
+export const TURN_RADIUS_M = turnRadiusM(TURN_RATE_DEG_S);
+
 /** The available search effort Z = W x V x T: what one window covers at coverage 1 (p. H-40). */
 export function searchEffortM2(sweepWidthM = SWEEP_WIDTH_M, speedMs = SEARCH_SPEED_MS, windowS = ON_SCENE_WINDOW_S) {
   return sweepWidthM * speedMs * windowS;

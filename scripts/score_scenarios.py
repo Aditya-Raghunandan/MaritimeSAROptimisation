@@ -19,6 +19,12 @@ doctrinal_searcher` exactly as the site lays them; greedy and the random floor
 (`sar.search.greedy`, #49). The random floor's seed is the row's seed and the arrival, so
 both noise models are searched with the same random headings.
 
+THE HELICOPTER TURNS AT 7 DEG/S (D032). Every flight is flown by a helicopter that turns
+at most `--turn-rate` degrees a second (default `TURN_RATE_DEG_S`, a 30 degree bank at
+90 kt), arriving along the drift (`sar.search.scenario.search_episode`). `--turn-rate inf`
+is the referee before D032, whose helicopter turns at once: the "as the manual draws it"
+comparison. The rate is part of the experiment, so a folder never mixes the two.
+
 NOISE MODELS ON THE SAME SEEDS. `rvc` is the engine's random velocity sized by the current at
 the start (D033, the default since 9 Oct). `rv` is D030's pooled size (sigma_u = 0.226 m/s),
 kept as the comparison, and `rw` the old random walk (D028, sigma = 26.3). Same row, same
@@ -47,6 +53,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -58,9 +65,15 @@ import pandas as pd
 
 from sar.pipeline.gridded import ForcingGapError, GriddedForcing
 from sar.search.benchmark import BASELINE, GREEDY, NOISE, NOISE_RECORD, SEARCHERS, searcher
-from sar.search.episode import STEPS, SearchEpisode, run
-from sar.search.platform import STEP_S
-from sar.search.scenario import read_scenarios, scenario_search, straightness
+from sar.search.episode import STEPS, run
+from sar.search.platform import STEP_S, TURN_RATE_DEG_S
+from sar.search.scenario import (
+    arrival_heading,
+    read_scenarios,
+    scenario_search,
+    search_episode,
+    straightness,
+)
 from sar.utils.geo import to_display_longitude
 
 RESAMPLES = 1000
@@ -103,7 +116,8 @@ def _scenario_fields(row) -> dict:
 
 
 def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
-              greedy: dict | None = None) -> list[dict]:
+              greedy: dict | None = None,
+              turn_rate_deg_s: float = TURN_RATE_DEG_S) -> list[dict]:
     """Every (noise, arrival, searcher) flight over one row, as flat dicts.
 
     `forcing` is a backend, or a data root, opened once for the latest arrival's window.
@@ -122,7 +136,7 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
             beached = float(np.mean(setup.window.beached[-1]))
             for name in searchers:
                 policy, first, layout = searcher(name, setup, row, hours, greedy)
-                m = run(policy, SearchEpisode(setup.window, setup.marker, target=setup.target))
+                m = run(policy, search_episode(setup, turn_rate_deg_s))
                 drain = m["removed_per_step"]
                 target = m.get("target") or {}
                 flights.append({
@@ -131,6 +145,8 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
                     "noise": noise, "sigma_u": setup.sigma_u, "sigma": NOISE[noise]["sigma"],
                     "start_current_ms": setup.start_current_ms,
                     "arrival_h": hours, "searcher": name,
+                    "turn_rate_deg_s": m["turn_rate_deg_s"],
+                    "arrival_heading_deg": arrival_heading(setup),
                     "first_bearing_deg": first, "layout": layout,
                     "datum_lat": setup.datum[0],
                     "datum_lon": float(to_display_longitude(setup.datum[1])),
@@ -178,12 +194,13 @@ def sha256(path) -> str:
 
 
 def experiment(csv, noises, arrivals_h, searchers, particles: int,
-               greedy: dict | None = None) -> dict:
+               greedy: dict | None = None, turn_rate_deg_s: float = TURN_RATE_DEG_S) -> dict:
     """What makes two flights comparable. A folder holds flights from one of these only."""
     return {"commit": git_commit(), "table": Path(csv).name, "table_sha256": sha256(csv),
             "particles": int(particles), "noise": {n: NOISE_RECORD[n] for n in noises},
             "arrival_h": [float(a) for a in arrivals_h], "searchers": list(searchers),
             "greedy": dict(GREEDY if greedy is None else greedy),
+            "turn_rate_deg_s": None if math.isinf(turn_rate_deg_s) else float(turn_rate_deg_s),
             "steps": STEPS, "step_s": STEP_S}
 
 
@@ -343,6 +360,9 @@ def main(argv=None):
     s.add_argument("--greedy-headings", type=int, default=GREEDY["headings"])
     s.add_argument("--greedy-decide-s", type=float, default=GREEDY["decide_s"],
                    help="how often greedy chooses a heading; must divide 60 s")
+    s.add_argument("--turn-rate", type=float, default=TURN_RATE_DEG_S,
+                   help=f"deg/s the helicopter can turn, default {TURN_RATE_DEG_S:.3f} (D032); "
+                        f"inf for the pre-D032 referee that turns at once")
     s.add_argument("--out", required=True, help="the experiment's folder")
     m = sub.add_parser("summary", help="tabulate an experiment's folder")
     m.add_argument("folder")
@@ -372,14 +392,14 @@ def main(argv=None):
     out = Path(args.out)
     greedy = {"headings": args.greedy_headings, "decide_s": args.greedy_decide_s}
     claim(out, experiment(args.csv, args.noise, args.arrival_h, args.searchers, args.particles,
-                          greedy))
+                          greedy, args.turn_rate))
     (out / "flights").mkdir(exist_ok=True)
     for name in row_names(args.rows, table):
         row = table[table["scenario"] == name].iloc[0]
         t0 = time.perf_counter()
         try:
             flights = score_row(row, args.forcing_dir, args.noise, args.arrival_h,
-                                args.searchers, args.particles, greedy)
+                                args.searchers, args.particles, greedy, args.turn_rate)
         except ForcingGapError as err:
             # D011: a scenario that crosses a gap in the forcing is excluded, and says why.
             (out / "flights" / f"{name}.skipped.json").write_text(

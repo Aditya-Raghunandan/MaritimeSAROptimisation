@@ -29,6 +29,16 @@ starts at the marker. On the ground it is the marker's position plus the offset.
 that flew over the ground instead would spend ~4.9 km of a 125 km window keeping up with a
 1.8 m/s current that the patterns are carried by for free.
 
+IT CANNOT TURN ON THE SPOT (D032, docs/ADR006.md). The helicopter turns at most
+`turn_rate_deg_s`, 7.0 deg/s by default (a 30 degree bank at 90 kt, a 379 m radius;
+`sar.search.kinematics`), and flies at its search speed throughout. A heading searcher's
+command is flown as a turn at that rate and then straight; `turn` takes the trained agent's
+command, a turn by so many degrees, right positive; a pattern is flown by the L1 autopilot.
+Every waypoint carries the helicopter's heading, and `fly` refuses a path that turns faster
+or changes speed, as it refuses one that flies too fast. The helicopter arrives on
+`heading_deg`. turn_rate_deg_s = inf is the referee before D032, which turned at once: kept
+as the "as the manual draws it" comparison, and bit for bit what it was.
+
 WHAT IS MEASURED (row 6). POS, and the probability removed in each step: `removed_per_step`,
 which the project calls the DRAIN RATE (the share of the probability cleared per minute;
 POS is its sum; docs/benchmark.md). The expected time to detection, sum(t x dm) / sum(dm) with t
@@ -44,7 +54,7 @@ CLI. One search, its metrics printed as JSON:
     python -m sar.search.episode --policy heading --heading 90 --spread-km 2
     python -m sar.search.episode --policy replay --replay flight.json --spread-km 2
     python -m sar.search.episode --csv scenarios.csv --scenario S01 --forcing-dir DATA \\
-        --arrival-h 2 --particles 10000 --policy expanding-square
+        --arrival-h 2 --particles 10000 --policy expanding-square [--turn-rate inf]
 """
 
 from __future__ import annotations
@@ -56,12 +66,24 @@ from pathlib import Path
 
 import numpy as np
 
+from sar.search.kinematics import (
+    bearing,
+    check_turn_rate,
+    check_turns,
+    follow,
+    is_instant,
+    normalise,
+    shortest_turn,
+    steer,
+    steer_to,
+)
 from sar.search.patterns import PATTERNS, MarkerTrack, Pattern
 from sar.search.platform import (
     ON_SCENE_WINDOW_S,
     SEARCH_SPEED_MS,
     STEP_S,
     SWEEP_WIDTH_M,
+    TURN_RATE_DEG_S,
     expanding_square_spacing_m,
 )
 from sar.search.sweep import first_contact, relative_m, sweep
@@ -79,12 +101,15 @@ class Waypoints:
     """Where the helicopter is during one step, in metres east and north of the marker.
 
     t_s are seconds into the step, strictly increasing, the last one the end of the step.
-    The start of the step, where the helicopter already is, is not repeated.
+    The start of the step, where the helicopter already is, is not repeated. heading_deg is
+    the helicopter's heading at each waypoint, which a referee that limits the turn rate
+    needs (D032); a helicopter that turns at once may leave it out.
     """
 
     t_s: np.ndarray
     east_m: np.ndarray
     north_m: np.ndarray
+    heading_deg: np.ndarray | None = None
 
     def __post_init__(self):
         arrays = [np.atleast_1d(np.asarray(getattr(self, name), dtype=float))
@@ -99,6 +124,22 @@ class Waypoints:
                              "start of the step")
         for name, a in zip(("t_s", "east_m", "north_m"), arrays):
             object.__setattr__(self, name, a)
+        if self.heading_deg is not None:
+            h = np.atleast_1d(np.asarray(self.heading_deg, dtype=float))
+            if h.shape != t.shape or not np.all(np.isfinite(h)):
+                raise ValueError("a heading for every waypoint, finite, or none at all")
+            object.__setattr__(self, "heading_deg", h)
+
+
+@dataclass(frozen=True)
+class Turn:
+    """A turn command for one step: turn by `deg`, right positive, then fly straight.
+
+    The trained agent's action (D032). A turn longer than the step can fly is flown for the
+    whole step, and the rest is not carried over.
+    """
+
+    deg: float
 
 
 def _read_only(array: np.ndarray) -> np.ndarray:
@@ -112,7 +153,8 @@ class SearchEpisode:
 
     def __init__(self, window, marker: MarkerTrack, speed_ms: float = SEARCH_SPEED_MS,
                  sweep_width_m: float = SWEEP_WIDTH_M, pod: float = 1.0, steps: int = STEPS,
-                 target: MarkerTrack | None = None):
+                 target: MarkerTrack | None = None, heading_deg: float = 0.0,
+                 turn_rate_deg_s: float = TURN_RATE_DEG_S):
         if isinstance(steps, bool) or not isinstance(steps, (int, np.integer)) or steps < 1:
             raise ValueError(f"steps must be a positive integer, got {steps!r}")
         times = np.asarray(window.times)
@@ -128,6 +170,9 @@ class SearchEpisode:
             raise ValueError(f"sweep_width_m must be positive, got {sweep_width_m}")
         if not 0.0 <= pod <= 1.0:
             raise ValueError(f"pod must lie within 0 to 1, got {pod}")
+        turn_rate_deg_s = check_turn_rate(turn_rate_deg_s)
+        if heading_deg is None or not np.isfinite(float(heading_deg)):
+            raise ValueError(f"the arrival heading must be finite degrees, got {heading_deg!r}")
         duration = steps * STEP_S
         if marker.t_s[0] > _TIME_TOLERANCE_S or marker.t_s[-1] < duration - _TIME_TOLERANCE_S:
             raise ValueError(f"the marker track must cover the episode, 0 to {duration:g} s")
@@ -138,6 +183,8 @@ class SearchEpisode:
         self.speed_ms = speed_ms
         self.sweep_width_m = sweep_width_m
         self.pod = pod
+        self.turn_rate_deg_s = turn_rate_deg_s
+        self._heading = normalise(heading_deg)
         self.steps = int(steps)
         self.k = 0
         self._weight = np.array(window.weight, dtype=float)
@@ -173,6 +220,16 @@ class SearchEpisode:
         return self._offset
 
     @property
+    def heading_deg(self) -> float:
+        """Which way the helicopter points now, degrees true, relative to the marker."""
+        return self._heading
+
+    @property
+    def instant(self) -> bool:
+        """True for the referee before D032, whose helicopter turns at once."""
+        return is_instant(self.turn_rate_deg_s)
+
+    @property
     def marker_position(self) -> tuple[float, float]:
         lat, lon = self.marker.at(self.t_s)
         return float(lat), float(lon)
@@ -199,13 +256,35 @@ class SearchEpisode:
 
     # -- flying ------------------------------------------------------------------------
 
+    def waypoints_for(self, heading_deg=None, *, turn_deg=None) -> Waypoints:
+        """The path one step flies for a command: a heading, or a turn in degrees, right positive.
+
+        The turn at the turn rate (to a heading, the short way round), then straight. With an
+        instant turn, one straight leg along the new heading, as before D032.
+        """
+        if (heading_deg is None) == (turn_deg is None):
+            if turn_deg is None:
+                raise ValueError(f"a heading must be a finite number of degrees, got {heading_deg!r}")
+            raise ValueError("a step is a heading or a turn, not both")
+        value = turn_deg if heading_deg is None else heading_deg
+        if not np.isfinite(float(value)):
+            raise ValueError(f"a heading or turn must be a finite number of degrees, got {value!r}")
+        if self.instant and heading_deg is not None:
+            de, dn = east_north(float(heading_deg), self.speed_ms * STEP_S)
+            return Waypoints([STEP_S], [self._offset[0] + float(de)],
+                             [self._offset[1] + float(dn)], [normalise(heading_deg)])
+        turn = float(turn_deg) if heading_deg is None else shortest_turn(self._heading, heading_deg)
+        p = steer(self._offset[0], self._offset[1], self._heading, turn, STEP_S, self.speed_ms,
+                  self.turn_rate_deg_s)
+        return Waypoints(p.t_s, p.east_m, p.north_m, p.heading_deg)
+
     def step(self, heading_deg) -> float:
-        """Fly straight along a heading, relative to the marker, for one step."""
-        if heading_deg is None or not np.isfinite(float(heading_deg)):
-            raise ValueError(f"a heading must be a finite number of degrees, got {heading_deg!r}")
-        de, dn = east_north(float(heading_deg), self.speed_ms * STEP_S)
-        return self.fly(Waypoints([STEP_S], [self._offset[0] + float(de)],
-                                  [self._offset[1] + float(dn)]))
+        """Turn to a heading, relative to the marker, and fly on along it, for one step."""
+        return self.fly(self.waypoints_for(heading_deg))
+
+    def turn(self, turn_deg) -> float:
+        """Turn by `turn_deg`, right positive, then fly straight, for one step (D032)."""
+        return self.fly(self.waypoints_for(turn_deg=turn_deg))
 
     def fly(self, waypoints: Waypoints) -> float:
         """Fly one step through `waypoints`; returns the probability it removed."""
@@ -225,6 +304,13 @@ class SearchEpisode:
             fastest = float(np.max(legs / np.maximum(np.diff(t), 1e-12)))
             raise ValueError(f"the path flies {fastest:.2f} m/s, faster than the "
                              f"helicopter's {self.speed_ms:.2f} m/s about the marker")
+        if not self.instant:
+            if waypoints.heading_deg is None:
+                raise ValueError("a referee that limits the turn rate needs the heading at "
+                                 "every waypoint (D032)")
+            check_turns(waypoints.t_s, waypoints.east_m, waypoints.north_m,
+                        waypoints.heading_deg, (*self._offset, self._heading), self.speed_ms,
+                        self.turn_rate_deg_s)
 
         t0 = self.t_s
         mlat, mlon = self.marker.at(t0 + t)
@@ -249,8 +335,14 @@ class SearchEpisode:
                                    (glat[i + 1], glon[i + 1]))
             a_lat, a_lon = b_lat, b_lon
 
-        self._distance += float(legs.sum())
+        # A referee that limits the turn has just checked the path is flown at full speed;
+        # the chords of its arcs are a little shorter than the arcs themselves.
+        self._distance += float(legs.sum()) if self.instant else self.speed_ms * STEP_S
         self._offset = (float(east[-1]), float(north[-1]))
+        if waypoints.heading_deg is not None:
+            self._heading = normalise(waypoints.heading_deg[-1])
+        elif legs[-1] > 0.0:
+            self._heading = bearing(east[-1] - east[-2], north[-1] - north[-2])
         self._track.extend(zip((t0 + t[1:]).tolist(), glat[1:].tolist(), glon[1:].tolist()))
         self._removed.append(removed_step)
         self.k += 1
@@ -290,7 +382,8 @@ class SearchEpisode:
                "particles": int(self._weight.size),
                "speed_ms": self.speed_ms,
                "sweep_width_m": self.sweep_width_m,
-               "pod": self.pod}
+               "pod": self.pod,
+               "turn_rate_deg_s": None if self.instant else self.turn_rate_deg_s}
         if self.target is not None:
             closest, when = self._closest
             out["target"] = {"found": self._found_s is not None,
@@ -309,19 +402,24 @@ class SearchEpisode:
 def run(policy, episode: SearchEpisode, decide_every: int = 1) -> dict:
     """Fly a searcher to the end of the episode and return its metrics.
 
-    A policy is any callable taking the episode and returning a heading or `Waypoints`.
-    With decide_every = n it is asked every n steps and its heading held in between, each
-    step still swept on its own frames. Waypoints cover one step, so they need n = 1.
+    A policy is any callable taking the episode and returning a heading, a `Turn` or
+    `Waypoints`. With decide_every = n it is asked every n steps and its heading held in
+    between, each step still swept on its own frames. Waypoints and turns cover one step,
+    so they need n = 1.
     """
     if isinstance(decide_every, bool) or not isinstance(decide_every, (int, np.integer)) \
             or decide_every < 1:
         raise ValueError(f"decide_every must be a positive integer, got {decide_every!r}")
     while not episode.done:
         action = policy(episode)
-        if isinstance(action, Waypoints):
+        if isinstance(action, (Waypoints, Turn)):
             if decide_every != 1:
-                raise ValueError("waypoints cover one step; decide_every applies to headings")
-            episode.fly(action)
+                raise ValueError("waypoints and turns cover one step; decide_every applies "
+                                 "to headings")
+            if isinstance(action, Turn):
+                episode.turn(action.deg)
+            else:
+                episode.fly(action)
         else:
             for _ in range(min(decide_every, episode.steps - episode.k)):
                 episode.step(action)
@@ -340,12 +438,29 @@ def pattern_policy(pattern: Pattern):
     The pattern is already in metres about the marker, which is the episode's frame. A
     pattern that ends before the episode does (a finished Parallel Track) is refused rather
     than left to hover.
+
+    A helicopter that cannot turn on the spot (D032) flies the drawn legs with the L1
+    autopilot (`sar.search.kinematics.follow`), from the heading it arrived on, worked out
+    once for the whole window when the episode starts; each step then flies its minute of
+    that path. One that turns at once flies the drawn waypoints themselves, as before.
     """
+    flown = {"episode": None, "path": None}
+
     def policy(episode: SearchEpisode) -> Waypoints:
         if pattern.duration_s < episode.duration_s - _TIME_TOLERANCE_S:
             raise ValueError(f"the {pattern.kind} ends at {pattern.duration_s:g} s, before "
                              f"the episode's {episode.duration_s:g} s")
         t0, t1 = episode.t_s, episode.t_s + STEP_S
+        if not episode.instant:
+            if flown["episode"] is not episode:
+                if episode.k != 0:
+                    raise ValueError("a pattern is flown from the start of an episode")
+                flown["episode"] = episode
+                flown["path"] = follow(pattern.east_m, pattern.north_m, episode.heading_deg,
+                                       episode.duration_s, episode.speed_ms,
+                                       episode.turn_rate_deg_s)
+            p = flown["path"].path(t0, t1)
+            return Waypoints(p.t_s - t0, p.east_m, p.north_m, p.heading_deg)
         inside = pattern.t_s[(pattern.t_s > t0 + _TIME_TOLERANCE_S)
                              & (pattern.t_s < t1 - _TIME_TOLERANCE_S)]
         times = np.append(inside, t1)
@@ -366,13 +481,29 @@ def replay_policy(record):
 
     A ground path is not replayed: it already holds the current, and flying it about the
     marker would add the current twice.
+
+    The headings are COMMANDS: with a turn rate (D032) each is turned to at that rate, the
+    short way round, from the heading the helicopter has, and held until the next, exactly
+    as the site's PlayerFlight flies them. A record may carry "turn_rate_deg_s" (null for a
+    helicopter that turns at once); a record flown at another rate than the episode's is
+    refused, because it would no longer be the same flight.
     """
     if isinstance(record, (str, Path)):
         record = json.loads(Path(record).read_text())
+    flown_at = record.get("turn_rate_deg_s", "unstated")
+
+    def check_rate(episode: SearchEpisode) -> None:
+        if flown_at == "unstated":
+            return
+        rate = float("inf") if flown_at is None else float(flown_at)
+        if rate != episode.turn_rate_deg_s and not abs(rate - episode.turn_rate_deg_s) <= 1e-9:
+            raise ValueError(f"the record was flown turning at {flown_at} deg/s, the episode "
+                             f"turns at {episode.turn_rate_deg_s:g}")
     if "headings_deg" in record:
         headings = [float(h) for h in record["headings_deg"]]
 
         def per_step(episode: SearchEpisode) -> float:
+            check_rate(episode)
             if episode.k >= len(headings):
                 raise ValueError(f"the record has {len(headings)} headings, the episode "
                                  f"{episode.steps} steps")
@@ -390,11 +521,26 @@ def replay_policy(record):
         raise ValueError("'t_s' must start at 0 and increase strictly")
 
     def timed(episode: SearchEpisode) -> Waypoints:
+        check_rate(episode)
         t0, t1 = episode.t_s, episode.t_s + STEP_S
         cuts = times[(times > t0 + _TIME_TOLERANCE_S) & (times < t1 - _TIME_TOLERANCE_S)]
         ends = np.append(cuts, t1)
         starts = np.concatenate(([t0], cuts))
         held = headings[np.searchsorted(times, starts + _TIME_TOLERANCE_S, side="right") - 1]
+        if not episode.instant:
+            x, y = episode.offset
+            psi = episode.heading_deg
+            t, e, n, h = [], [], [], []
+            for a, b, command in zip(starts, ends, held):
+                p = steer_to(x, y, psi, float(command), float(b - a), episode.speed_ms,
+                             episode.turn_rate_deg_s)
+                t.extend((p.t_s + (a - t0)).tolist())
+                e.extend(p.east_m.tolist())
+                n.extend(p.north_m.tolist())
+                h.extend(p.heading_deg.tolist())
+                x, y, psi = float(p.east_m[-1]), float(p.north_m[-1]), float(p.heading_deg[-1])
+            t[-1] = STEP_S
+            return Waypoints(t, e, n, h)
         de, dn = east_north(held, episode.speed_ms * (ends - starts))
         east = episode.offset[0] + np.cumsum(de)
         north = episode.offset[1] + np.cumsum(dn)
@@ -429,6 +575,9 @@ def _cli(argv=None) -> dict:
     parser.add_argument("--decide-every", type=int, default=1,
                         help="steps between a heading searcher's decisions, default 1")
     parser.add_argument("--pod", type=float, default=1.0, help="default 1, definite range")
+    parser.add_argument("--turn-rate", type=float, default=TURN_RATE_DEG_S,
+                        help=f"deg/s the helicopter can turn, default {TURN_RATE_DEG_S:.3f} "
+                             f"(D032); inf for one that turns at once")
     parser.add_argument("--particles", type=int, default=10_000)
     parser.add_argument("--seed", type=int, default=None)
     synthetic = parser.add_argument_group("a synthetic cloud (the default)")
@@ -465,7 +614,11 @@ def _cli(argv=None) -> dict:
         first = bearing if args.first_bearing is None else args.first_bearing
         first = 0.0 if first is None else first
         policy = _policy_from(args, first)
-        episode = SearchEpisode(setup.window, setup.marker, pod=args.pod, target=setup.target)
+        # Built here, not by scenarios.search_episode: run as a module this file is
+        # __main__, and its Waypoints would not be the ones that module's referee takes.
+        episode = SearchEpisode(setup.window, setup.marker, pod=args.pod, target=setup.target,
+                                heading_deg=scenarios.arrival_heading(setup),
+                                turn_rate_deg_s=args.turn_rate)
         metrics = run(policy, episode, args.decide_every)
     except (ValueError, FileNotFoundError, KeyError) as error:
         parser.error(str(error))
