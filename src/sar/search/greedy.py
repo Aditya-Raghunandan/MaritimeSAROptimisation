@@ -31,6 +31,15 @@ sub-leg has just passed over, so it does not chase mass it has already taken. Th
 still sweeps the particles itself. The values are chosen on dev and frozen before any test
 set is opened.
 
+IT PLANS THE TURN IT CAN FLY (D032). A helicopter that turns at 7 deg/s cannot fly a
+straight leg off in any direction: to reverse it spends 26 s on a 379 m half circle. So for
+each candidate heading greedy scores the path the referee will actually fly, the turn to
+that heading at the turn rate (`sar.search.kinematics.steer_to`) and then straight to the
+end of its reach, by the cells within half a cell of any of its chords. It still chooses a
+compass heading, and the referee flies the turn. On synthetic clouds (9 Oct, vault notebook)
+the unchanged greedy lost 9 points of POS to the turn and this one 0.1. For a helicopter
+that turns at once the straight leg is that path, and greedy is exactly what it was.
+
 RANDOM: THE FLOOR. A fresh uniformly random heading every minute, from its own seed: the
 helicopter does a random walk about the marker. #49 and R5f: anything worth reporting must
 beat it. It is called "random" in the results, never "random walk", because the old noise
@@ -42,6 +51,7 @@ from __future__ import annotations
 import numpy as np
 
 from sar.search.episode import Waypoints
+from sar.search.kinematics import shortest_turn, steer, steer_to
 from sar.search.platform import STEP_S
 from sar.search.sweep import relative_m
 
@@ -120,10 +130,66 @@ def greedy_policy(headings: int = 8, lookahead: int = 1, cell_m: float = CELL_M,
             return float(bearings[0])
         return float(np.degrees(np.arctan2(ce - x0, cn - y0)) % 360.0)
 
+    def flown(x0, y0, psi0, to, speed, rate):
+        """The chords the helicopter flies from (x0, y0) on psi0 to a heading, to its reach."""
+        p = steer_to(x0, y0, psi0, to, decide_s, speed, rate)
+        e = np.concatenate(([x0], p.east_m))
+        n = np.concatenate(([y0], p.north_m))
+        if lookahead > 1:
+            more = speed * decide_s * (lookahead - 1)
+            h = np.radians(p.heading_deg[-1])
+            e = np.append(e, e[-1] + more * np.sin(h))
+            n = np.append(n, n[-1] + more * np.cos(h))
+        return e, n
+
+    def passed(east, north, e, n) -> np.ndarray:
+        """Which cells lie within half a cell of any chord of the path (e, n)."""
+        hit = np.zeros(east.size, dtype=bool)
+        for i in range(e.size - 1):
+            if e[i] == e[i + 1] and n[i] == n[i + 1]:
+                continue
+            hit |= _distance_to_segment(east, north, e[i], n[i], e[i + 1], n[i + 1]) <= 0.5 * cell_m
+        return hit
+
+    def choose_flyable(east, north, mass, x0, y0, psi0, speed, rate) -> float:
+        """The best heading from (x0, y0) on psi0, scoring the turn and leg it would fly."""
+        if mass.size == 0 or not mass.sum() > 0.0:
+            return float(bearings[0])
+        scores = np.array([mass[passed(east, north, *flown(x0, y0, psi0, b, speed, rate))].sum()
+                           for b in bearings])
+        best = int(np.argmax(scores))
+        if scores[best] > 0.0:
+            return float(bearings[best])
+        total = float(mass.sum())
+        ce, cn = float(np.sum(mass * east) / total), float(np.sum(mass * north) / total)
+        if ce == x0 and cn == y0:
+            return float(bearings[0])
+        return float(np.degrees(np.arctan2(ce - x0, cn - y0)) % 360.0)
+
     def policy(episode):
         east, north, mass = remaining_map(episode, cell_m)
         x, y = episode.offset
         leg = episode.speed_ms * decide_s
+        if not episode.instant:
+            speed, rate = episode.speed_ms, episode.turn_rate_deg_s
+            psi = episode.heading_deg
+            if per_step == 1:
+                return choose_flyable(east, north, mass, x, y, psi, speed, rate)
+            mass = mass.copy()
+            t, e, n, h = [], [], [], []
+            for k in range(per_step):
+                to = choose_flyable(east, north, mass, x, y, psi, speed, rate)
+                p = steer(x, y, psi, shortest_turn(psi, to), decide_s, speed, rate)
+                if mass.size:
+                    mass[passed(east, north, np.concatenate(([x], p.east_m)),
+                                np.concatenate(([y], p.north_m)))] = 0.0
+                t.extend((p.t_s + k * decide_s).tolist())
+                e.extend(p.east_m.tolist())
+                n.extend(p.north_m.tolist())
+                h.extend(p.heading_deg.tolist())
+                x, y, psi = float(p.east_m[-1]), float(p.north_m[-1]), float(p.heading_deg[-1])
+            t[-1] = STEP_S
+            return Waypoints(np.array(t), np.array(e), np.array(n), np.array(h))
         if per_step == 1:
             return choose(east, north, mass, x, y, leg * lookahead)
         mass = mass.copy()
