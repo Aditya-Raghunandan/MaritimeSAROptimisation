@@ -91,7 +91,7 @@ test.describe('the scenario page', () => {
     const errors = collectErrors(page);
     await serveFixture(page);
     await page.goto('bench.html');
-    const want = await fixtureFlight('rv', 'expanding-square');
+    const want = await fixtureFlight('rvc', 'expanding-square');
     await expect(page.locator('#paper')).toHaveText(`${(100 * want.pos).toFixed(1)} %`);
     expect(await painted(page, 'canvas.probability-layer')).toBeGreaterThan(0);
     await expectFits(page);
@@ -146,7 +146,7 @@ test.describe('the open-day game', () => {
 
     await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
     await expectFits(page);
-    const cg = await fixtureFlight('rv', 'expanding-square');
+    const cg = await fixtureFlight('rvc', 'expanding-square');
     await expect(page.locator('#scoreTable tr')).toHaveCount(4);
     await expect(page.locator('#scoreTable')).toContainText(`${(100 * cg.pos).toFixed(1)} %`);
     await expect(page.locator('#verdict')).not.toBeEmpty();

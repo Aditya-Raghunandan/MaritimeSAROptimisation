@@ -29,14 +29,16 @@ import { add, load, nickname, score, top, verdict } from './leaderboard.js';
 import { PlayerFlight, RecordedFlight, SAMPLE_S } from './playback.js';
 import { Scene } from './scene.js';
 import {
-  SEARCHER_INFO, SHOWCASE_ROOT, display, loadBenchmark, loadField, loadIndex, loadWindow,
+  SEARCHER_INFO, SHOWCASE_ROOT, bestNoise, display, loadBenchmark, loadField, loadIndex,
+  loadWindow,
 } from './scenarioData.js';
 import { bearing } from './kinematics.js';
 import { M_PER_DEG_LAT } from './geo.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 import { esriTiles } from './tiles.js';
 
-const NOISE = 'rv';
+// The drift model the game flies over: the newest a scenario has (rvc, sized by the current,
+// D033, once published; rv until then). Chosen per scenario in fly().
 const ARRIVAL_H = 2;
 const WINDOW_S = 45 * 60;
 // ?speed=10 plays everything ten times faster: for rehearsing the stand and for the tests.
@@ -208,7 +210,8 @@ async function fly() {
   $('status').textContent = 'loading the sea…';
   $('goBtn').disabled = true;            // one flight per click, however slow the download
   try {
-    game.window = await loadWindow(game.scenario.scenario, NOISE, ARRIVAL_H);
+    game.noise = bestNoise(game.scenario);
+    game.window = await loadWindow(game.scenario.scenario, game.noise, ARRIVAL_H);
     game.field = await loadField(game.scenario.scenario, ARRIVAL_H, game.index);
   } catch (err) {
     $('status').textContent = `could not load this buoy: ${err.message}`;
@@ -395,7 +398,7 @@ async function results() {
 async function benchmark() {
   try {
     const b = await loadBenchmark();
-    const rows = (b.scenarios55 ?? b).filter((r) => r.noise === NOISE && r.arrival_h === ARRIVAL_H)
+    const rows = (b.scenarios55 ?? b).filter((r) => r.noise === game.noise && r.arrival_h === ARRIVAL_H)
       .sort((x, y) => y.pos - x.pos);
     $('benchNote').textContent = `Over all ${rows[0]?.n_groups ?? 55} buoys, the helicopter arriving 2 hours after the call:`;
     $('benchTable').innerHTML = '<tr><th>Searcher</th><th>Searched, on average</th><th>Found the person</th></tr>'

@@ -25,9 +25,12 @@ at most `--turn-rate` degrees a second (default `TURN_RATE_DEG_S`, a 30 degree b
 is the referee before D032, whose helicopter turns at once: the "as the manual draws it"
 comparison. The rate is part of the experiment, so a folder never mixes the two.
 
-TWO NOISE MODELS ON THE SAME SEEDS. `rv` is the engine's random velocity (D030, sigma_u =
-0.226 m/s). `rw` is the old random walk (D028, sigma = 26.3). Same row, same seed, so each
-flight has a pair.
+NOISE MODELS ON THE SAME SEEDS. `rvc` is the engine's random velocity sized by the current at
+the start (D033, the default since 9 Oct). `rv` is D030's pooled size (sigma_u = 0.226 m/s),
+kept as the comparison, and `rw` the old random walk (D028, sigma = 26.3). Same row, same
+seed, so each flight has its pairs. Each row records the sigma_u it ran with and, for rvc,
+the start current that sized it; the summary slices by that forecast current as well as by
+the buoy's own measured speed.
 
 ONE FOLDER, ONE EXPERIMENT. `score` writes DIR/manifest.json the first time (code commit,
 the table's sha256, N, noise, arrivals, searchers) and refuses to add flights made with
@@ -61,7 +64,7 @@ import numpy as np
 import pandas as pd
 
 from sar.pipeline.gridded import ForcingGapError, GriddedForcing
-from sar.search.benchmark import BASELINE, GREEDY, NOISE, SEARCHERS, searcher
+from sar.search.benchmark import BASELINE, GREEDY, NOISE, NOISE_RECORD, SEARCHERS, searcher
 from sar.search.episode import STEPS, run
 from sar.search.platform import STEP_S, TURN_RATE_DEG_S
 from sar.search.scenario import (
@@ -139,7 +142,9 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
                 flights.append({
                     "scenario": row["scenario"], "set": row.get("set"),
                     "water": row.get("stratum"), **about,
-                    "noise": noise, **NOISE[noise], "arrival_h": hours, "searcher": name,
+                    "noise": noise, "sigma_u": setup.sigma_u, "sigma": NOISE[noise]["sigma"],
+                    "start_current_ms": setup.start_current_ms,
+                    "arrival_h": hours, "searcher": name,
                     "turn_rate_deg_s": m["turn_rate_deg_s"],
                     "arrival_heading_deg": arrival_heading(setup),
                     "first_bearing_deg": first, "layout": layout,
@@ -192,7 +197,7 @@ def experiment(csv, noises, arrivals_h, searchers, particles: int,
                greedy: dict | None = None, turn_rate_deg_s: float = TURN_RATE_DEG_S) -> dict:
     """What makes two flights comparable. A folder holds flights from one of these only."""
     return {"commit": git_commit(), "table": Path(csv).name, "table_sha256": sha256(csv),
-            "particles": int(particles), "noise": {n: NOISE[n] for n in noises},
+            "particles": int(particles), "noise": {n: NOISE_RECORD[n] for n in noises},
             "arrival_h": [float(a) for a in arrivals_h], "searchers": list(searchers),
             "greedy": dict(GREEDY if greedy is None else greedy),
             "turn_rate_deg_s": None if math.isinf(turn_rate_deg_s) else float(turn_rate_deg_s),
@@ -281,6 +286,13 @@ def slices(f: pd.DataFrame, straight_at: float | None) -> list[tuple[str, pd.Dat
     if "water" in f and f["water"].notna().any():
         out += [(f"water: {w}", f[f["water"] == w]) for w in ("quiet", "moderate", "jet")
                 if (f["water"] == w).any()]
+    # By the model's current at the start, which a forecaster has (D033); "water" above is the
+    # buoy's own measured speed over 4 h, which only hindsight has.
+    if "start_current_ms" in f and f["start_current_ms"].notna().any():
+        c = f["start_current_ms"].astype(float)
+        out += [("forecast current: < 0.3 m/s", f[c < 0.3]),
+                ("forecast current: 0.3-1 m/s", f[(c >= 0.3) & (c < 1.0)]),
+                ("forecast current: > 1 m/s", f[c >= 1.0])]
     if straight_at is not None and "straightness_4h" in f:
         s = f["straightness_4h"].astype(float)
         out += [(f"path: straight (>= {straight_at:.3f})", f[s >= straight_at]),
@@ -338,7 +350,9 @@ def main(argv=None):
     s.add_argument("--forcing-dir", required=True, help="data root holding raw/hycom_*, raw/era5_*")
     s.add_argument("--rows", nargs="+", required=True,
                    help="scenario names, or 1-based rows such as 7 or 1-55; several allowed")
-    s.add_argument("--noise", nargs="+", choices=sorted(NOISE), default=["rv"])
+    s.add_argument("--noise", nargs="+", choices=sorted(NOISE), default=["rvc", "rv"],
+                   help="rvc: sized by the current (D033, the calibrated noise); rv: D030's "
+                        "pooled size, the comparison; rw: the old random walk")
     s.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0],
                    help="hours from the call to arrival, whole minutes; default 1 2 3")
     s.add_argument("--searchers", nargs="+", choices=SEARCHERS, default=list(SEARCHERS))

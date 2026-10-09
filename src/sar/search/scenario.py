@@ -43,7 +43,7 @@ import pandas as pd
 
 from sar.model.drift import LEEWAY_COEFFICIENT
 from sar.model.position import CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H, DEFAULT_SIGMA
-from sar.pipeline.ensemble import Ensemble, run_ensemble, synthetic_cloud
+from sar.pipeline.ensemble import Ensemble, resolve_sigma_u, run_ensemble, synthetic_cloud
 from sar.pipeline.gridded import GriddedForcing
 from sar.search.datum import marker_track
 from sar.search.episode import STEPS, SearchEpisode
@@ -98,6 +98,8 @@ class SearchSetup:
     datum: tuple[float, float]          # (lat, lon), longitude 0 to 360
     arrival_s: float                    # seconds after the call
     drift_bearing_deg: float | None     # the target's drift at the datum, for a first leg
+    sigma_u: float | None = None        # the random velocity's size the cloud was run with
+    start_current_ms: float | None = None   # the current at the start, when it sized sigma_u
 
 
 def check_arrival(arrival_s, steps: int = STEPS, horizon_s: float = HORIZON_S) -> int:
@@ -136,7 +138,7 @@ def drift_bearing(forcing, lat: float, lon: float, time,
 
 
 def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
-                  arrival_s: float, sigma_u: float = CALIBRATED_SIGMA_U,
+                  arrival_s: float, sigma_u: float | str = CALIBRATED_SIGMA_U,
                   steps: int = STEPS, sigma: float = DEFAULT_SIGMA) -> SearchSetup:
     """A scenario's cloud through the search window, every minute, and its marker.
 
@@ -144,8 +146,12 @@ def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
     sliced to the steps + 1 frames from arrival. Memory is the whole run at every step:
     39 MB at 10^4 particles for 4 h, 386 MB at 10^5. `sigma` with sigma_u = 0 is the old
     random walk (D028), for comparing the two noise models on the same seeds.
+
+    sigma_u = "by-current" sizes the random velocity by the model's current at the start
+    point at the call (D033): the scenario's own LKP and time, what a forecaster has.
     """
     a = check_arrival(arrival_s, steps)
+    sigma_u, speed = resolve_sigma_u(sigma_u, forcing, lat, lon, start)
     run = run_ensemble(forcing, particles, start, lat, lon, (a + steps) * STEP_S, STEP_S,
                        datum_sigma_km=0.0, seed=seed, sigma=sigma, sigma_u=sigma_u)
     cut = slice(a, a + steps + 1)
@@ -153,7 +159,7 @@ def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
     datum = centroid(window.lat[0], window.lon[0], window.weight)
     marker = marker_track(*datum, window.times[0], steps * STEP_S, forcing)
     return SearchSetup(window, marker, None, datum, a * STEP_S,
-                       drift_bearing(forcing, *datum, window.times[0]))
+                       drift_bearing(forcing, *datum, window.times[0]), sigma_u, speed)
 
 
 def read_scenarios(path) -> pd.DataFrame:
@@ -180,7 +186,7 @@ def truth_track(row, arrival_s: float) -> MarkerTrack:
 
 
 def scenario_search(row, forcing, arrival_s: float, particles: int,
-                    sigma_u: float = CALIBRATED_SIGMA_U, steps: int = STEPS,
+                    sigma_u: float | str = CALIBRATED_SIGMA_U, steps: int = STEPS,
                     sigma: float = DEFAULT_SIGMA) -> SearchSetup:
     """A row of the scenario table, ready to search: cloud, marker, and the buoy as target.
 

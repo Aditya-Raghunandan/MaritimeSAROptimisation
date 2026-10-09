@@ -39,10 +39,29 @@ export const SEARCHER_INFO = {
   random: { label: 'Random', kind: 'the floor', colour: '#8a8a80' },
 };
 
+/**
+ * The drift model's random term, newest first. rvc (D033) sizes the error by the current
+ * where the person went in; rv is one size everywhere (D030); rw the old random walk.
+ */
 export const NOISE_INFO = {
-  rv: { label: 'with memory', note: 'the calibrated drift model (errors persist about a day)' },
+  rvc: {
+    label: 'sized by the current',
+    note: 'the calibrated drift model: errors persist about a day, and are bigger in faster water',
+  },
+  rv: { label: 'one size', note: 'errors persist about a day, the same size in every water' },
   rw: { label: 'without memory', note: 'the old model (a fresh random push every minute)' },
 };
+
+/** The drift models a scenario was published with, in NOISE_INFO's order. */
+export function noisesOf(scenario) {
+  const have = new Set((scenario?.windows ?? []).map((w) => w.split('_')[0]));
+  return Object.keys(NOISE_INFO).filter((n) => have.has(n));
+}
+
+/** The newest drift model a scenario has: rvc when published, else rv. */
+export function bestNoise(scenario) {
+  return noisesOf(scenario)[0] ?? 'rv';
+}
 
 /** A store longitude (0 to 360) as Leaflet wants it (-180 to 180). */
 export function display(lon) {

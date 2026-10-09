@@ -18,7 +18,9 @@ import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { PlayerFlight, RecordedFlight } from './playback.js';
 import { Scene } from './scene.js';
-import { NOISE_INFO, SEARCHER_INFO, loadIndex, loadWindow } from './scenarioData.js';
+import {
+  NOISE_INFO, SEARCHER_INFO, bestNoise, loadIndex, loadWindow, noisesOf,
+} from './scenarioData.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 import { esriTiles } from './tiles.js';
 
@@ -28,7 +30,7 @@ const SELF = 'self';
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  index: null, scenario: null, noise: 'rv', hours: 2, searcher: 'expanding-square',
+  index: null, scenario: null, noise: 'rvc', hours: 2, searcher: 'expanding-square',
   window: null, flight: null, t: 0, playing: false, last: 0, held: new Set(),
 };
 
@@ -72,7 +74,7 @@ function segmented(el, options, current, onPick) {
 }
 
 function drawControls() {
-  segmented($('noise'), Object.entries(NOISE_INFO).map(([k, v]) => [k, v.label]), state.noise,
+  segmented($('noise'), noisesOf(state.scenario).map((k) => [k, NOISE_INFO[k].label]), state.noise,
     (v) => { state.noise = v; load(); });
   segmented($('arrival'), ARRIVALS.map((h) => [h, `${h} h`]), state.hours,
     (v) => { state.hours = v; load(); });
@@ -243,6 +245,7 @@ async function load() {
 
 function pickScenario(name) {
   state.scenario = state.index.scenarios.find((s) => s.scenario === name);
+  if (!noisesOf(state.scenario).includes(state.noise)) state.noise = bestNoise(state.scenario);
   const s = state.scenario;
   const when = s.start_utc.replace('T', ' ');
   $('facts').textContent = `${s.water} water · called in ${when} UTC · over 4 h the buoy `

@@ -47,7 +47,7 @@ import numpy as np
 import pandas as pd
 
 from sar.pipeline.gridded import GriddedForcing
-from sar.search.benchmark import GREEDY, NOISE, SEARCHERS, recorded, searcher
+from sar.search.benchmark import GREEDY, NOISE, NOISE_RECORD, SEARCHERS, recorded, searcher
 from sar.search.episode import STEPS, run
 from sar.search.platform import STEP_S, SWEEP_WIDTH_M, TURN_RATE_DEG_S
 from sar.search.scenario import (
@@ -162,7 +162,8 @@ def export_row(row, forcing, noises, arrivals_h, particles: int, out: Path,
             target = setup.target
             record = {
                 "format": FORMAT, "scenario": row["scenario"], "noise": noise,
-                "noise_settings": NOISE[noise], "arrival_h": hours,
+                "noise_settings": NOISE_RECORD[noise], "arrival_h": hours,
+                "sigma_u": setup.sigma_u, "start_current_ms": setup.start_current_ms,
                 "arrival_s": setup.arrival_s,
                 "start_utc": str(row["start"]), "window_start_utc":
                     str(np.datetime_as_string(setup.window.times[0], unit="s")),
@@ -274,7 +275,7 @@ def main(argv=None):
     e.add_argument("--csv", required=True)
     e.add_argument("--forcing-dir", required=True)
     e.add_argument("--rows", nargs="+", required=True, help="names or 1-based rows, e.g. 1-55")
-    e.add_argument("--noise", nargs="+", choices=sorted(NOISE), default=["rv", "rw"])
+    e.add_argument("--noise", nargs="+", choices=sorted(NOISE), default=["rvc", "rv"])
     e.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0])
     e.add_argument("--particles", type=int, default=10_000)
     e.add_argument("--out", required=True)
@@ -320,7 +321,7 @@ def main(argv=None):
                                   args.particles, out, GREEDY))
         print(f"{name}: {len(entries[-1]['windows'])} windows in "
               f"{time.perf_counter() - t0:.1f} s", flush=True)
-    write_index(out, entries, {"particles": args.particles, "noise": NOISE, "greedy": GREEDY,
+    write_index(out, entries, {"particles": args.particles, "noise": NOISE_RECORD, "greedy": GREEDY,
                                "format": FORMAT, "turn_rate_deg_s": TURN_RATE_DEG_S,
                                "arrival_h": args.arrival_h, "searchers": list(SEARCHERS),
                                "commit": score.git_commit()})

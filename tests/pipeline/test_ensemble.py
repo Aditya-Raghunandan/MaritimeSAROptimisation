@@ -10,6 +10,7 @@ from scipy.stats import chi2_contingency
 import sar.pipeline.ensemble as ens
 from sar.model.grid import ProbabilityGrid, normalise
 from sar.model.position import (CALIBRATED_SIGMA, CALIBRATED_SIGMA_U, EARTH_RADIUS_M,
+                                sigma_u_for_current,
                                 MEMORY_TIME_S)
 from sar.pipeline.ensemble import (
     Ensemble,
@@ -394,15 +395,33 @@ class TestCli:
                                          seed=np.random.SeedSequence(run["seed_entropy"])))
         assert np.array_equal(again.lat, read_csv(path).lat)
 
-    def test_the_default_is_the_calibrated_random_velocity(self, tmp_path):
-        # D030: the random velocity replaced the random walk as the default.
+    def test_the_default_is_the_random_velocity_sized_by_the_current(self, tmp_path):
+        # D030: the random velocity replaced the random walk; D033: sized by the current at
+        # the datum, here a steady 1.8 m/s.
         args = list(self.ARGS)
         del args[args.index("--sigma"):args.index("--sigma") + 2]
         run = json.loads(ens._cli([*args, "--out", str(tmp_path)]).with_suffix(".json").read_text())
         assert run["pipeline"]["random_term"] == "random velocity"
-        assert run["pipeline"]["sigma_u"] == CALIBRATED_SIGMA_U
+        assert run["sigma_u_by_current"]["start_current_ms"] == pytest.approx(1.8)
+        assert run["pipeline"]["sigma_u"] == pytest.approx(sigma_u_for_current(1.8))
         assert run["pipeline"]["memory_time_s"] == MEMORY_TIME_S
         assert run["pipeline"]["sigma"] == 0.0
+
+    def test_the_pooled_sigma_u_is_still_a_number_away(self, tmp_path):
+        args = list(self.ARGS)
+        del args[args.index("--sigma"):args.index("--sigma") + 2]
+        run = json.loads(ens._cli([*args, "--sigma-u", str(CALIBRATED_SIGMA_U), "--out",
+                                   str(tmp_path)]).with_suffix(".json").read_text())
+        assert run["pipeline"]["sigma_u"] == CALIBRATED_SIGMA_U
+        assert "sigma_u_by_current" not in run
+
+    def test_sigma_u_cannot_be_sized_by_a_current_that_is_not_there(self):
+        class Land(ConstantForcing):
+            def sample(self, lats, lons, time):
+                return np.full((len(lats), 2), np.nan), np.zeros((len(lats), 2))
+        with pytest.raises(ValueError, match="on land"):
+            ens.resolve_sigma_u("by-current", Land(), 26.5, 281.0, "2019-06-01T06:00")
+        assert ens.resolve_sigma_u(0.3, Land(), 26.5, 281.0, "2019-06-01T06:00") == (0.3, None)
 
     def test_sigma_still_asks_for_the_random_walk(self, tmp_path):
         args = list(self.ARGS)
