@@ -2,6 +2,10 @@
  "format": 2,
  "particles": 200,
  "noise": {
+  "rvc": {
+   "sigma_u": "by-current",
+   "sigma": 0.0
+  },
   "rv": {
    "sigma_u": 0.226,
    "sigma": 0.0
@@ -45,8 +49,8 @@
    "speed_4h_ms": 1.1,
    "straightness_4h": 0.9999999999999998,
    "windows": [
-    "rv_2h",
-    "rw_2h"
+    "rvc_2h",
+    "rv_2h"
    ],
    "buoy": {
     "t_h": [
