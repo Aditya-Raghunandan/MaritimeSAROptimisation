@@ -366,3 +366,13 @@ class TestSigmaUByTheCurrent:
         u = start_velocity_error((20000, 2), np.repeat([0.1, 0.5], 10000), np.random.default_rng(3))
         assert np.std(u[:10000]) == pytest.approx(0.1, rel=0.03)
         assert np.std(u[10000:]) == pytest.approx(0.5, rel=0.03)
+
+    @pytest.mark.parametrize("shape", ["linear", "quadrature"])
+    def test_the_engine_and_the_calibration_read_a_rule_the_same_way(self, shape):
+        from sar.model.position import sigma_u_for_current
+        from sar.validate.calibrate_sigma import rule_sigma_u
+        engine = {"shape": shape, "a": 0.18, "b": 0.4, "cap_speed_ms": 1.3, "slide_ms": 0.035}
+        fitted = {"line": {"shape": shape, "a": 0.18, "b": 0.4, "cap_speed_ms": 1.3},
+                  "slide": {"value": 0.035}}
+        speeds = np.array([0.0, 0.2, 0.7, 1.3, 2.5])
+        assert sigma_u_for_current(speeds, engine) == pytest.approx(rule_sigma_u(fitted, speeds))

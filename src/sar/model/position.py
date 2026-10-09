@@ -61,15 +61,20 @@ CALIBRATED_SIGMA_U = 0.226
 
 # sigma_u BY THE CURRENT AT THE START (vault D033, docs/ADR007.md, 9 Oct 2026). One pooled
 # sigma_u covers 90 % on average and not by water: in quiet water the cloud is too wide, in
-# the Gulf Stream far too narrow (L23, L35). The undrogued dev windows, split by HYCOM's
-# current speed at the start, need sigma_u = a + b x speed: a floor of model error plus a
-# share of the current the model predicts. Fitted by `calibrate_sigma rule` at 4 h so every
-# speed bin is covered 90 %, on ladders 58974 (all windows, 0.12-0.32 m/s) and 59359 (start
-# current >= 0.5 m/s, 0.36-0.9 m/s): derived/sigma/rvc/rule.json. Capped at the fastest
-# speeds measured; the person's crosswind slide is added in quadrature, as for the pooled
-# value. The speed is the model's own, at the last known position at the call: what a
-# forecaster has, never the buoy's later speed.
-SIGMA_U_RULE = {"a": 0.17, "b": 0.25, "cap_speed_ms": 1.2, "slide_ms": 0.035}
+# the Gulf Stream far too narrow (L23, L35). Split by HYCOM's current speed at the start, the
+# undrogued dev windows need 0.183 m/s below 0.15 m/s rising to 0.519 above 1 m/s. Two
+# independent errors whose variances add fit that best: a floor a that does not care about
+# the current, and b x the current speed, sigma_u = sqrt(a^2 + (b s)^2), group-weighted loss
+# 0.051 against a straight line's 0.130. Fitted by `calibrate_sigma rule` at 4 h so every
+# speed bin is covered 90 %, on ladders 58974 (all 9,890 windows, 0.12-0.32 m/s) and 59359
+# (the 783 starting at >= 0.5 m/s, 0.36-0.9 m/s), job 59372: derived/sigma/rvc/rule.json.
+# a = 0.176 m/s (95 % CI 0.168-0.185), b = 0.407 (0.375-0.455). Capped at 1.66 m/s, the 95th
+# percentile of the fastest bin's starts: never extrapolated past the water measured. The
+# person's crosswind slide (0.035 m/s) is added in quadrature, as for the pooled value. The
+# speed is the model's own at the last known position at the call, what a forecaster has,
+# never the buoy's later speed.
+SIGMA_U_RULE = {"shape": "quadrature", "a": 0.1761, "b": 0.4069, "cap_speed_ms": 1.658,
+                "slide_ms": 0.0349}
 # The word that asks for it, in place of a number.
 BY_CURRENT = "by-current"
 
