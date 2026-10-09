@@ -105,6 +105,28 @@ test.describe('the scenario page', () => {
     expect(errors).toEqual([]);
   });
 
+  test('keys the probability map, recolours it on a pick, and remembers the pick', async ({ page }) => {
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('bench.html');
+    await expect(page.locator('#paper')).not.toHaveText('–');
+    const legend = page.locator('.prob-legend');
+    await expect(legend).toContainText('half of what is left');
+    await expect(legend.locator('button[data-palette=viridis]')).toHaveAttribute('aria-pressed', 'true');
+    const pixels = () => page.evaluate(() => {
+      const c = document.querySelector('canvas.probability-layer');
+      return Array.from(c.getContext('2d').getImageData(0, 0, c.width, c.height).data).join(',');
+    });
+    const before = await pixels();
+    await legend.locator('button[data-palette=heat]').click();
+    await expect(legend.locator('button[data-palette=heat]')).toHaveAttribute('aria-pressed', 'true');
+    expect(await pixels()).not.toEqual(before);
+    await expectFits(page);
+    await page.reload();
+    await expect(page.locator('.prob-legend button[data-palette=heat]')).toHaveAttribute('aria-pressed', 'true');
+    expect(errors).toEqual([]);
+  });
+
   test('flies by hand', async ({ page }) => {
     const errors = collectErrors(page);
     await serveFixture(page);
@@ -137,6 +159,7 @@ test.describe('the open-day game', () => {
     await page.click('#goBtn');
     await expect(page.locator('#fly')).toHaveClass(/on/);
     expect(await painted(page, '#flyMap canvas.probability-layer')).toBeGreaterThan(0);
+    await expect(page.locator('#flyMap .prob-legend')).toBeVisible();
     await expectFits(page);
 
     await page.keyboard.down('ArrowRight');
@@ -208,6 +231,7 @@ test.describe('the open-day game', () => {
     await expect(page.locator('#fly')).toHaveClass(/on/);
     expect(await painted(page, '#flyMap canvas.field-layer')).toBeGreaterThan(0);
     await expect(page.locator('#flyMap canvas.probability-layer')).toHaveCount(0);
+    await expect(page.locator('#flyMap .prob-legend')).toHaveCount(0);
     await expect(page.locator('#hudPosCard')).toBeHidden();
     expect(errors).toEqual([]);
   });

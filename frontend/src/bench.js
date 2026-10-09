@@ -17,6 +17,7 @@ import 'leaflet/dist/leaflet.css';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { PlayerFlight, RecordedFlight } from './playback.js';
+import { ProbabilityLegend } from './probabilityLayer.js';
 import { Scene } from './scene.js';
 import {
   NOISE_INFO, SEARCHER_INFO, bestNoise, loadIndex, loadWindow, noisesOf,
@@ -43,6 +44,25 @@ esriTiles('Canvas/World_Dark_Gray_Base', {
 }).addTo(map);
 map.setView([26.5, -72.5], 5);
 const scene = new Scene(map);
+new ProbabilityLegend().addTo(map);
+
+// Hovering reads the map: the chance the person is in that square, and which line it is inside.
+const hover = L.DomUtil.create('div', 'prob-hover', map.getContainer());
+const INSIDE = ['inside the likeliest half of what is left', 'inside the likeliest 90 % of what is left'];
+map.on('mousemove', (e) => {
+  const v = scene.probability.valueAt(e.latlng);
+  if (!v || !(v.share > 0)) {
+    hover.style.display = 'none';
+    return;
+  }
+  const pct = 100 * v.share;
+  const side = v.cellM >= 1000 ? `${v.cellM / 1000} km` : `${v.cellM} m`;
+  hover.innerHTML = `<b>${pct < 0.01 ? 'under 0.01' : pct.toFixed(2)} %</b> chance they are in this ${side} square`
+    + `<br><span>${INSIDE[v.inside] ?? 'outside the 90 % line'}</span>`;
+  hover.style.display = 'block';
+  hover.style.transform = `translate(${e.containerPoint.x + 14}px, ${e.containerPoint.y + 14}px)`;
+});
+map.on('mouseout', () => { hover.style.display = 'none'; });
 
 function percent(x, digits = 0) {
   return `${(100 * x).toFixed(digits)} %`;
