@@ -76,9 +76,19 @@ class Flight {
   /** POS so far, and the drain rate of every finished minute. */
   metrics() { return this.ep.metrics(); }
 
-  /** The ground track so far, sub-leg ends: [[t, lat, lon], ...], plus the helicopter now. */
+  /**
+   * The ground track so far, [[t, lat, lon], ...]: every finished minute as the referee flew
+   * it, then the minute in progress along its own path up to t, then the helicopter. The
+   * referee only takes a minute once it has finished, so without the middle part the trail
+   * would cut a straight chord across a turn and snap to the curve when the minute ended.
+   */
   trail(t) {
-    return [...this.ep.track, [t, ...this.position(t)]];
+    return [...this.ep.track, ...this.flownThisMinute(t), [t, ...this.position(t)]];
+  }
+
+  /** The points of the minute in progress already passed by t, on the ground: [[t, lat, lon]]. */
+  flownThisMinute() {
+    return [];
   }
 }
 
@@ -106,6 +116,19 @@ export class RecordedFlight extends Flight {
       ? this.ep.offset
       : offsetWithin(this.ep.offset, this.steps[k], t - k * STEP_S);
     return this.ground(t, offset);
+  }
+
+  flownThisMinute(t) {
+    const k = this.ep.k;
+    if (k >= this.steps.length) return [];
+    const wp = this.steps[k];
+    const s = t - k * STEP_S;
+    const out = [];
+    for (let i = 0; i < wp.tS.length && wp.tS[i] < s; i += 1) {
+      const at = k * STEP_S + wp.tS[i];
+      out.push([at, ...this.ground(at, [wp.eastM[i], wp.northM[i]])]);
+    }
+    return out;
   }
 
   /** Which way it points at t: between the headings at the waypoints either side. */
@@ -196,6 +219,25 @@ export class PlayerFlight extends Flight {
   /** Which way it points at t. */
   headingAt(t) {
     return this.pose(t).heading;
+  }
+
+  flownThisMinute(t) {
+    const start = this.ep.k * STEP_S;
+    const out = this.pending.tS.map((s, i) => {
+      const at = start + s;
+      return [at, ...this.ground(at, [this.pending.eastM[i], this.pending.northM[i]])];
+    });
+    // The arc from the last held command to t, piece by piece, so a turn is drawn as one.
+    const ahead = Math.min(t, this.duration) - this.t;
+    if (ahead > 0) {
+      const p = steerTo(this.offset[0], this.offset[1], this.heading, this.command, ahead,
+        this.ep.speedMs, this.turnRateDegS);
+      for (let i = 0; i + 1 < p.tS.length; i += 1) {
+        const at = this.t + p.tS[i];
+        out.push([at, ...this.ground(at, [p.eastM[i], p.northM[i]])]);
+      }
+    }
+    return out;
   }
 
   /**

@@ -50,6 +50,34 @@ describe('a recorded flight', () => {
   });
 });
 
+describe('the trail behind the helicopter', () => {
+  it('follows a recorded flight\'s path through the minute in progress, not a chord', () => {
+    const f = new RecordedFlight(window(), 'expanding-square');
+    f.advanceTo(30);                                        // inside the first minute
+    const trail = f.trail(30);
+    const inMinute = f.steps[0].tS.filter((s) => s < 30).length;
+    expect(trail).toHaveLength(1 + inMinute + 1);           // start, the waypoints, the helicopter
+    expect(inMinute).toBeGreaterThan(1);
+    f.advanceTo(60);
+    // When the minute finishes the trail does not jump: the same points, now from the referee.
+    const done = f.trail(60).slice(0, trail.length - 1);
+    trail.slice(0, -1).forEach((p, i) => {
+      expect(done[i][1]).toBeCloseTo(p[1], 9);
+      expect(done[i][2]).toBeCloseTo(p[2], 9);
+    });
+  });
+
+  it('follows a player\'s turn as it happens', () => {
+    const f = new PlayerFlight(window(), { heading: 0 });
+    f.steer(180);
+    f.advanceTo(20);
+    const trail = f.trail(22);
+    expect(trail.length).toBeGreaterThan(5);                // the arc, not one straight segment
+    const times = trail.map((p) => p[0]);
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+  });
+});
+
 describe('a player', () => {
   it('is scored by the browser exactly as Python scores the same headings', () => {
     const { record } = golden.player;
