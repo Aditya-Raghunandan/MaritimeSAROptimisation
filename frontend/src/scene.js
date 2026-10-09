@@ -118,7 +118,9 @@ export class Scene {
     // requestAnimationFrame's clock can start a frame a hair before the one a loop stored.
     const t = Math.min(flight.duration, Math.max(0, time));
     const { lat, lon } = flight.ep.particlesAt(t);
-    this.probability.setState({ lat, lon, weight: flight.ep.weight, marker: this.window.marker, t });
+    this.probability.setState({
+      lat, lon, weight: flight.ep.weight, prior: this.window.cloud.weight, marker: this.window.marker, t,
+    });
     const trail = flight.trail(t).map(([, la, lo]) => ll(la, lo));
     this.strip.setLatLngs(trail);
     this.path.setLatLngs(trail);

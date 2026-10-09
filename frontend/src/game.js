@@ -27,6 +27,7 @@ import 'leaflet/dist/leaflet.css';
 import { FieldLayer } from './fieldLayer.js';
 import { add, load, nickname, score, top, verdict } from './leaderboard.js';
 import { PlayerFlight, RecordedFlight, SAMPLE_S } from './playback.js';
+import { ProbabilityLegend } from './probabilityLayer.js';
 import { Scene } from './scene.js';
 import {
   SEARCHER_INFO, SHOWCASE_ROOT, bestNoise, display, loadBenchmark, loadField, loadIndex,
@@ -204,6 +205,7 @@ function choose(s) {
 let flyMap = null;
 let flyScene = null;
 let fieldLayer = null;
+const flyLegend = new ProbabilityLegend({ compact: true });
 
 async function fly() {
   game.name = nickname($('name').value);
@@ -248,7 +250,13 @@ async function fly() {
   // The cloud where the search starts, one zoom level out: room round it for the helicopter to
   // turn in. In fast water the cloud then drifts several km, and the camera follows.
   flyScene.setWindow(game.window, { startOnly: true, zoomOut: 1 });
-  if (showCloud) fieldLayer.remove(); else fieldLayer.addTo(flyMap);
+  if (showCloud) {
+    fieldLayer.remove();
+    flyLegend.addTo(flyMap);
+  } else {
+    fieldLayer.addTo(flyMap);
+    flyLegend.remove();
+  }
   $('hudPosCard').style.display = showCloud ? '' : 'none';
   // It arrives pointing along the drift, as every searcher in the benchmark does.
   game.player = new PlayerFlight(game.window);
