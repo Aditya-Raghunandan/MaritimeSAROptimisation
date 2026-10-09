@@ -222,10 +222,16 @@ async function fly() {
   $('status').textContent = '';
   show('fly');
   if (!flyMap) {
-    // The mouse steers, so it must not also drag the map about.
-    flyMap = newMap('flyMap', { keyboard: false, dragging: false, doubleClickZoom: false, boxZoom: false });
+    // Dragging pans the map; steering waits while it does, so a pan is never a turn.
+    flyMap = newMap('flyMap', { keyboard: false, doubleClickZoom: false, boxZoom: false });
     fieldLayer = new FieldLayer();
+    flyMap.on('dragstart', () => { game.panning = true; });
+    flyMap.on('dragend', () => {
+      game.panning = false;
+      game.pannedAt = performance.now();
+    });
     flyMap.on('mousemove', (e) => {
+      if (game.panning) return;
       game.pointer = e.latlng;
       if (game.running) game.input = 'mouse';
     });
@@ -239,7 +245,9 @@ async function fly() {
   if (flyScene) flyScene.destroy();
   const showCloud = game.mode === 'map';
   flyScene = new Scene(flyMap, { colour: '#ffffff', showCloud });
-  flyScene.setWindow(game.window);
+  // The cloud where the search starts, one zoom level out: room round it for the helicopter to
+  // turn in. In fast water the cloud then drifts several km, and the camera follows.
+  flyScene.setWindow(game.window, { startOnly: true, zoomOut: 1 });
   if (showCloud) fieldLayer.remove(); else fieldLayer.addTo(flyMap);
   $('hudPosCard').style.display = showCloud ? '' : 'none';
   // It arrives pointing along the drift, as every searcher in the benchmark does.
@@ -253,8 +261,17 @@ async function fly() {
   requestAnimationFrame(waitForPad);
 }
 
+/** Seconds after a pan before the camera follows the helicopter again. */
+const FOLLOW_AFTER_PAN_MS = 4000;
+
 function drawFly() {
   flyScene.update(game.t, game.player);
+  // If the helicopter flies off the screen the camera follows it, unless the player has just
+  // panned away to look at something.
+  if (!game.panning && performance.now() - (game.pannedAt ?? 0) > FOLLOW_AFTER_PAN_MS) {
+    const [lat, lon] = game.player.position(game.t);
+    flyMap.panInside([lat, display(lon)], { padding: [60, 60], animate: false });
+  }
   if (game.mode === 'currents') {
     const c = game.window.meta.field_centre;
     fieldLayer.setState({ field: game.field, centre: [c.lat, c.lon], t: game.t });
@@ -348,8 +365,11 @@ function revealTick(now) {
   $('posAi').textContent = pct(game.flights[2].metrics().pos);
   if (game.t >= WINDOW_S) {
     for (const s of game.scenes) s.showBuoy(WINDOW_S);
+    // The real buoy is often kilometres outside the cloud: zoom out until it is in view (the
+    // other panels follow the first), and leave it up long enough to look at.
+    game.scenes[0].fitAll(WINDOW_S);
     game.revealing = false;
-    setTimeout(results, 2500 / SPEED_UP);
+    setTimeout(results, 7000 / SPEED_UP);
     return;
   }
   requestAnimationFrame(revealTick);
@@ -441,6 +461,7 @@ async function main() {
   $('goBtn').addEventListener('click', () => { game.saved = false; fly(); });
   $('skipBtn').addEventListener('click', () => {
     for (const s of game.scenes ?? []) s.showBuoy(WINDOW_S);
+    game.scenes?.[0]?.fitAll(WINDOW_S);
     results();
   });
   $('againBtn').addEventListener('click', attract);
