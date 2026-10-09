@@ -1,10 +1,14 @@
 """make_e2e_scenarios.py: a one-scenario bundle for the browser tests of the scenario page and game.
 
 The e2e suite runs offline against committed fixtures (frontend/tests/e2e/site.spec.js). This
-writes frontend/tests/e2e/fixtures/scenarios/v1/: one scenario, both noise models, the 2 h
+writes frontend/tests/e2e/fixtures/scenarios/v2/: one scenario, both noise models, the 2 h
 arrival only, 200 particles, under constant forcing, by the same exporter that writes the
 published bundles (scripts/export_scenario_bundles.py), plus a benchmark.json. About 200 kB.
 The numbers are not under test here; the wiring and painting are.
+
+v2 is format 2, flown by the D032 helicopter that turns at 7 deg/s. The v1 folder beside it
+is the format 1 fixture from before D032, flown by the helicopter that turned at once; it is
+kept, not regenerated, so the site's fallback to a v1-only data root stays tested.
 
     python scripts/make_e2e_scenarios.py
 """
@@ -21,7 +25,7 @@ import pandas as pd
 from sar.pipeline.forcing import ConstantForcing
 from sar.search.benchmark import GREEDY, NOISE, SEARCHERS
 
-OUT = Path("frontend/tests/e2e/fixtures/scenarios/v1")
+OUT = Path("frontend/tests/e2e/fixtures/scenarios/v2")
 SCRIPTS = Path(__file__).resolve().parent
 
 

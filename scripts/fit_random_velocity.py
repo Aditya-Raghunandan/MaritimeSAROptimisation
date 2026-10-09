@@ -126,8 +126,10 @@ def search(sigma_u: float, t_l_h: float, n: int, seeds: int, arrivals_h) -> list
                 east = (window.lon[0] - 281.0) * 111_195 * np.cos(np.radians(26.5))
                 spread.append(float(np.std(east)))
                 for name, pattern in patterns.items():
+                    # Turning at once, as when D030's numbers were recorded (6 Oct, before D032).
                     pos[name].append(run(pattern_policy(pattern),
-                                         SearchEpisode(window, marker))["pos"])
+                                         SearchEpisode(window, marker,
+                                                       turn_rate_deg_s=float("inf")))["pos"])
             rows.append({"arrival_h": hours, "model": model,
                          "spread_at_arrival_m": float(np.mean(spread)),
                          **{f"{name}_pos": float(np.mean(v)) for name, v in pos.items()}})
