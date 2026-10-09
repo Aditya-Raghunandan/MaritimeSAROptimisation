@@ -63,6 +63,12 @@ straight to within half a percent.
 
 ## The searchers
 
+Every searcher flies the same helicopter: 90 kt about the marker, turning at most 7.0 deg/s
+on a 379 m radius, arriving along the drift ([ADR006](ADR006.md), D032). The patterns are
+drawn as the manual draws them and flown by an autopilot; greedy plans the turn it can fly.
+`--turn-rate inf` flies them all as the helicopter that turned at once, which is how every
+result before 9 Oct was made.
+
 | Searcher | What it does |
 |---|---|
 | **Expanding Square** | The Coast Guard's square spiral outward from the datum, legs one strip apart, the first leg along the drift. The baseline every other searcher is compared with (D004) |
@@ -127,7 +133,8 @@ CSV=.../bench_dev_48h.csv PER=25 sbatch --array=1-96 scripts/score_scenarios.sba
 ```
 
 One folder is one experiment. `score` writes `manifest.json` the first time (the code's
-commit, the table's sha256, N, the noise settings, arrivals, searchers, greedy's settings)
+commit, the table's sha256, N, the noise settings, arrivals, searchers, greedy's settings,
+the turn rate)
 and refuses to add flights made with anything different. Flights go to
 `flights/<scenario>.jsonl`, one line per flight.
 
@@ -152,6 +159,7 @@ dated, and are not changed after:
 - the noise: σ_u = 0.226 m/s, T_L = 25.7 h (D030);
 - N = 10,000, and arrivals at 1, 2 and 3 h;
 - each pattern's layout rule, and greedy's settings;
+- the helicopter: 7.0 deg/s, the L1 autopilot at L1 = r, the arrival along the drift (D032);
 - the scorer, and the straightness split (0.95).
 
 A bug fix after opening is allowed and logged. Retuning is not.

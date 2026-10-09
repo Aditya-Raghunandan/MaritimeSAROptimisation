@@ -55,9 +55,12 @@ GEOMETRY, from the Addendum:
     Both new patterns begin by flying from the marker to their start point, as a helicopter
     arriving at the datum would.
 
-TURNS ARE INSTANTANEOUS. A real helicopter at 90 kt turns on a radius of several hundred
-metres, larger than the Expanding Square's first legs. The manual draws the patterns with
-square corners and so does this; it is a limitation, recorded in the vault's register.
+DRAWN, NOT FLOWN. A real helicopter at 90 kt turns on a radius of several hundred metres
+(379 m at 7.0 deg/s), larger than the Expanding Square's first legs and twice the Parallel
+Track's spacing. The manual draws the patterns with square corners and so does this module;
+since D032 the referee flies the drawing with the L1 autopilot (`sar.search.kinematics.
+follow`, docs/ADR006.md), and only a helicopter that turns at once flies these waypoints
+as they are.
 
 CLI. One pattern, printed as JSON:
 

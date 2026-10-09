@@ -1,0 +1,82 @@
+{
+ "format": 2,
+ "particles": 200,
+ "noise": {
+  "rv": {
+   "sigma_u": 0.226,
+   "sigma": 0.0
+  },
+  "rw": {
+   "sigma_u": 0.0,
+   "sigma": 26.3
+  }
+ },
+ "greedy": {
+  "headings": 36,
+  "decide_s": 60.0
+ },
+ "arrival_h": [
+  2.0
+ ],
+ "searchers": [
+  "expanding-square",
+  "sector",
+  "parallel",
+  "trackline",
+  "greedy",
+  "random"
+ ],
+ "commit": "e2e",
+ "field": {
+  "half_km": 20.0,
+  "step_km": 2.0,
+  "every_min": 5,
+  "layout": "float32 LE [time][row south->north][col west->east][current u, current v, wind u, wind v]"
+ },
+ "scenarios": [
+  {
+   "scenario": "S01",
+   "set": "train",
+   "water": "jet",
+   "group": 1,
+   "start_utc": "2019-06-01T06:00",
+   "lat": 26.5,
+   "lon": -79.0,
+   "speed_4h_ms": 1.1,
+   "straightness_4h": 0.9999999999999998,
+   "windows": [
+    "rv_2h",
+    "rw_2h"
+   ],
+   "buoy": {
+    "t_h": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "lat": [
+     26.5,
+     26.5045,
+     26.509,
+     26.5135,
+     26.518,
+     26.5225,
+     26.527
+    ],
+    "lon": [
+     -79.0,
+     -78.99,
+     -78.98,
+     -78.97,
+     -78.96,
+     -78.95,
+     -78.94
+    ]
+   }
+  }
+ ]
+}

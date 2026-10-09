@@ -14,6 +14,7 @@ from sar.pipeline.ensemble import Ensemble
 from sar.search.episode import (
     STEPS,
     SearchEpisode,
+    Turn,
     Waypoints,
     _cli,
     heading_policy,
@@ -22,7 +23,13 @@ from sar.search.episode import (
     run,
 )
 from sar.search.patterns import MarkerTrack, expanding_square, parallel_track
-from sar.search.platform import SEARCH_SPEED_MS, STEP_S, SWEEP_WIDTH_M
+from sar.search.platform import (
+    SEARCH_SPEED_MS,
+    STEP_S,
+    SWEEP_WIDTH_M,
+    TURN_RADIUS_M,
+    TURN_RATE_DEG_S,
+)
 from sar.search.scenario import steady_search
 from sar.search.sweep import relative_m
 from sar.utils.geo import offset_position
@@ -31,6 +38,10 @@ LAT0, LON0 = 26.5, 281.0
 HALF = SWEEP_WIDTH_M / 2.0            # 92.6 m
 LEG = SEARCH_SPEED_MS * STEP_S        # 2,778 m, one step at 90 kt
 S = SWEEP_WIDTH_M
+R = TURN_RADIUS_M                     # 378.6 m at 7.0 deg/s
+# The referee before D032, whose helicopter turns at once. The geometry tests below were
+# written for it and still hold for it; the turn itself is tested in TestTurning.
+INSTANT = math.inf
 
 
 def window_of(east, north, velocity=(0.0, 0.0), steps=STEPS, weight=None):
@@ -52,6 +63,7 @@ def still_marker(east=0.0, north=0.0, steps=STEPS):
 
 def episode_of(east, north, velocity=(0.0, 0.0), marker=None, **kw):
     steps = kw.pop("steps", STEPS)
+    kw.setdefault("turn_rate_deg_s", INSTANT)
     marker = marker or still_marker(steps=steps)
     return SearchEpisode(window_of(east, north, velocity, steps), marker, steps=steps, **kw)
 
@@ -109,17 +121,18 @@ class TestTheEpisode:
         assert m["removed_per_step"][1:] == [0.0] * 44
         assert m["distance_m"] == 0.0
 
-    def test_distance_is_speed_times_elapsed(self):
-        ep = episode_of([5e4], [0.0])
+    @pytest.mark.parametrize("rate", [INSTANT, TURN_RATE_DEG_S])
+    def test_distance_is_speed_times_elapsed(self, rate):
+        ep = episode_of([5e4], [0.0], turn_rate_deg_s=rate)
         m = run(heading_policy(45.0), ep)
         assert m["distance_m"] == pytest.approx(SEARCH_SPEED_MS * 2700.0)
-        ep = episode_of([5e4], [0.0])
+        ep = episode_of([5e4], [0.0], turn_rate_deg_s=rate)
         m = run(pattern_policy(expanding_square(S, 0.0)), ep)
         assert m["distance_m"] == pytest.approx(SEARCH_SPEED_MS * 2700.0)
 
     def test_the_cloud_it_was_given_is_left_alone(self):
         window = window_of([1000.0], [0.0])
-        ep = SearchEpisode(window, still_marker())
+        ep = SearchEpisode(window, still_marker(), turn_rate_deg_s=INSTANT)
         ep.step(90.0)
         assert window.weight[0] == 1.0 and ep.weight[0] == 0.0
         with pytest.raises(ValueError):
@@ -204,7 +217,8 @@ class TestMetrics:
         n = 200_000
         setup = steady_search((LAT0, LON0), 2.0, n, np.random.default_rng(6))
         lat, lon = offset_position(*setup.datum, -LEG / 2, 0.0)
-        ep = SearchEpisode(setup.window, MarkerTrack.fixed(float(lat), float(lon), 2700.0))
+        ep = SearchEpisode(setup.window, MarkerTrack.fixed(float(lat), float(lon), 2700.0),
+                           heading_deg=90.0)
         expected = ((norm.cdf(HALF / 2000) - norm.cdf(-HALF / 2000))
                     * (norm.cdf(LEG / 2 / 2000) - norm.cdf(-LEG / 2 / 2000)))
         assert expected == pytest.approx(0.0189, abs=1e-4)
@@ -286,6 +300,90 @@ class TestSearchers:
             run(replay_policy({"headings_deg": [90.0]}), episode_of([5e4], [0.0]))
 
 
+class TestTurning:
+    """D032: the helicopter turns at 7.0 deg/s on a 379 m radius, then flies straight."""
+
+    def turning(self, heading=0.0, **kw):
+        return episode_of([5e4], [0.0], turn_rate_deg_s=TURN_RATE_DEG_S, heading_deg=heading, **kw)
+
+    def test_a_right_angle_is_a_quarter_circle_then_straight(self):
+        ep = self.turning()
+        ep.step(90.0)
+        tau = 90.0 / TURN_RATE_DEG_S                      # 12.8 s
+        assert offset_now(ep) == pytest.approx((R + SEARCH_SPEED_MS * (60.0 - tau), R), abs=1e-6)
+        assert ep.heading_deg == pytest.approx(90.0)
+
+    def test_the_turn_stays_on_a_circle_of_the_turn_radius(self):
+        w = self.turning().waypoints_for(90.0)
+        turning = w.t_s <= 90.0 / TURN_RATE_DEG_S + 1e-9
+        assert np.hypot(w.east_m[turning] - R, w.north_m[turning]) == pytest.approx(R, abs=1e-6)
+
+    def test_a_heading_command_turns_the_short_way_and_right_at_180(self):
+        assert np.all(self.turning().waypoints_for(270.0).east_m <= 1e-9)     # left
+        assert np.all(self.turning().waypoints_for(180.0).east_m >= -1e-9)    # right
+
+    def test_a_turn_command_is_signed_right_positive(self):
+        ep = self.turning()
+        ep.turn(-90.0)
+        assert ep.heading_deg == pytest.approx(270.0)
+        assert offset_now(ep)[1] == pytest.approx(R, abs=1e-6)
+        assert run(lambda e: Turn(10.0), self.turning())["steps"] == STEPS
+
+    def test_a_turn_longer_than_the_step_is_flown_for_the_whole_step(self):
+        ep = self.turning()
+        ep.turn(500.0)
+        assert ep.heading_deg == pytest.approx((60.0 * TURN_RATE_DEG_S) % 360.0)
+
+    def test_the_old_referee_turns_at_once_as_it_always_did(self):
+        ep = episode_of([5e4], [0.0])
+        ep.step(90.0)
+        ep.step(0.0)
+        assert offset_now(ep) == pytest.approx((LEG, LEG), abs=1e-6)
+        assert ep.metrics()["turn_rate_deg_s"] is None
+
+    def test_a_square_corner_is_refused(self):
+        ep = self.turning(heading=90.0)
+        v = SEARCH_SPEED_MS
+        # 20 degrees in one second, three times the rate.
+        quick = Waypoints([1.0, 60.0], [v, v + 59 * v * math.sin(math.radians(70))],
+                          [0.0, 59 * v * math.cos(math.radians(70))], heading_deg=[70.0, 70.0])
+        with pytest.raises(ValueError, match="faster than the helicopter"):
+            ep.fly(quick)
+        # A right angle at 30 s, the headings claiming no turn at all.
+        half = v * 30.0
+        hidden = Waypoints([30.0, 60.0], [half, half], [0.0, half], heading_deg=[90.0, 90.0])
+        with pytest.raises(ValueError, match="corner"):
+            ep.fly(hidden)
+        # The same turn made at once and hidden inside a chord that claims to take 2 s.
+        e = v * 2.0 * math.sin(math.radians(76.0))
+        n = v * 2.0 * math.cos(math.radians(76.0))
+        sudden = Waypoints([2.0, 60.0], [e, e + 58 * v * math.sin(math.radians(76))],
+                           [n, n + 58 * v * math.cos(math.radians(76))], heading_deg=[76.0, 76.0])
+        with pytest.raises(ValueError, match="must be|corner"):
+            ep.fly(sudden)
+
+    def test_a_turning_referee_needs_the_headings(self):
+        with pytest.raises(ValueError, match="heading at every waypoint"):
+            self.turning().fly(Waypoints([60.0], [LEG], [0.0]))
+
+    def test_a_pattern_is_flown_by_the_autopilot_and_passes_the_referee(self):
+        ep = self.turning()
+        m = run(pattern_policy(expanding_square(S, 0.0, duration_s=5400.0)), ep)
+        assert m["steps"] == STEPS and m["turn_rate_deg_s"] == pytest.approx(TURN_RATE_DEG_S)
+
+    def test_a_timed_replay_turns_at_the_rate(self):
+        ep = self.turning()
+        ep.fly(replay_policy({"t_s": [0.0, 30.0], "heading_deg": [90.0, 0.0]})(ep))
+        assert ep.heading_deg == pytest.approx(0.0)
+        assert offset_now(ep)[0] > R
+
+    def test_a_record_flown_at_another_rate_is_refused(self):
+        record = {"headings_deg": [90.0] * STEPS, "turn_rate_deg_s": None}
+        with pytest.raises(ValueError, match="flown turning"):
+            run(replay_policy(record), self.turning())
+        assert run(replay_policy(record), episode_of([5e4], [0.0]))["steps"] == STEPS
+
+
 class TestRefusals:
     def test_a_path_faster_than_the_helicopter(self):
         ep = episode_of([5e4], [0.0])
@@ -316,7 +414,8 @@ class TestRefusals:
             SearchEpisode(window_of([0.0], [0.0]), still_marker(steps=10))
 
     @pytest.mark.parametrize("kw", [{"speed_ms": -1.0}, {"sweep_width_m": 0.0},
-                                    {"pod": 1.5}, {"steps": 0}])
+                                    {"pod": 1.5}, {"steps": 0}, {"turn_rate_deg_s": 0.0},
+                                    {"heading_deg": float("nan")}])
     def test_bad_settings(self, kw):
         with pytest.raises(ValueError):
             episode_of([0.0], [0.0], **kw)

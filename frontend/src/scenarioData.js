@@ -10,15 +10,24 @@
  * Longitudes stay in the store convention (0 to 360) for the referee, which does its
  * arithmetic exactly as Python does; `display` converts one for Leaflet.
  *
- * Where the files live: VITE_DATA_BASE/scenarios/v1 (Hugging Face in the deployed site,
- * ./data/scenarios/v1 under public/ when developing, or a local copy for the offline
- * open-day build).
+ * Where the files live: VITE_DATA_BASE/scenarios/<version> (Hugging Face in the deployed
+ * site, ./data/scenarios/<version> under public/ when developing, or a local copy for the
+ * offline open-day build).
+ *
+ * TWO VERSIONS. v2 (format 2) was flown by the D032 helicopter, which turns at most 7.0 deg/s
+ * and carries the heading at every waypoint; v1 (format 1) by the old one that turned at
+ * once. The newest version that is published is used, so publishing v2 switches the site
+ * over without a deploy; each window says which helicopter flew it (`turnRateDegS`).
  */
 
 import { cloudFromOffsets } from './referee.js';
 
 export const DATA_BASE = String(import.meta.env.VITE_DATA_BASE ?? './data').replace(/\/$/, '');
-export const SCENARIO_ROOT = `${DATA_BASE}/scenarios/v1`;
+/** Newest first. */
+export const SCENARIO_VERSIONS = ['v2', 'v1'];
+export const SCENARIO_ROOT = `${DATA_BASE}/scenarios/${SCENARIO_VERSIONS[SCENARIO_VERSIONS.length - 1]}`;
+/** The 3D loops, which do not change with the helicopter. */
+export const SHOWCASE_ROOT = `${DATA_BASE}/scenarios/showcase`;
 
 /** The searchers in the order every page lists them, with words for people. */
 export const SEARCHER_INFO = {
@@ -55,22 +64,47 @@ async function fetchOnce(url, kind) {
   return cache.get(url);
 }
 
+let resolved = null;
+
+/** The newest published version's folder: the first whose index.json answers. */
+export function scenarioRoot() {
+  if (!resolved) {
+    resolved = (async () => {
+      for (const v of SCENARIO_VERSIONS.slice(0, -1)) {
+        const root = `${DATA_BASE}/scenarios/${v}`;
+        try {
+          await fetchOnce(`${root}/index.json`, 'json');
+          return root;
+        } catch {
+          // not published yet: try the one before
+        }
+      }
+      return SCENARIO_ROOT;
+    })();
+  }
+  return resolved;
+}
+
 /** Every scenario: start, water type, straightness, the buoy's first hours, its windows. */
-export function loadIndex(root = SCENARIO_ROOT) {
-  return fetchOnce(`${root}/index.json`, 'json');
+export async function loadIndex(root) {
+  return fetchOnce(`${root ?? await scenarioRoot()}/index.json`, 'json');
 }
 
 /** The benchmark across every scenario, if it has been published. */
-export function loadBenchmark(root = SCENARIO_ROOT) {
-  return fetchOnce(`${root}/benchmark.json`, 'json');
+export async function loadBenchmark(root) {
+  return fetchOnce(`${root ?? await scenarioRoot()}/benchmark.json`, 'json');
 }
 
 export function windowName(noise, hours) {
   return `${noise}_${hours}h`;
 }
 
-/** One window, ready for referee.Episode: {meta, cloud, marker, target, flights}. */
-export async function loadWindow(scenario, noise, hours, root = SCENARIO_ROOT) {
+/**
+ * One window, ready for referee.Episode: {meta, cloud, marker, target, flights,
+ * turnRateDegS, arrivalHeadingDeg}. A v1 window's helicopter turned at once (Infinity).
+ */
+export async function loadWindow(scenario, noise, hours, root) {
+  root = root ?? await scenarioRoot();
   const name = windowName(noise, hours);
   const [meta, buffer] = await Promise.all([
     fetchOnce(`${root}/${scenario}/${name}.json`, 'json'),
@@ -96,17 +130,24 @@ export async function loadWindow(scenario, noise, hours, root = SCENARIO_ROOT) {
   for (const [key, f] of Object.entries(meta.flights)) {
     flights[key] = {
       ...f,
-      steps: f.steps.map((s) => ({ tS: s.t_s, eastM: s.east_m, northM: s.north_m })),
+      steps: f.steps.map((s) => ({
+        tS: s.t_s, eastM: s.east_m, northM: s.north_m, headingDeg: s.heading_deg ?? undefined,
+      })),
     };
   }
-  return { meta, cloud, marker, target, flights };
+  return {
+    meta, cloud, marker, target, flights,
+    turnRateDegS: meta.turn_rate_deg_s ?? Infinity,
+    arrivalHeadingDeg: meta.arrival_heading_deg ?? meta.drift_bearing_deg ?? 0,
+  };
 }
 
 /**
  * The current and wind grid about the datum, every few minutes of the window:
  * {times (s since arrival), size, stepM, at(i, row, col) -> [cu, cv, wu, wv]}.
  */
-export async function loadField(scenario, hours, index, root = SCENARIO_ROOT) {
+export async function loadField(scenario, hours, index, root) {
+  root = root ?? await scenarioRoot();
   const buffer = await fetchOnce(`${root}/${scenario}/field_${hours}h.f32`, 'bin');
   const f32 = new Float32Array(buffer);
   const { half_km: halfKm, step_km: stepKm, every_min: everyMin } = index.field;

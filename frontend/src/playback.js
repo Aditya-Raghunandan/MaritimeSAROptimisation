@@ -6,19 +6,27 @@
  *   RecordedFlight  a benchmark searcher's flight from a scenario bundle: the Waypoints the
  *                   paper's referee was given, step by step. Replayed through referee.js, it
  *                   gives the paper's numbers (held to 1e-12 by the golden fixture).
- *   PlayerFlight    a person steering. The heading is read every SAMPLE_S seconds of search
- *                   time and held for that long, so the flight is a sequence of straight
- *                   legs at full speed: exactly a heading record that Python's
- *                   `replay_policy` (sar.search.episode) can score again, which is how a
- *                   player is judged by the paper's own referee.
+ *   PlayerFlight    a person steering. The heading they ask for is read every SAMPLE_S
+ *                   seconds of search time and held for that long; the helicopter turns to
+ *                   it at the turn rate, the short way round, then flies straight (D032).
+ *                   That is exactly a heading record that Python's `replay_policy`
+ *                   (sar.search.episode) flies the same way, which is how a player is judged
+ *                   by the paper's own referee.
  *
  * Both fly a whole minute at a time, when it has finished, as the referee does; the map
  * drains minute by minute. Between, `position(t)` says where the helicopter is drawn.
+ *
+ * WHICH HELICOPTER. A window from a format 2 bundle carries the turn rate and the heading
+ * every searcher arrived on, and both flights use them. A format 1 window (scenarios/v1)
+ * was flown by the old helicopter that turned at once: its recorded flights replay that
+ * way, while a player always flies the D032 helicopter.
  */
 
 import { Episode, STEP_S, offsetPosition, trackAt } from './referee.js';
+import { bearing, normalise, shortestTurn, steerTo } from './kinematics.js';
+import { TURN_RATE_DEG_S } from './platform.js';
 
-/** Seconds of search time a player's heading is held for: 12 legs a minute. */
+/** Seconds of search time a player's heading is held for: 12 commands a minute. */
 export const SAMPLE_S = 5;
 
 /** The offset at s seconds into a step, from where the step started, along its waypoints. */
@@ -40,10 +48,19 @@ export function offsetWithin(start, wp, s) {
   return [e0, n0];
 }
 
+/** The turn rate and arrival heading a window's recorded flights were flown with. */
+export function helicopterOf(window) {
+  const meta = window.meta ?? {};
+  return {
+    turnRateDegS: window.turnRateDegS ?? meta.turn_rate_deg_s ?? Infinity,
+    headingDeg: window.arrivalHeadingDeg ?? meta.arrival_heading_deg ?? meta.drift_bearing_deg ?? 0,
+  };
+}
+
 class Flight {
-  constructor(window) {
+  constructor(window, { turnRateDegS, headingDeg } = helicopterOf(window)) {
     this.window = window;
-    this.ep = new Episode(window.cloud, window.marker, { target: window.target });
+    this.ep = new Episode(window.cloud, window.marker, { target: window.target, turnRateDegS, headingDeg });
   }
 
   get done() { return this.ep.done; }
@@ -90,54 +107,114 @@ export class RecordedFlight extends Flight {
       : offsetWithin(this.ep.offset, this.steps[k], t - k * STEP_S);
     return this.ground(t, offset);
   }
+
+  /** Which way it points at t: between the headings at the waypoints either side. */
+  headingAt(t) {
+    const k = this.ep.k;
+    if (k >= this.steps.length) return this.ep.headingDeg;
+    const wp = this.steps[k];
+    const s = t - k * STEP_S;
+    let t0 = 0;
+    let h0 = this.ep.headingDeg;
+    let [e0, n0] = this.ep.offset;
+    for (let i = 0; i < wp.tS.length; i += 1) {
+      const h1 = wp.headingDeg ? wp.headingDeg[i] : bearing(wp.eastM[i] - e0, wp.northM[i] - n0);
+      if (s <= wp.tS[i]) {
+        const f = wp.tS[i] > t0 ? (s - t0) / (wp.tS[i] - t0) : 1;
+        return normalise(h0 + f * shortestTurn(h0, h1));
+      }
+      [t0, h0, e0, n0] = [wp.tS[i], h1, wp.eastM[i], wp.northM[i]];
+    }
+    return h0;
+  }
 }
 
 export class PlayerFlight extends Flight {
-  constructor(window, { heading = 0 } = {}) {
-    super(window);
-    this.heading = heading;
+  /**
+   * `heading` is where the helicopter points on arrival (the window's, normally), and the
+   * first command; `turnRateDegS` the helicopter's, TURN_RATE_DEG_S unless a test says so.
+   */
+  constructor(window, { heading = helicopterOf(window).headingDeg, turnRateDegS = TURN_RATE_DEG_S } = {}) {
+    super(window, { turnRateDegS, headingDeg: heading });
+    this.heading = normalise(heading);
+    this.command = this.heading;
     this.t = 0;
     this.offset = [0, 0];
-    this.pending = { tS: [], eastM: [], northM: [] };
+    this.pending = { tS: [], eastM: [], northM: [], headingDeg: [] };
     this.headings = { tS: [], headingDeg: [] };
   }
 
-  /** The heading the next leg will hold, degrees true, relative to the marker. */
+  get turnRateDegS() { return this.ep.turnRateDegS; }
+
+  /** The heading the helicopter should turn to and hold, degrees true, about the marker. */
   steer(headingDeg) {
-    this.heading = ((headingDeg % 360) + 360) % 360;
+    this.command = normalise(headingDeg);
   }
 
-  /** Fly on to t seconds after arrival, a held heading per SAMPLE_S leg. */
+  /** Fly on to t seconds after arrival, one held command per SAMPLE_S. */
   advanceTo(t) {
     const end = Math.min(t, this.duration);
     while (this.t + SAMPLE_S <= end + 1e-9 && !this.ep.done) {
-      const b = (this.heading * Math.PI) / 180;
-      const d = this.ep.speedMs * SAMPLE_S;
       this.headings.tS.push(this.t);
-      this.headings.headingDeg.push(this.heading);
-      this.offset = [this.offset[0] + d * Math.sin(b), this.offset[1] + d * Math.cos(b)];
+      this.headings.headingDeg.push(this.command);
+      const p = steerTo(this.offset[0], this.offset[1], this.heading, this.command, SAMPLE_S,
+        this.ep.speedMs, this.turnRateDegS);
+      const startInStep = this.t - this.ep.k * STEP_S;
+      for (let i = 0; i < p.tS.length; i += 1) {
+        this.pending.tS.push(startInStep + p.tS[i]);
+        this.pending.eastM.push(p.eastM[i]);
+        this.pending.northM.push(p.northM[i]);
+        this.pending.headingDeg.push(p.headingDeg[i]);
+      }
+      const last = p.tS.length - 1;
+      this.offset = [p.eastM[last], p.northM[last]];
+      this.heading = p.headingDeg[last];
       this.t += SAMPLE_S;
-      const inStep = this.t - this.ep.k * STEP_S;
-      this.pending.tS.push(inStep);
-      this.pending.eastM.push(this.offset[0]);
-      this.pending.northM.push(this.offset[1]);
-      if (Math.abs(inStep - STEP_S) < 1e-9) {
+      if (Math.abs(this.t - (this.ep.k + 1) * STEP_S) < 1e-9) {
+        this.pending.tS[this.pending.tS.length - 1] = STEP_S;
         this.ep.fly(this.pending);
-        this.pending = { tS: [], eastM: [], northM: [] };
+        this.pending = { tS: [], eastM: [], northM: [], headingDeg: [] };
       }
     }
   }
 
-  /** Where the helicopter is drawn at t: on the current leg, at the held heading. */
-  position(t) {
+  /** Where it is and which way it points at t >= this.t: on its turn, if it is turning. */
+  pose(t) {
     const ahead = Math.max(0, Math.min(t, this.duration) - this.t);
-    const b = (this.heading * Math.PI) / 180;
-    const d = this.ep.speedMs * ahead;
-    return this.ground(t, [this.offset[0] + d * Math.sin(b), this.offset[1] + d * Math.cos(b)]);
+    if (ahead <= 0) return { offset: this.offset, heading: this.heading };
+    const p = steerTo(this.offset[0], this.offset[1], this.heading, this.command, ahead,
+      this.ep.speedMs, this.turnRateDegS);
+    const last = p.tS.length - 1;
+    return { offset: [p.eastM[last], p.northM[last]], heading: p.headingDeg[last] };
   }
 
-  /** The flight as Python's replay_policy reads it: {t_s, heading_deg}, from 0. */
+  /** Where the helicopter is drawn at t. */
+  position(t) {
+    return this.ground(t, this.pose(t).offset);
+  }
+
+  /** Which way it points at t. */
+  headingAt(t) {
+    return this.pose(t).heading;
+  }
+
+  /**
+   * Where it will go if the command holds: the next `seconds` of its turn and the straight
+   * after, as ground points, so a player sees the bend coming before it happens.
+   */
+  preview(t, seconds = 30) {
+    const { offset, heading } = this.pose(t);
+    const p = steerTo(offset[0], offset[1], heading, this.command, seconds, this.ep.speedMs,
+      this.turnRateDegS);
+    return [this.ground(t, offset), ...p.tS.map((_, i) => this.ground(t, [p.eastM[i], p.northM[i]]))];
+  }
+
+  /** The flight as Python's replay_policy reads it: {t_s, heading_deg, turn_rate_deg_s}. */
   record() {
-    return { t_s: [...this.headings.tS], heading_deg: [...this.headings.headingDeg] };
+    return {
+      t_s: [...this.headings.tS],
+      heading_deg: [...this.headings.headingDeg],
+      turn_rate_deg_s: Number.isFinite(this.turnRateDegS) ? this.turnRateDegS : null,
+    };
   }
 }

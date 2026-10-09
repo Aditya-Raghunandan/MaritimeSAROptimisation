@@ -15,11 +15,15 @@ What it records:
     marker     the datum marker's track
     target     the real buoy's track, so found / closest approach are checked too
     flights    every searcher (four Coast Guard patterns, greedy, random) as the Waypoints
-               it flew each step, and the referee's removed_per_step, pos, expected time to
-               detection and target result
-    player     a scripted "player": a heading every 5 s, flown by `replay_policy`, as the
-               site's PlayerFlight records one (frontend/src/playback.js), so a person's
-               flight is scored by the paper's referee and the browser's alike
+               it flew each step, with the heading at each, flown by a helicopter that
+               turns at TURN_RATE_DEG_S (D032), and the referee's removed_per_step, pos,
+               expected time to detection and target result
+    instant    the same, flown by the pre-D032 helicopter that turns at once: the site
+               still replays format 1 bundles, and the instant referee must stay the same
+    player     a scripted "player": a heading command every 5 s, flown by `replay_policy`
+               at the turn rate, as the site's PlayerFlight flies and records one
+               (frontend/src/playback.js), so a person's flight is scored by the paper's
+               referee and the browser's alike
     encoded    one frame as the scenario bundles store it (float32 metres from the marker)
                and the positions Python rebuilds from it, for the bundle decoder
 
@@ -37,9 +41,9 @@ import pandas as pd
 
 from sar.pipeline.forcing import ConstantForcing
 from sar.search.benchmark import NOISE, SEARCHERS, recorded, searcher
-from sar.search.episode import SearchEpisode, replay_policy, run
-from sar.search.platform import SEARCH_SPEED_MS, SWEEP_WIDTH_M
-from sar.search.scenario import scenario_search
+from sar.search.episode import replay_policy, run
+from sar.search.platform import SEARCH_SPEED_MS, SWEEP_WIDTH_M, TURN_RATE_DEG_S
+from sar.search.scenario import arrival_heading, scenario_search, search_episode
 from sar.search.sweep import relative_m
 from sar.utils.geo import M_PER_DEG_LAT, offset_position
 
@@ -64,21 +68,33 @@ def build() -> dict:
     r = row()
     setup = scenario_search(r, FORCING, round(ARRIVAL_H * 3600), PARTICLES, **NOISE["rv"])
     w = setup.window
-    flights = {}
-    for name in SEARCHERS:
-        policy, _, _ = searcher(name, setup, r, ARRIVAL_H)
-        flying, steps = recorded(policy)
-        m = run(flying, SearchEpisode(w, setup.marker, target=setup.target))
-        flights[name] = {
-            "steps": [{"t_s": floats(s.t_s), "east_m": floats(s.east_m),
-                       "north_m": floats(s.north_m)} for s in steps],
-            "removed_per_step": m["removed_per_step"], "pos": m["pos"],
-            "expected_ttd_s": m["expected_ttd_s"], "target": m["target"]}
 
-    # A player who circles out from the marker, changing heading every 5 s.
+    def fly_all(rate):
+        flights = {}
+        for name in SEARCHERS:
+            policy, _, _ = searcher(name, setup, r, ARRIVAL_H)
+            flying, steps = recorded(policy)
+            m = run(flying, search_episode(setup, rate))
+            flights[name] = {
+                "steps": [{"t_s": floats(s.t_s), "east_m": floats(s.east_m),
+                           "north_m": floats(s.north_m),
+                           "heading_deg": None if s.heading_deg is None else floats(s.heading_deg)}
+                          for s in steps],
+                "removed_per_step": m["removed_per_step"], "pos": m["pos"],
+                "expected_ttd_s": m["expected_ttd_s"], "target": m["target"]}
+        return flights
+
+    flights = fly_all(TURN_RATE_DEG_S)
+    instant = fly_all(float("inf"))
+
+    # A player who circles out from the marker, asking for a new heading every 5 s, with a
+    # hard reversal at 10 min so the turn is exercised as well as the gentle drift.
     t = np.arange(0.0, 45 * 60.0, 5.0)
-    record = {"t_s": floats(t), "heading_deg": floats((90.0 + 2.5 * t / 5.0) % 360.0)}
-    m = run(replay_policy(record), SearchEpisode(w, setup.marker, target=setup.target))
+    heading = (90.0 + 2.5 * t / 5.0) % 360.0
+    heading[(t >= 600.0) & (t < 660.0)] = (heading[(t >= 600.0) & (t < 660.0)] + 180.0) % 360.0
+    record = {"t_s": floats(t), "heading_deg": floats(heading),
+              "turn_rate_deg_s": TURN_RATE_DEG_S}
+    m = run(replay_policy(record), search_episode(setup))
     player = {"record": record, "removed_per_step": m["removed_per_step"], "pos": m["pos"],
               "target": m["target"]}
 
@@ -90,7 +106,9 @@ def build() -> dict:
     return {
         "about": "Written by scripts/export_referee_golden.py. Do not edit by hand.",
         "constants": {"speed_ms": SEARCH_SPEED_MS, "sweep_width_m": SWEEP_WIDTH_M,
-                      "m_per_deg_lat": M_PER_DEG_LAT, "step_s": 60.0, "steps": 45},
+                      "m_per_deg_lat": M_PER_DEG_LAT, "step_s": 60.0, "steps": 45,
+                      "turn_rate_deg_s": TURN_RATE_DEG_S,
+                      "arrival_heading_deg": arrival_heading(setup)},
         "window": {"frames": int(w.lat.shape[0]), "particles": PARTICLES,
                    "lat": floats(w.lat), "lon": floats(w.lon), "weight": floats(w.weight)},
         "marker": {"t_s": floats(setup.marker.t_s), "lat": floats(setup.marker.lat),
@@ -98,6 +116,7 @@ def build() -> dict:
         "target": {"t_s": floats(setup.target.t_s), "lat": floats(setup.target.lat),
                    "lon": floats(setup.target.lon)},
         "flights": flights,
+        "instant": instant,
         "player": player,
         "encoded": {"frame": k, "marker_lat": float(mlat[k]), "marker_lon": float(mlon[k]),
                     "east_f32": floats(e32), "north_f32": floats(n32),
