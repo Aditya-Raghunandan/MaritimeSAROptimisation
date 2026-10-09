@@ -124,7 +124,7 @@ class TestScore:
         csv.write_text("scenario\nS01\n")
         rec = score.experiment(csv, ["rvc", "rv"], [1.0], ["random"], 300)
         assert rec["noise"]["rvc"]["sigma_u"] == "by-current"
-        assert set(rec["noise"]["rvc"]["rule"]) == {"a", "b", "cap_speed_ms", "slide_ms"}
+        assert set(rec["noise"]["rvc"]["rule"]) == {"shape", "a", "b", "cap_speed_ms", "slide_ms"}
 
     def test_it_is_repeatable_random_floor_included(self, flights):
         again = score.score_row(row(), FORCING, ["rv"], [1.0], ["expanding-square", "random"],
