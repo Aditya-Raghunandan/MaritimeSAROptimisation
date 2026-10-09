@@ -30,7 +30,7 @@ const SELF = 'self';
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  index: null, scenario: null, noise: 'rv', hours: 2, searcher: 'expanding-square',
+  index: null, scenario: null, noise: 'rvc', hours: 2, searcher: 'expanding-square',
   window: null, flight: null, t: 0, playing: false, last: 0, held: new Set(),
 };
 
