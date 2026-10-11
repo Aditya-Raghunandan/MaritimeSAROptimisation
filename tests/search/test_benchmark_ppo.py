@@ -68,7 +68,7 @@ def save_model(folder: Path, size: int = SIZE) -> Path:
 
 @pytest.fixture(scope="module")
 def ppo(tmp_path_factory):
-    return score.PPOSearcher(save_model(tmp_path_factory.mktemp("run_test")))
+    return score.PPOSearcher(save_model(tmp_path_factory.mktemp("runs") / "run_test"))
 
 
 @pytest.fixture(scope="module")
