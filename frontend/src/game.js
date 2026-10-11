@@ -4,8 +4,9 @@
  * A visitor picks a real buoy (one of the 55 scenarios), chooses to see the probability map
  * or only the currents, and flies one helicopter for the 45-minute window, the clock
  * compressed so the search takes about 90 seconds. Then the same sea is searched again,
- * side by side, by the Coast Guard's Expanding Square and by the AI (the greedy search until
- * the trained agent exists, and labelled so), and the real buoy is revealed.
+ * side by side, by the Coast Guard's Expanding Square and by the AI, and the real buoy is
+ * revealed. The AI is the trained agent where the published files carry its flight (v3), and
+ * the greedy search where they do not; the results say which one it was.
  *
  * FLYING IT. The helicopter turns as the real one does, at most 7 degrees a second (D032),
  * so it swings round on a 379 m curve instead of snapping to a new heading. Three ways to
@@ -30,7 +31,7 @@ import { PlayerFlight, RecordedFlight, SAMPLE_S } from './playback.js';
 import { ProbabilityLegend } from './probabilityLayer.js';
 import { Scene } from './scene.js';
 import {
-  SEARCHER_INFO, SHOWCASE_ROOT, bestNoise, display, loadBenchmark, loadField, loadIndex,
+  SEARCHER_INFO, SHOWCASE_ROOT, aiOf, bestNoise, display, loadBenchmark, loadField, loadIndex,
   loadWindow,
 } from './scenarioData.js';
 import { bearing } from './kinematics.js';
@@ -46,7 +47,15 @@ const WINDOW_S = 45 * 60;
 const SPEED_UP = Math.max(1, Number(new URLSearchParams(window.location.search).get('speed')) || 1);
 const FLY_SPEED = 30 * SPEED_UP;          // 45 minutes in 90 seconds
 const REVEAL_SPEED = 90 * SPEED_UP;       // the side-by-side replay in 30 seconds
-const RIVALS = { cg: 'expanding-square', ai: 'greedy' };
+const CG = 'expanding-square';
+// What the results say the AI was, by who flew it (aiOf).
+const AI_WORDS = {
+  ppo: '<b>The AI</b> here is a trained agent: a neural network that learned where to fly by '
+    + 'searching five years of simulated drift, minute by minute, and being paid for every '
+    + 'possible position it found, more for finding it sooner.',
+  greedy: '<b>The AI</b> here is a greedy search that always flies to where the most probability '
+    + 'is left; the trained agent takes its place once its flights are published.',
+};
 const MODES = { map: 'with the probability map', currents: 'with currents only' };
 const $ = (id) => document.getElementById(id);
 
@@ -320,12 +329,13 @@ function reveal() {
   }
   for (const m of panels) m.invalidateSize();
   if (game.scenes) for (const s of game.scenes) s.destroy();
+  const ai = aiOf(game.window);
   const flights = [
     rewind(game.player),
-    new RecordedFlight(game.window, RIVALS.cg),
-    new RecordedFlight(game.window, RIVALS.ai),
+    new RecordedFlight(game.window, CG),
+    new RecordedFlight(game.window, ai),
   ];
-  const colours = ['#ffffff', SEARCHER_INFO[RIVALS.cg].colour, SEARCHER_INFO[RIVALS.ai].colour];
+  const colours = ['#ffffff', SEARCHER_INFO[CG].colour, SEARCHER_INFO[ai].colour];
   game.scenes = panels.map((m, i) => {
     const s = new Scene(m, { colour: colours[i] });
     s.setWindow(game.window, { fit: i === 0 });
@@ -404,6 +414,7 @@ async function results() {
   };
   $('scoreTable').innerHTML = '<tr><th></th><th>Searched</th><th>The real person</th></tr>'
     + row(`You (${game.name})`, you) + row('Coast Guard', cg) + row('The AI', ai);
+  $('aiWords').innerHTML = AI_WORDS[aiOf(game.window)];
 
   if (!game.saved) {
     const entry = {
