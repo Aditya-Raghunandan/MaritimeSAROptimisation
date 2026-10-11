@@ -25,7 +25,11 @@ import '@fontsource-variable/inter';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { FieldLayer } from './fieldLayer.js';
-import { add, load, nickname, score, top, verdict } from './leaderboard.js';
+import {
+  AREA_CELL_M, add, cloudAreaKm2, load, nickname, par, score, top, verdict,
+} from './leaderboard.js';
+import { densityGrid } from './probabilityMap.js';
+import { trackAt } from './referee.js';
 import { PlayerFlight, RecordedFlight, SAMPLE_S } from './playback.js';
 import { ProbabilityLegend } from './probabilityLayer.js';
 import { Scene } from './scene.js';
@@ -35,6 +39,7 @@ import {
 } from './scenarioData.js';
 import { bearing } from './kinematics.js';
 import { M_PER_DEG_LAT } from './geo.js';
+import { SEARCH_SPEED_MS, TURN_RADIUS_M, TURN_RATE_DEG_S } from './platform.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 import { esriTiles } from './tiles.js';
 
@@ -56,19 +61,45 @@ const game = {
   input: 'keys', pointer: null, pad: null,
 };
 
-const HINT = 'Point with the mouse where you want to fly and click to take off. The helicopter '
-  + 'turns like the real one, 7\u00b0 a second, so plan your turns. '
-  + 'Arrow keys, WASD or a game controller work too.';
+// The real helicopter's numbers (D032), in words for a visitor: why it will not simply go
+// where it is pointed. A tester on 11 Oct did not know it banks round like a plane.
+const SPEED_KMH = Math.round(SEARCH_SPEED_MS * 3.6);
+const TURN_DEG = Math.round(TURN_RATE_DEG_S);
+const U_TURN_S = Math.round(180 / TURN_RATE_DEG_S);
+const CIRCLE_M = Math.round((2 * TURN_RADIUS_M) / 10) * 10;
+const HINT = '<b>Fly it like a real search helicopter.</b> Point with the mouse where you want to '
+  + `go and click to take off. At ${SPEED_KMH}\u00a0km/h it cannot stop or turn on the spot: it banks `
+  + `round at ${TURN_DEG}\u00b0 a second, so a U-turn takes ${U_TURN_S}\u00a0s and swings ${CIRCLE_M}\u00a0m wide. `
+  + 'Point well ahead of it. Arrow keys, WASD or a game controller work too.';
+/** How far off the asked-for heading it must be before the game says it is still turning. */
+const COACH_OFF_DEG = 25;
 
 /* ---------------------------------------------------------------- steering */
 
-/** The compass heading from the helicopter now to a point on the map, [lat, display lon]. */
-function headingTo(latlng) {
+/** East and north metres from the helicopter now to a point on the map, [lat, display lon]. */
+function offsetTo(latlng) {
   const [lat, lon] = game.player.position(game.t);
   const dLon = latlng.lng - display(lon);
-  const east = dLon * M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180);
-  const north = (latlng.lat - lat) * M_PER_DEG_LAT;
+  return [dLon * M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180), (latlng.lat - lat) * M_PER_DEG_LAT];
+}
+
+/** The compass heading from the helicopter now to a point on the map. */
+function headingTo(latlng) {
+  const [east, north] = offsetTo(latlng);
   return Math.hypot(east, north) < 1 ? null : bearing(east, north);
+}
+
+/**
+ * What to tell a player whose helicopter is not yet going where they asked, or null: still
+ * swinging round, or pointed at a spot inside the circle it turns on, which it can only orbit.
+ */
+function coach() {
+  const off = Math.abs(((game.player.command - game.player.headingAt(game.t) + 540) % 360) - 180);
+  if (off <= COACH_OFF_DEG) return null;
+  if (game.input === 'mouse' && game.pointer && Math.hypot(...offsetTo(game.pointer)) < 2 * TURN_RADIUS_M) {
+    return 'Too close to turn to: it circles round that spot. Point further away.';
+  }
+  return `Turning, ${TURN_DEG}\u00b0 a second: at search speed a helicopter banks round like a plane.`;
 }
 
 /** The first connected game controller's stick or d-pad as a heading, or null. */
@@ -104,6 +135,7 @@ function takeOff() {
   game.running = true;
   game.last = performance.now();
   $('hint').style.display = 'none';
+  $('hint').classList.remove('intro');
   requestAnimationFrame(flyTick);
 }
 
@@ -246,7 +278,7 @@ async function fly() {
   flyMap.invalidateSize();
   if (flyScene) flyScene.destroy();
   const showCloud = game.mode === 'map';
-  flyScene = new Scene(flyMap, { colour: '#ffffff', showCloud });
+  flyScene = new Scene(flyMap, { colour: '#ffffff', showCloud, heliSize: 60 });
   // The cloud where the search starts, one zoom level out: room round it for the helicopter to
   // turn in. In fast water the cloud then drifts several km, and the camera follows.
   flyScene.setWindow(game.window, { startOnly: true, zoomOut: 1 });
@@ -264,7 +296,8 @@ async function fly() {
   game.running = false;
   game.pointer = null;
   $('hint').style.display = '';
-  $('hint').textContent = HINT;
+  $('hint').innerHTML = HINT;
+  $('hint').classList.add('intro');
   drawFly();
   requestAnimationFrame(waitForPad);
 }
@@ -286,6 +319,17 @@ function drawFly() {
   }
   $('hudTime').textContent = clock(WINDOW_S - game.t);
   $('hudPos').textContent = pct(game.player.metrics().pos);
+  if (game.running) drawCoach(performance.now());
+}
+
+/** The coaching line, kept up a moment after it stops applying so it does not flicker. */
+function drawCoach(now) {
+  const say = coach();
+  if (say) {
+    game.coachUntil = now + 900;
+    if ($('hint').textContent !== say) $('hint').textContent = say;
+  }
+  $('hint').style.display = say || now < (game.coachUntil ?? 0) ? '' : 'none';
 }
 
 function flyTick(now) {
@@ -327,7 +371,7 @@ function reveal() {
   ];
   const colours = ['#ffffff', SEARCHER_INFO[RIVALS.cg].colour, SEARCHER_INFO[RIVALS.ai].colour];
   game.scenes = panels.map((m, i) => {
-    const s = new Scene(m, { colour: colours[i] });
+    const s = new Scene(m, { colour: colours[i], heliSize: 46 });
     s.setWindow(game.window, { fit: i === 0 });
     return s;
   });
@@ -385,12 +429,23 @@ function revealTick(now) {
 
 /* ---------------------------------------------------------------- results */
 
+/** The cloud's size when the helicopter arrives: the smallest area holding 90 % of it, km². */
+function arrivalAreaKm2(window) {
+  const { cloud, marker } = window;
+  const n = cloud.particles;
+  const [mlat, mlon] = trackAt(marker, 0);
+  const grid = densityGrid(cloud.lat.subarray(0, n), cloud.lon.subarray(0, n), cloud.weight, mlat, mlon,
+    { cellM: AREA_CELL_M });
+  return grid ? cloudAreaKm2(grid.mass, AREA_CELL_M) : NaN;
+}
+
 async function results() {
   game.revealing = false;
   for (const f of game.flights) advance(f, WINDOW_S);
   const [you, cg, ai] = game.flights.map((f) => f.metrics());
   const v = verdict({ pos: you.pos }, [{ name: 'the Coast Guard', pos: cg.pos }, { name: 'the AI', pos: ai.pos }]);
-  const points = score(you.pos, you.target?.found);
+  const area = arrivalAreaKm2(game.window);
+  const points = score(you.pos, area);
   $('verdict').textContent = v.won ? 'You win! Claim your prize.' : 'The search goes on…';
   $('verdict').className = `verdict${v.won ? ' win' : ''}`;
   $('verdictWhy').textContent = v.won
@@ -404,11 +459,16 @@ async function results() {
   };
   $('scoreTable').innerHTML = '<tr><th></th><th>Searched</th><th>The real person</th></tr>'
     + row(`You (${game.name})`, you) + row('Coast Guard', cg) + row('The AI', ai);
+  $('pointsWhy').textContent = `This cloud covered ${Math.round(area)} km² when the helicopter arrived. `
+    + `On a cloud that big the Coast Guard's pattern searches about ${Math.round(100 * par(area))} % of it on average, `
+    + 'and that is worth 1,000 points; you score the same share of 1,000 for what you searched. A bigger '
+    + 'cloud is harder, so the same share is worth more on it.';
 
   if (!game.saved) {
     const entry = {
       name: game.name, mode: game.mode, scenario: game.scenario.scenario, pos: you.pos,
-      found: Boolean(you.target?.found), score: points, won: v.won, when: new Date().toISOString(),
+      found: Boolean(you.target?.found), area_km2: area, score: points, won: v.won,
+      when: new Date().toISOString(),
       record: game.player.record(),
     };
     const { list, saved } = add(entry);

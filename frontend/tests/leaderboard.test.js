@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { FOUND_BONUS, add, load, nickname, score, top, verdict } from '../src/leaderboard.js';
+import {
+  GAME_AREA_KM2, OLD_STORAGE_KEY, STORAGE_KEY, add, cloudAreaKm2, load, nickname, par, rescore, score, top, verdict,
+} from '../src/leaderboard.js';
 
 function memory() {
   const store = new Map();
@@ -10,15 +12,63 @@ function memory() {
 }
 
 describe('the score', () => {
-  it('is mostly POS, with a bonus for finding the buoy', () => {
-    expect(score(0.531, false)).toBe(531);
-    expect(score(0.531, true)).toBe(531 + FOUND_BONUS);
+  it('is 1,000 for what the Coast Guard gets on a cloud that size', () => {
+    // Two published windows (rvc, 2 h): S32, 23.4 km², and S11, 148.8 km².
+    expect(par(23.4)).toBeCloseTo(0.69, 2);
+    expect(par(148.8)).toBeCloseTo(0.16, 2);
+    expect(score(par(60), 60)).toBe(1000);
+  });
+
+  it('holds a cloud outside the fitted sizes to the nearest end', () => {
+    expect(par(5)).toBe(par(22.4));
+    expect(par(900)).toBe(par(148.8));
+    expect(par(5)).toBeLessThan(1);
+  });
+
+  it('gives the same share more points on a bigger cloud', () => {
+    expect(score(0.3, 140)).toBeGreaterThan(score(0.3, 25));
+    // The Square's own POS on S32 and S11, 0.678 and 0.139, score about alike.
+    expect(Math.abs(score(0.678, 23.4) - score(0.139, 148.8))).toBeLessThan(150);
+  });
+
+  it('measures the cloud as the smallest area holding 90 %', () => {
+    // Ten cells: one with half the probability, four with a tenth each, five with 0.02.
+    const mass = [0.5, 0.1, 0.1, 0.1, 0.1, 0.02, 0.02, 0.02, 0.02, 0.02];
+    expect(cloudAreaKm2(mass, 250)).toBeCloseTo(5 * 0.0625, 10);
+    expect(cloudAreaKm2(mass, 250, 0.5)).toBeCloseTo(0.0625, 10);
+    expect(cloudAreaKm2([2, 2], 1000)).toBe(2);
   });
 
   it('wins only by beating every rival on POS', () => {
     const rivals = [{ name: 'Coast Guard', pos: 0.53 }, { name: 'AI', pos: 0.49 }];
     expect(verdict({ pos: 0.6 }, rivals)).toEqual({ won: true, beaten: ['Coast Guard', 'AI'] });
     expect(verdict({ pos: 0.5 }, rivals)).toEqual({ won: false, beaten: ['AI'] });
+  });
+});
+
+describe('the board from before 12 Oct', () => {
+  it('comes over once, rescored by cloud size from its own POS and buoy', () => {
+    const s = memory();
+    // A small-cloud buoy used to score more for less: S32 is 23.4 km², S11 148.8 km².
+    s.setItem(OLD_STORAGE_KEY, JSON.stringify([
+      { name: 'Aditya', mode: 'map', scenario: 'S32', pos: 0.30, score: 300, when: '1' },
+      { name: 'Her', mode: 'map', scenario: 'S11', pos: 0.12, score: 620, when: '2' },
+      { name: 'Lost', mode: 'map', scenario: 'S99', pos: 0.5, score: 500, when: '3' },
+    ]));
+    const list = load(s);
+    expect(list.map((e) => e.name)).toEqual(['Her', 'Aditya']);
+    expect(list[0].score).toBe(score(0.12, 148.8));
+    expect(list[0].old_score).toBe(620);
+    expect(list.every((e) => e.rescored)).toBe(true);
+    // Saved on the new board, so it is not rescored again.
+    expect(JSON.parse(s.getItem(STORAGE_KEY)).length).toBe(2);
+    add({ name: 'new', mode: 'map', score: 1, when: '4' }, s);
+    expect(load(s).length).toBe(3);
+  });
+
+  it('knows every one of the 55 buoys', () => {
+    expect(Object.keys(GAME_AREA_KM2)).toHaveLength(55);
+    expect(rescore([{ scenario: 'S01', pos: 0.2, when: '1' }])[0].area_km2).toBe(111.4);
   });
 });
 

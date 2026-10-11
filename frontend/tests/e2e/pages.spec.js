@@ -175,6 +175,9 @@ test.describe('the open-day game', () => {
     await expect(page.locator('#verdict')).not.toBeEmpty();
     await expect(page.locator('#boardNow')).toContainText('E2E');
     await expect(page.locator('#benchTable tr')).toHaveCount(7);
+    // Points are scored against the cloud's size, and the page says so in numbers.
+    await expect(page.locator('#pointsWhy')).toContainText(/covered \d+ km²/);
+    await expect(page.locator('#pointsWhy')).not.toContainText(/1\d\d %/);
     expect(errors).toEqual([]);
   });
 
@@ -188,6 +191,10 @@ test.describe('the open-day game', () => {
     await page.click('#goBtn');
     await expect(page.locator('#fly')).toHaveClass(/on/);
     await expect(page.locator('#hint')).toContainText(/mouse/);
+    await expect(page.locator('#hint')).toContainText('cannot stop or turn on the spot');
+    // The helicopter is drawn as one, its rotor and searchlight included.
+    await expect(page.locator('#flyMap .scene-heli svg rect')).not.toHaveCount(0);
+    await expect(page.locator('#flyMap .scene-heli svg linearGradient')).toHaveCount(1);
     const box = await page.locator('#flyMap').boundingBox();
     // Click well to one side to take off, then hold the pointer there.
     await page.mouse.move(box.x + box.width * 0.15, box.y + box.height * 0.5);
