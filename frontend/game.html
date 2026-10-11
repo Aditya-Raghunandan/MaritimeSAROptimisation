@@ -76,6 +76,8 @@
         background: #000b; padding: 8px 14px; border-radius: 10px; color: #ffcd8d; pointer-events: none;
         max-width: min(720px, calc(100% - 32px)); text-align: center;
       }
+      .hint.intro { font-size: 16px; line-height: 1.45; padding: 14px 20px; color: #f2efe6; border: 1px solid #ffcd8d66; }
+      .hint.intro b { display: block; color: #ffcd8d; font-size: 19px; margin-bottom: 4px; }
 
       /* reveal */
       #reveal { grid-template-rows: auto 1fr; }
@@ -166,6 +168,7 @@
         <p class="verdict" id="verdict"></p>
         <p class="explain" id="verdictWhy"></p>
         <table id="scoreTable"></table>
+        <p class="explain"><b>Points.</b> <span id="pointsWhy"></span></p>
         <p class="explain">
           <b>Searched</b> is the share of all the places the person could be that each helicopter
           looked at: the paper calls it POS. The person is in exactly one of those places, so if
