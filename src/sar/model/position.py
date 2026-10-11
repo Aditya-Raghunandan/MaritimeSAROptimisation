@@ -13,6 +13,12 @@ Two random terms live here, and a run uses one of them (D030):
 The dev drifters say the second (vault D030): their spread at 1-48 h fits it to 2 %, where
 one random-walk sigma is off by 50 %, and sigma_u matches HYCOM's measured velocity error.
 The model stays three terms (D002): u is eta, with memory.
+
+HOW BIG, BY WATER (vault D033, docs/ADR007.md). One pooled sigma_u made the cloud too wide in
+quiet water and far too narrow in the Gulf Stream (vault L23, L35). So sigma_u is sized by
+the model's own current at the start, the one thing a forecaster knows when the call comes
+in: sigma_u = a + b x speed, capped, with the person's crosswind slide added in quadrature
+(`sigma_u_for_current`). sigma_u may be one value or one per particle.
 """
 
 from __future__ import annotations
@@ -53,6 +59,45 @@ DEFAULT_SIGMA_U = 0.0
 MEMORY_TIME_S = 25.7 * 3600.0
 CALIBRATED_SIGMA_U = 0.226
 
+# sigma_u BY THE CURRENT AT THE START (vault D033, docs/ADR007.md, 9 Oct 2026). One pooled
+# sigma_u covers 90 % on average and not by water: in quiet water the cloud is too wide, in
+# the Gulf Stream far too narrow (L23, L35). Split by HYCOM's current speed at the start, the
+# undrogued dev windows need 0.183 m/s below 0.15 m/s rising to 0.519 above 1 m/s. Two
+# independent errors whose variances add fit that best: a floor a that does not care about
+# the current, and b x the current speed, sigma_u = sqrt(a^2 + (b s)^2), group-weighted loss
+# 0.051 against a straight line's 0.130. Fitted by `calibrate_sigma rule` at 4 h so every
+# speed bin is covered 90 %, on ladders 58974 (all 9,890 windows, 0.12-0.32 m/s) and 59359
+# (the 783 starting at >= 0.5 m/s, 0.36-0.9 m/s), job 59372: derived/sigma/rvc/rule.json.
+# a = 0.176 m/s (95 % CI 0.168-0.185), b = 0.407 (0.375-0.455). Capped at 1.66 m/s, the 95th
+# percentile of the fastest bin's starts: never extrapolated past the water measured. The
+# person's crosswind slide (0.035 m/s) is added in quadrature, as for the pooled value. The
+# speed is the model's own at the last known position at the call, what a forecaster has,
+# never the buoy's later speed.
+SIGMA_U_RULE = {"shape": "quadrature", "a": 0.1761, "b": 0.4069, "cap_speed_ms": 1.658,
+                "slide_ms": 0.0349}
+# The word that asks for it, in place of a number.
+BY_CURRENT = "by-current"
+
+
+def sigma_u_for_current(speed_ms, rule: dict = SIGMA_U_RULE):
+    """The random velocity's size for a cloud whose start sits in a current of this speed.
+
+    s = min(speed, cap); the core is sqrt(a^2 + (b s)^2) for the "quadrature" shape (a floor
+    of error and an error proportional to the current, independent, so their variances add)
+    or a + b s for "linear"; then sigma_u = sqrt(core^2 + slide^2), m/s per axis (D033).
+    Scalar or array.
+    """
+    speed = np.asarray(speed_ms, dtype=float)
+    if np.any(~np.isfinite(speed)) or np.any(speed < 0.0):
+        raise ValueError(f"a current speed must be a non-negative number of m/s, got {speed_ms}")
+    s = np.minimum(speed, rule["cap_speed_ms"])
+    if rule.get("shape", "linear") == "quadrature":
+        core = np.hypot(rule["a"], rule["b"] * s)
+    else:
+        core = rule["a"] + rule["b"] * s
+    out = np.hypot(core, rule["slide_ms"])
+    return float(out) if out.ndim == 0 else out
+
 
 def as_position(value, name: str = "position") -> np.ndarray:
     """One [lat, lon] pair in degrees, or a stack of them, as a float array."""
@@ -92,28 +137,39 @@ def velocity_memory(timestep: float, memory_time_s: float = MEMORY_TIME_S) -> fl
     return float(np.exp(-abs(timestep) / memory_time_s))
 
 
-def _check_sigma_u(sigma_u: float) -> float:
-    sigma_u = float(sigma_u)
-    if not np.isfinite(sigma_u) or sigma_u < 0.0:
-        raise ValueError(f"sigma_u must be a non-negative speed in m/s, got {sigma_u}")
-    return sigma_u
+def _check_sigma_u(sigma_u):
+    """One sigma_u as a float, or one per particle as an (N, 1) column for an (N, 2) error."""
+    if np.ndim(sigma_u) == 0:
+        sigma_u = float(sigma_u)
+        if not np.isfinite(sigma_u) or sigma_u < 0.0:
+            raise ValueError(f"sigma_u must be a non-negative speed in m/s, got {sigma_u}")
+        return sigma_u
+    values = np.asarray(sigma_u, dtype=float).reshape(-1, 1)
+    if not np.all(np.isfinite(values)) or np.any(values < 0.0):
+        raise ValueError("every particle's sigma_u must be a non-negative speed in m/s")
+    return values
 
 
-def start_velocity_error(shape, sigma_u: float = DEFAULT_SIGMA_U, rng=None) -> np.ndarray:
+def _is_zero(sigma_u) -> bool:
+    return bool(np.all(np.asarray(sigma_u) == 0.0))
+
+
+def start_velocity_error(shape, sigma_u=DEFAULT_SIGMA_U, rng=None) -> np.ndarray:
     """Each particle's velocity error at the start, [east, north] m/s, N(0, sigma_u^2) per axis.
 
     The process's own steady state, so a cloud released from one point (D026) spreads in a
     straight line from the first step, as the drifters do. Starting it at zero would grow the
     cloud too slowly through exactly the hours a search happens in. Zeros when sigma_u is 0.
+    sigma_u is one value, or one per particle (the rows of `shape`).
     """
     sigma_u = _check_sigma_u(sigma_u)
-    if sigma_u == 0.0:
+    if _is_zero(sigma_u):
         return np.zeros(shape)
     return sigma_u * np.random.default_rng(rng).standard_normal(shape)
 
 
 def evolve_velocity_error(velocity_error, timestep: float = INTEGRATION_STEP_SECONDS,
-                          sigma_u: float = DEFAULT_SIGMA_U,
+                          sigma_u=DEFAULT_SIGMA_U,
                           memory_time_s: float = MEMORY_TIME_S, rng=None) -> np.ndarray:
     """The velocity error one step later: a u + sqrt(1 - a^2) sigma_u Z, a = exp(-dt / T_L).
 
@@ -124,7 +180,7 @@ def evolve_velocity_error(velocity_error, timestep: float = INTEGRATION_STEP_SEC
     sigma_u = _check_sigma_u(sigma_u)
     a = velocity_memory(timestep, memory_time_s)
     u = np.asarray(velocity_error, dtype=float)
-    if sigma_u == 0.0:
+    if _is_zero(sigma_u):
         return a * u
     noise = np.random.default_rng(rng).standard_normal(u.shape)
     return a * u + np.sqrt(1.0 - a * a) * sigma_u * noise

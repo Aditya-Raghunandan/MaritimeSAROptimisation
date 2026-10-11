@@ -42,6 +42,20 @@ person's crosswind slide as a velocity, sigma_c / sqrt(T): over the hours of a s
 grow in a straight line, so their velocities add in quadrature as the random walk's kicks
 did.
 
+SIGMA_U BY THE CURRENT AT THE START (vault D033, 9 Oct; docs/ADR007.md). One pooled sigma_u
+covers 90 % of buoys on average, but not by water: the quiet-water cloud is too wide and the
+jet's far too narrow (L23, L35). So sigma_u is sized by HYCOM's current speed at the window's
+start, stage 1's `current0`, the one thing a forecaster knows when the call comes in. Never
+by the buoy's own later speed, which is the answer:
+
+    ladder --stage1 DIR --min-start-speed 0.5 --sigmas-u ...   the fast windows only, higher up
+    rule --ladder DIR [DIR ...] --stage1 DIR --fit FIT --hour 4 --out rule.json
+        per speed bin, sigma_u* where 90 % are inside the 90 % region; a weighted straight
+        line sigma_u = a + b x speed through them, resampled by group; capped at the fastest
+        bin with enough groups; the crosswind slide added in quadrature
+    ladder --stage1 DIR --sigma-u-rule rule.json ...   every window at its own rule value
+    rule ... --confirm DIR    adds the confirmation: coverage by speed bin and lead
+
 docs/sigma-calibration.md sets out the maths, the decisions and the results.
 """
 
@@ -78,6 +92,11 @@ ALPHAS = (LEEWAY_COEFFICIENT, 0.0)       # the engine, and D018's alpha-off cont
 # it, to a side nobody can know in advance.
 CROSSWIND_SLIDE = 0.0051
 STRATA_MS = (0.3, 1.0)                   # current speed at the start: < 0.3, 0.3-1, > 1 m/s
+# D033: the bins sigma_u is measured in, by HYCOM's current speed at the start (m/s), and the
+# fewest shared-water groups a bin needs to count. The edges put the 0.3 and 1.0 of STRATA_MS
+# on bin boundaries and split the slow water, where nearly all the windows are, finer.
+SPEED_BINS_MS = (0.0, 0.15, 0.3, 0.5, 0.75, 1.0, np.inf)
+MIN_GROUPS = 10
 BETA_HOURS = (6, 48)
 N_BOOT = 1000
 FORCING_ERRORS = (OutOfCoverageError, FileNotFoundError)   # ForcingGapError is one of the first
@@ -123,7 +142,7 @@ class SlidingForcing:
 # ---------------------------------------------------------------------------- running
 
 def run_batch(forcing, t0, lats, lons, hours: int, leeway: float, sigma: float, seed,
-              record_hours, sigma_u: float = 0.0, memory_time_s: float = MEMORY_TIME_S) -> dict:
+              record_hours, sigma_u=0.0, memory_time_s: float = MEMORY_TIME_S) -> dict:
     """One run of the engine from t0 for every particle given.
 
     Returns, at each recorded hour: positions (H, N, 2); the wind run, the integral of the
@@ -270,7 +289,7 @@ def score_rows(windows_rows, sigma, lead, pos, alive, truth_lat, truth_lon, trut
 def ladder(windows: Windows, open_forcing, batches, sigmas, particles: int, seed: int,
            leads=HORIZONS_H, truth=None, bandwidths=(1.0,), subsample=(), tag="real",
            log=print, model: str = RANDOM_WALK,
-           memory_time_s: float = MEMORY_TIME_S) -> pd.DataFrame:
+           memory_time_s: float = MEMORY_TIME_S, sigma_u_per_window=None) -> pd.DataFrame:
     """Stage 2: real ensembles at each sigma, scored against the buoy at each lead.
 
     The engine exactly as it will be used: alpha = 0.02, datum spread 0 (D026), 60 s
@@ -278,9 +297,20 @@ def ladder(windows: Windows, open_forcing, batches, sigmas, particles: int, seed
     with (lat, lon, ok) arrays shaped like windows.lat (the twin). With model = random
     velocity, `sigmas` are sigma_u in m/s and T_L is memory_time_s (D030); the rows keep
     the ladder value in `sigma` and say which model in `model`.
+
+    `sigma_u_per_window` (one value per window of `windows`) runs a single rung instead, every
+    window at its own sigma_u (D033's rule); each row's `sigma` is that window's value and
+    its `rung` is "rule".
     """
     if model not in (RANDOM_WALK, RANDOM_VELOCITY):
         raise ValueError(f"model must be {RANDOM_WALK!r} or {RANDOM_VELOCITY!r}, got {model!r}")
+    per_window = None
+    if sigma_u_per_window is not None:
+        per_window = np.asarray(sigma_u_per_window, dtype=float)
+        if model != RANDOM_VELOCITY or per_window.shape != (len(windows.table),):
+            raise ValueError("a sigma_u per window needs the random velocity and one value "
+                             "for every window")
+        sigmas = [float("nan")]
     tab = windows.table
     t_lat, t_lon, t_ok = truth if truth is not None else (windows.lat, windows.lon, windows.ok)
     out = []
@@ -295,6 +325,8 @@ def ladder(windows: Windows, open_forcing, batches, sigmas, particles: int, seed
                     seq = np.random.SeedSequence([seed, b, j])
                     walk = sigma if model == RANDOM_WALK else 0.0
                     flight = sigma if model == RANDOM_VELOCITY else 0.0
+                    if per_window is not None:
+                        flight = np.repeat(per_window[rows], particles)
                     m = run_batch(forcing, t0, lat0, lon0, max(leads), LEEWAY_COEFFICIENT,
                                   walk, seq, leads, sigma_u=flight, memory_time_s=memory_time_s)
                     pos = m["pos"].reshape(len(leads), len(rows), particles, 2)
@@ -303,7 +335,10 @@ def ladder(windows: Windows, open_forcing, batches, sigmas, particles: int, seed
                         for r in score_rows(rows, sigma, lead, pos[i], alive[i],
                                             t_lat[rows, lead], t_lon[rows, lead],
                                             t_ok[rows, lead], bandwidths, subsample):
-                            out.append({**r, "tag": tag, "model": model,
+                            extra = {}
+                            if per_window is not None:
+                                extra = {"sigma": float(per_window[r["w"]]), "rung": "rule"}
+                            out.append({**r, **extra, "tag": tag, "model": model,
                                         "memory_h": memory_time_s / 3600.0})
         except FORCING_ERRORS as error:
             log(f"batch {b} at {t0}: skipped, {type(error).__name__}: {error}")
@@ -637,6 +672,268 @@ def calibrate_sigma_star(ladder_rows, windows, tier="undrogued", n_boot=N_BOOT,
     return out
 
 
+# ---------------------------------------------------------------- sigma_u by the current (D033)
+
+def start_speeds(stage1_dir, n_windows: int) -> np.ndarray:
+    """HYCOM's current speed at each window's start, m/s (stage 1's current0); NaN if skipped."""
+    status = _read_all(stage1_dir, "status-*.parquet")
+    speed = np.full(int(n_windows), np.nan)
+    ok = status[status["status"] == "ok"].drop_duplicates("w")
+    speed[ok["w"].to_numpy(int)] = np.hypot(ok["current0_u"].astype(float),
+                                            ok["current0_v"].astype(float))
+    return speed
+
+
+def speed_bin(speed, edges=SPEED_BINS_MS) -> np.ndarray:
+    """Each speed's bin number, 0 to len(edges) - 2; -1 for NaN."""
+    speed = np.asarray(speed, float)
+    k = np.searchsorted(np.asarray(edges, float), speed, side="right") - 1
+    return np.where(np.isfinite(speed), np.clip(k, 0, len(edges) - 2), -1)
+
+
+def inside_table(ladder_rows: pd.DataFrame, windows: Windows, hour: int, tier="undrogued",
+                 level=LEVEL) -> pd.DataFrame:
+    """Windows x sigma_u: inside the level region at `hour` (1/0), NaN where not run.
+
+    Unlike `coverage_table` it keeps a window that was not run at every rung: the fast
+    windows were laddered higher than the rest (D033), so each bin uses the rungs its own
+    windows have.
+    """
+    q = ladder_rows[(ladder_rows["lead"] == hour) & np.isclose(ladder_rows["bandwidth"], 1.0)]
+    q = q[q["n"] == q["n"].max()]
+    tab = windows.table
+    q = q[tab["tier"].to_numpy()[q["w"].to_numpy(int)] == tier]
+    return (q.assign(inside=(q["rank"] <= level).astype(float))
+            .pivot_table(index="w", columns="sigma", values="inside", aggfunc="first"))
+
+
+def _bin_block(inside: pd.DataFrame, rows) -> pd.DataFrame:
+    """One bin's windows on the rungs (nearly) all of them were run at, complete rows only."""
+    block = inside.loc[rows]
+    cols = [c for c in block.columns if block[c].notna().mean() >= 0.95]
+    return block[cols].dropna()
+
+
+def _line(x, y, weight) -> tuple[float, float]:
+    """Weighted least squares y = a + b x."""
+    w = np.asarray(weight, float)
+    X = np.column_stack([np.ones_like(x), x]) * np.sqrt(w)[:, None]
+    coef, *_ = np.linalg.lstsq(X, np.asarray(y, float) * np.sqrt(w), rcond=None)
+    return float(coef[0]), float(coef[1])
+
+
+def _rung_sets(block: pd.DataFrame):
+    """Windows grouped by which rungs they were run at: (rows, log rungs, inside values)."""
+    mask = block.notna().to_numpy()
+    values = block.to_numpy()
+    rungs = np.log(block.columns.to_numpy(float))
+    sets = {}
+    for i, m in enumerate(map(tuple, mask)):
+        sets.setdefault(m, []).append(i)
+    return [(np.array(rows), rungs[np.array(m)], values[np.array(rows)][:, np.array(m)])
+            for m, rows in sets.items() if any(m)]
+
+
+def _inside_at(sets, n: int, log_sigma) -> np.ndarray:
+    """Each window's chance of being inside at its own sigma: its ladder, interpolated in log
+    sigma between the two rungs either side (the end rung's value beyond the ladder)."""
+    out = np.empty(n)
+    for rows, lc, vals in sets:
+        if len(lc) == 1:
+            out[rows] = vals[:, 0]
+            continue
+        x = np.clip(log_sigma[rows], lc[0], lc[-1])
+        j = np.clip(np.searchsorted(lc, x, side="right") - 1, 0, len(lc) - 2)
+        f = (x - lc[j]) / (lc[j + 1] - lc[j])
+        r = np.arange(len(rows))
+        out[rows] = vals[r, j] * (1.0 - f) + vals[r, j + 1] * f
+    return out
+
+
+SHAPES = ("quadrature", "linear")
+
+
+def shape_core(shape: str, a, b, speed):
+    """The rule's core before the slide: a + b s, or sqrt(a^2 + (b s)^2).
+
+    quadrature: a floor of model error that does not care about the current, and an error
+    proportional to the current, independent of each other, so their variances add (as the
+    crosswind slide's already does). Flat in slow water, then rising with slope b.
+    """
+    if shape == "linear":
+        return a + b * speed
+    if shape == "quadrature":
+        return np.hypot(a, b * speed)
+    raise ValueError(f"shape must be one of {SHAPES}, got {shape!r}")
+
+
+def fit_speed_rule(ladder_rows: pd.DataFrame, windows: Windows, speeds, hour: int = 4,
+                   edges=SPEED_BINS_MS, min_groups: int = MIN_GROUPS, slide: dict | None = None,
+                   n_boot: int = N_BOOT, seed: int = 0, shapes=SHAPES) -> dict:
+    """sigma_u as a function of the start speed, chosen so every speed bin is covered 90 % (D033).
+
+    Two steps, both resampled by whole shared-water groups for their intervals:
+
+      1. PER BIN, what one sigma_u would do: sigma_u*, where the share of buoys inside the
+         90 % region crosses 90 % (`crossing`). It shows the shape, and seeds the fit. A bin
+         counts only with at least `min_groups` groups.
+      2. EACH SHAPE, fitted directly (`shape_core`, two numbers a and b). Every window gets
+         its own sigma_u = core(a, b, min(speed, cap)), its chance of being inside read off
+         its own ladder between the rungs either side, and (a, b) minimise sum over bins of
+         groups x (coverage - 90 %)^2: the confirmation's own test made the objective. The
+         shape with the smaller loss is `chosen`; both are reported. On windows planted with
+         a known line (9 Oct) the fit gives it back inside its 95 % interval.
+
+    The cap is the 95th percentile of the start speeds in the fastest bin used: the rule is
+    never extrapolated into faster water than the buoys measured, and faster windows are
+    fitted at the cap too, as the engine will run them.
+    """
+    from scipy.optimize import minimize
+
+    inside = inside_table(ladder_rows, windows, hour)
+    tab = windows.table
+    w_all = inside.index.to_numpy(int)
+    groups = tab["group"].to_numpy()[w_all]
+    sp = np.asarray(speeds, float)[w_all]
+    bins = speed_bin(sp, edges)
+    boot_w = boot_weights(groups, n_boot, seed)                 # (n_boot, windows)
+    out_bins, xs, stars, star_draws, used = [], [], [], [], []
+    for k in range(len(edges) - 1):
+        rows = np.flatnonzero(bins == k)
+        entry = {"from_ms": float(edges[k]), "to_ms": float(edges[k + 1]),
+                 "windows": int(len(rows)), "groups": int(len(set(groups[rows]))), "used": False}
+        if len(rows):
+            entry["median_speed_ms"] = float(np.median(sp[rows]))
+        if entry["groups"] >= min_groups:
+            block = _bin_block(inside, w_all[rows])
+            sig = block.columns.to_numpy(float)
+            idx = np.searchsorted(w_all, block.index.to_numpy(int))
+            cover = block.to_numpy().mean(axis=0)
+            star = crossing(sig, cover, LEVEL)
+            wb = boot_w[:, idx]
+            boot = np.array([crossing(sig, c, LEVEL)
+                             for c in (wb @ block.to_numpy()) / wb.sum(axis=1)[:, None]])
+            entry.update({"windows_scored": int(len(block)), "rungs": sig.tolist(),
+                          "coverage": cover.round(4).tolist(), "sigma_u_star": star,
+                          "ci95": np.nanpercentile(boot, [2.5, 97.5]).tolist()
+                          if np.isfinite(boot).any() else [None, None]})
+            if np.isfinite(star) and np.isfinite(boot).mean() > 0.95:
+                entry["used"] = True
+                used.append(k)
+                xs.append(entry["median_speed_ms"])
+                stars.append(star)
+                star_draws.append(boot)
+        out_bins.append(entry)
+    if len(used) < 2:
+        raise ValueError("fewer than two speed bins have a sigma_u*: no line to fit")
+    xs, stars = np.array(xs), np.array(stars)
+    var = np.nanvar(np.array(star_draws), axis=1)
+    a0, b0 = _line(xs, stars, 1.0 / np.maximum(var, 1e-12))
+
+    in_fit = np.isin(bins, used)
+    cap = float(np.percentile(sp[bins == used[-1]], 95))
+    block = inside.iloc[np.flatnonzero(in_fit)]
+    sets = _rung_sets(block)
+    n_fit = len(block)
+    fit_bins = bins[in_fit]
+    s_fit = np.minimum(sp[in_fit], cap)
+    g_bin = np.array([out_bins[k]["groups"] for k in used], float)
+    members = [fit_bins == k for k in used]
+    boot_fit = boot_w[:, np.flatnonzero(in_fit)]
+
+    def coverage(shape, params, weight):
+        sigma = shape_core(shape, params[0], params[1], s_fit)
+        if np.any(sigma <= 0.0) or params[1] < 0.0:
+            return None
+        v = _inside_at(sets, n_fit, np.log(sigma))
+        return np.array([np.sum(weight[m] * v[m]) / np.sum(weight[m]) for m in members])
+
+    def loss(params, shape, weight):
+        c = coverage(shape, params, weight)
+        return 1e6 if c is None else float(np.sum(g_bin * (c - LEVEL) ** 2))
+
+    def solve(shape, weight, start):
+        r = minimize(loss, start, args=(shape, weight), method="Nelder-Mead",
+                     options={"xatol": 1e-5, "fatol": 1e-10, "maxiter": 4000})
+        return r.x, float(r.fun)
+
+    ones = np.ones(n_fit)
+    fits = {}
+    for shape in shapes:
+        start = [a0, b0] if shape == "linear" else [float(stars[0]), max(b0, 0.1) * 1.5]
+        (a, b), point_loss = solve(shape, ones, start)
+        cov = coverage(shape, (a, b), ones)
+        draws = np.array([solve(shape, wt, [a, b])[0] for wt in boot_fit
+                          if all(wt[m].sum() > 0 for m in members)])
+        fits[shape] = {"a": float(a), "b": float(b),
+                       "a_ci95": np.percentile(draws[:, 0], [2.5, 97.5]).tolist(),
+                       "b_ci95": np.percentile(draws[:, 1], [2.5, 97.5]).tolist(),
+                       "loss": point_loss,
+                       "coverage_under_rule": {f"{out_bins[k]['from_ms']:g}-"
+                                               f"{out_bins[k]['to_ms']:g} m/s": float(c)
+                                               for k, c in zip(used, cov)},
+                       "sigma_u_at_bins": {f"{x:.3f} m/s": float(shape_core(shape, a, b,
+                                                                            min(x, cap)))
+                                           for x in xs}}
+    chosen = min(fits, key=lambda k: fits[k]["loss"])
+    out = {"hour": int(hour), "level": LEVEL, "model": RANDOM_VELOCITY,
+           "speed": "HYCOM surface current at the window's start (stage 1 current0), m/s",
+           "method": "each window at core(a, b, min(speed, cap)); (a, b) minimise sum over "
+                     "bins of groups x (coverage - 0.9)^2; coverage read off each window's "
+                     "ladder; the shape with the smaller loss is chosen",
+           "bins": out_bins,
+           "fits": fits,
+           "chosen": chosen,
+           "line": {"shape": chosen, "a": fits[chosen]["a"], "b": fits[chosen]["b"],
+                    "a_ci95": fits[chosen]["a_ci95"], "b_ci95": fits[chosen]["b_ci95"],
+                    "cap_speed_ms": cap,
+                    "through_the_bins": {"shape": "linear", "a": a0, "b": b0}},
+           "windows_in_fit": int(n_fit), "boot": int(n_boot)}
+    if slide is not None:
+        out["slide"] = slide
+        out["formula"] = ("sigma_u = sqrt(core(a, b, min(speed, cap))^2 + slide^2); "
+                          "core = sqrt(a^2 + (b s)^2) or a + b s")
+        out["examples"] = {f"{v:g} m/s": float(rule_sigma_u(out, v))
+                           for v in (0.0, 0.1, 0.3, 0.5, 1.0, 1.5, 2.0)}
+    return out
+
+
+def rule_sigma_u(rule: dict, speed) -> np.ndarray:
+    """The rule written by `fit_speed_rule` at these speeds: what the engine will use."""
+    line = rule["line"]
+    speed = np.clip(np.asarray(speed, float), 0.0, line["cap_speed_ms"])
+    core = shape_core(line.get("shape", "linear"), line["a"], line["b"], speed)
+    slide = rule.get("slide", {}).get("value", 0.0)
+    return np.hypot(core, slide)
+
+
+def rule_confirmation(confirm_rows: pd.DataFrame, windows: Windows, speeds,
+                      edges=SPEED_BINS_MS, tier="undrogued") -> dict:
+    """Coverage of the 90 % region by speed bin and lead, every window at its rule sigma_u."""
+    q = confirm_rows[np.isclose(confirm_rows["bandwidth"], 1.0)]
+    q = q[q["n"] == q["n"].max()]
+    tab = windows.table
+    q = q[tab["tier"].to_numpy()[q["w"].to_numpy(int)] == tier]
+    q = q.assign(bin=speed_bin(np.asarray(speeds, float)[q["w"].to_numpy(int)], edges),
+                 group=tab["group"].to_numpy()[q["w"].to_numpy(int)])
+    out = {"all": {}, "by_bin": {}}
+    for lead, g in q.groupby("lead"):
+        out["all"][int(lead)] = {"windows": int(len(g)),
+                                 "coverage90": float(np.mean(g["rank"] <= LEVEL)),
+                                 "median_area90_km2": float(g["area90_km2"].median())}
+    for k, gb in q.groupby("bin"):
+        if k < 0:
+            continue
+        name = f"{edges[k]:g}-{edges[k + 1]:g} m/s"
+        out["by_bin"][name] = {
+            "groups": int(gb["group"].nunique()),
+            **{int(lead): {"windows": int(len(g)), "coverage90": float(np.mean(g["rank"] <= LEVEL)),
+                           "sigma_u": float(g["sigma"].median()),
+                           "median_area90_km2": float(g["area90_km2"].median())}
+               for lead, g in gb.groupby("lead")}}
+    return out
+
+
 def reliability(rows: pd.DataFrame, windows: Windows, levels=LEVELS) -> dict:
     """Coverage at every level, lead and tier, from the rank (inside L iff rank <= L)."""
     tab = windows.table
@@ -689,15 +986,30 @@ def _cmd_fit(args) -> None:
 def _cmd_ladder(args) -> None:
     w = _load_windows(args)
     tiers = set(args.tiers)
-    keep = np.flatnonzero(w.table["tier"].isin(tiers).to_numpy())
+    chosen = w.table["tier"].isin(tiers).to_numpy().copy()
+    speeds = None
+    if args.min_start_speed is not None or args.sigma_u_rule:
+        if not args.stage1:
+            raise SystemExit("--min-start-speed and --sigma-u-rule need --stage1 (the start "
+                             "current of every window)")
+        speeds = start_speeds(args.stage1, len(w.table))
+        if args.min_start_speed is not None:
+            chosen &= speeds >= args.min_start_speed
+        if args.sigma_u_rule:
+            chosen &= np.isfinite(speeds)
+    keep = np.flatnonzero(chosen)
     w = w.subset(keep)
     t = clock.perf_counter()
     batches = task_batches(w, args.task, args.tasks, args.days, args.seed)
     model = RANDOM_WALK if args.sigmas else RANDOM_VELOCITY
-    rows = ladder(w, gridded(args.data), batches, args.sigmas or args.sigmas_u, args.particles,
-                  args.seed, tuple(args.leads), bandwidths=tuple(args.bandwidths),
-                  subsample=tuple(args.subsample), model=model,
-                  memory_time_s=args.memory_h * 3600.0)
+    per_window = None
+    if args.sigma_u_rule:
+        per_window = rule_sigma_u(json.loads(Path(args.sigma_u_rule).read_text()), speeds[keep])
+    rows = ladder(w, gridded(args.data), batches, args.sigmas or args.sigmas_u or [],
+                  args.particles, args.seed, tuple(args.leads),
+                  bandwidths=tuple(args.bandwidths), subsample=tuple(args.subsample),
+                  model=model, memory_time_s=args.memory_h * 3600.0,
+                  sigma_u_per_window=per_window)
     if len(rows):
         rows["w"] = keep[rows["w"].to_numpy()]
     out = Path(args.out)
@@ -807,6 +1119,33 @@ def slide_for(sigma_c: dict, model: str, hour: int) -> dict:
             "ci95": [float(v / root_t) for v in sigma_c["ci95"]]}
 
 
+def _cmd_rule(args) -> None:
+    w = _load_windows(args)
+    lad = pd.concat([_read_all(d, "ladder-*.parquet") for d in args.ladder], ignore_index=True)
+    if ladder_model(lad) != RANDOM_VELOCITY:
+        raise SystemExit("the rule is fitted on random-velocity ladders (--sigmas-u)")
+    speeds = start_speeds(args.stage1, len(w.table))
+    slide = None
+    if args.fit:
+        fit_result = json.loads(Path(args.fit).read_text())
+        if int(fit_result.get("hour", 24)) != args.hour:
+            raise SystemExit(f"{args.fit} was not fitted at {args.hour} h")
+        slide = slide_for(fit_result["sigma_c"]["crosswind_axis"], RANDOM_VELOCITY, args.hour)
+    out = fit_speed_rule(lad, w, speeds, args.hour, slide=slide, n_boot=args.boot)
+    out["ladders"] = [str(d) for d in args.ladder]
+    if args.confirm:
+        conf = _read_all(args.confirm, "ladder-*.parquet")
+        out["confirmation"] = rule_confirmation(conf, w, speeds)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(json.dumps(out, indent=2, default=float))
+    print(json.dumps({k: out[k] for k in ("line", "slide", "examples") if k in out}, indent=1,
+                     default=float))
+    for b in out["bins"]:
+        print(f"{b['from_ms']:g}-{b['to_ms']:g} m/s: {b['windows']} windows, {b['groups']} "
+              f"groups, sigma_u* {b.get('sigma_u_star', float('nan')):.3f} "
+              f"{b.get('ci95')} {'used' if b['used'] else ''}")
+
+
 def _cmd_calibrate(args) -> None:
     w = _load_windows(args)
     fit_result = json.loads(Path(args.fit).read_text())
@@ -893,6 +1232,11 @@ def main(argv=None) -> None:
                        help="random-walk sigmas, m/s^0.5 (D028)")
     rungs.add_argument("--sigmas-u", type=float, nargs="+",
                        help="random-velocity sigma_u values, m/s per axis (D030)")
+    rungs.add_argument("--sigma-u-rule",
+                       help="rule.json: every window at its own sigma_u from the rule (D033)")
+    lad.add_argument("--stage1", help="stage 1's folder: the current at each window's start")
+    lad.add_argument("--min-start-speed", type=float,
+                     help="only windows whose start current is at least this, m/s (D033)")
     lad.add_argument("--memory-h", type=float, default=MEMORY_TIME_S / 3600.0,
                      help=f"T_L for --sigmas-u, hours, default {MEMORY_TIME_S / 3600.0:g}")
     lad.add_argument("--particles", type=int, default=1000)
@@ -913,6 +1257,16 @@ def main(argv=None) -> None:
     tw.add_argument("--seed", type=int, default=20261003)
     horizon(tw)
     tw.set_defaults(func=_cmd_twin)
+
+    r = sub.add_parser("rule", help="D033: sigma_u = a + b x start current, from ladders")
+    common(r, run=False)
+    r.add_argument("--ladder", nargs="+", required=True, help="random-velocity ladder folders")
+    r.add_argument("--stage1", required=True)
+    r.add_argument("--fit", help="fit.json at --hour, for the crosswind slide")
+    r.add_argument("--confirm", help="a ladder run with --sigma-u-rule, to confirm the rule")
+    r.add_argument("--boot", type=int, default=N_BOOT)
+    horizon(r)
+    r.set_defaults(func=_cmd_rule)
 
     c = sub.add_parser("calibrate", help="sigma*, sigma_final, the twin and the checks")
     common(c, run=False)

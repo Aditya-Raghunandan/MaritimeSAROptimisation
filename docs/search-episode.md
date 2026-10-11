@@ -15,6 +15,13 @@ which drifts with the current. Every particle it comes within 92.6 m of loses it
 tested by closest approach while both move. The weight removed, summed, is **POS**, the
 probability the search found the target.
 
+**It cannot turn on the spot** ([ADR006](ADR006.md), D032). The helicopter turns at most
+7.0 deg/s, a 30° bank at 90 kt, on a 379 m radius. A heading is flown as that turn and then
+straight; a pattern is flown by the L1 autopilot; every waypoint carries the heading there,
+and the referee refuses a path that turns faster or changes speed. Everyone arrives pointing
+along the drift. `turn_rate_deg_s=float("inf")` (`--turn-rate inf`) is the old referee,
+which turned at once, kept bit for bit as a comparison.
+
 ## Run one
 
 ```bash
@@ -58,31 +65,39 @@ from sar.search.patterns import expanding_square
 from sar.search.scenario import scenario_row, scenario_search
 
 setup = scenario_search(scenario_row(csv, "S01"), "/home/26p67/data", 2 * 3600, 10_000)
-episode = SearchEpisode(setup.window, setup.marker, target=setup.target)
+episode = search_episode(setup)   # arriving along the drift, turning at 7.0 deg/s
 metrics = run(pattern_policy(expanding_square(first_bearing_deg=setup.drift_bearing_deg)), episode)
 ```
 
-A **searcher** is any function that takes the episode and returns a heading in degrees, or a
-`Waypoints` for the coming minute. It can read:
+A **searcher** is any function that takes the episode and returns a heading in degrees, a
+`Turn(deg)` (right positive), or a `Waypoints` for the coming minute, with the heading at
+every waypoint. It can read:
 - `episode.position` (the helicopter's lat, lon on the ground) and `episode.offset` (metres
   about the marker);
 - `episode.particles()` and `episode.weight` (read-only arrays) and `episode.remaining`;
-- `episode.t_s`, `episode.k` and `episode.done`.
+- `episode.t_s`, `episode.k` and `episode.done`;
+- `episode.heading_deg`, which way it points now, and `episode.turn_rate_deg_s`.
 
 `run(policy, episode, decide_every=n)` asks a heading searcher every n minutes and holds its
 heading in between.
 
 **For a Gymnasium environment:**
 - `reset` builds a `SearchEpisode`.
-- `step(action)` calls `episode.step(heading)` and returns what it removed as the reward.
+- `step(action)` calls `episode.turn(deg)`, the action being a turn command (D032), and
+  returns what it removed as the reward.
 - The observation is built from `episode.particles()`, `episode.weight` and the helicopter's
-  state.
+  state, which now includes `episode.heading_deg`: with turns limited, the best move depends
+  on which way it points.
 
 Nothing in `sar.search` imports Gymnasium, and a test holds that.
 
 A **flight record** for `replay_policy` is JSON, in one of two forms:
 - `{"headings_deg": [...]}`, one heading per minute;
 - `{"t_s": [0, 12.5, ...], "heading_deg": [...]}`, each heading from that second on.
+
+The headings are commands, turned to at the turn rate. A record may carry
+`"turn_rate_deg_s"` (null for a helicopter that turned at once), and one flown at another
+rate is refused.
 
 It replays headings, not positions, because a ground path already contains the current.
 

@@ -32,6 +32,17 @@ describe('the board', () => {
     expect(top(load(s), 'currents').map((e) => e.name)).toEqual(['c']);
   });
 
+  it('shows one line per name, with that name\'s highest score', () => {
+    const list = [
+      { name: 'Aditya', mode: 'map', score: 406, when: '2026-10-09T20:00:00Z' },
+      { name: 'aditya ', mode: 'map', score: 437, when: '2026-10-09T20:05:00Z' },
+      { name: 'Sune', mode: 'map', score: 420, when: '2026-10-09T20:06:00Z' },
+      { name: 'Aditya', mode: 'currents', score: 300, when: '2026-10-09T20:07:00Z' },
+    ];
+    expect(top(list, 'map').map((e) => [e.name, e.score])).toEqual([['aditya ', 437], ['Sune', 420]]);
+    expect(top(list, 'currents')).toHaveLength(1);
+  });
+
   it('survives storage that refuses or holds rubbish', () => {
     const broken = { getItem: () => '{not json', setItem: () => { throw new Error('quota'); } };
     expect(load(broken)).toEqual([]);

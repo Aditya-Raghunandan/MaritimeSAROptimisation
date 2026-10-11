@@ -602,3 +602,27 @@ enters the repo.
   the model's $\alpha$ stays 0.02.
 - **A time-dependent $\sigma$, or a "random flight" kick with memory**, which would fit
   $\beta \ne 1$ properly. That would change D009 and is future work.
+
+
+## By the current at the start (D033, 9 Oct)
+
+One pooled σ_u covered 90 % of buoys on average and not by water. Split by HYCOM's current
+speed at each window's start (stage 1's `current0`), the dev windows need 0.183 m/s below
+0.15 m/s, rising to 0.519 m/s above 1 m/s. The engine now sizes σ_u by that speed:
+σ_u = √(0.176² + (0.407 s)²) plus the crosswind slide, capped at 1.66 m/s. Confirmed at
+89.6–93.2 % by speed bin at 4 h.
+
+```bash
+D=/home/26p67/data/derived/sigma
+SIGMA_PROCS=4 sbatch --array=0-11 --cpus-per-task=4 scripts/calibrate_sigma.sbatch \
+    ladder --windows $D/windows --stage1 $D/stage1 --min-start-speed 0.5 \
+    --sigmas-u 0.36 0.42 0.5 0.6 0.75 0.9 --leads 1 2 3 4 6 --seed 20261009 --out $D/rvc/ladder-fast
+sbatch scripts/calibrate_sigma.sbatch rule --windows $D/windows \
+    --ladder $D/rv/ladder $D/rvc/ladder-fast --stage1 $D/stage1 --fit $D/h4/fit.json \
+    --hour 4 --out $D/rvc/rule.json
+SIGMA_PROCS=4 sbatch --array=0-11 --cpus-per-task=4 scripts/calibrate_sigma.sbatch \
+    ladder --windows $D/windows --stage1 $D/stage1 --sigma-u-rule $D/rvc/rule.json \
+    --leads 1 2 3 4 6 12 24 --seed 20261010 --out $D/rvc/confirm
+```
+
+The method, the tables and the choice of shape are in [ADR007](ADR007.md).

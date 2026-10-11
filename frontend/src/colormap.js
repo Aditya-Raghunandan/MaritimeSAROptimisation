@@ -59,8 +59,33 @@ export const MAGMA = [
   [229, 80, 100], [251, 135, 97], [254, 194, 135], [252, 253, 191],
 ];
 
+/*
+ * TWO MORE FOR THE PROBABILITY MAP, WHICH A VISITOR MAY CHOOSE BETWEEN.
+ *
+ * INFERNO ("heat") is magma's sibling with a hotter top: black through red and orange to
+ * pale yellow, so the likeliest sea glows like a heat map. It never shares a map with the
+ * current's magma -- the game shows either the probability map or the currents, not both.
+ * ICE is one hue, deep navy to near-white blue, for anyone who finds the multi-hue ramps
+ * busy. Both rise strictly in OKLab lightness, checked like the other two:
+ *
+ *   inferno  0.048 0.229 0.343 0.441 0.540 0.641 0.746 0.857 0.978
+ *   ice      0.191 0.290 0.403 0.516 0.628 0.741 0.852 0.956
+ */
+
+/** Inferno anchors, evenly spaced over [0, 1]. The probability map's "heat". */
+export const INFERNO = [
+  [0, 0, 4], [31, 12, 72], [85, 15, 109], [136, 34, 106], [187, 55, 84],
+  [228, 90, 49], [249, 142, 9], [245, 204, 47], [252, 255, 164],
+];
+
+/** A one-hue blue ramp, evenly spaced over [0, 1]. The probability map's "ice". */
+export const ICE = [
+  [4, 18, 48], [10, 40, 92], [18, 70, 140], [30, 105, 180], [58, 142, 212],
+  [104, 180, 232], [165, 214, 245], [228, 243, 252],
+];
+
 /** Named ramps, so a layer can be handed one by name from its manifest. */
-export const RAMPS = { viridis: VIRIDIS, magma: MAGMA };
+export const RAMPS = { viridis: VIRIDIS, magma: MAGMA, inferno: INFERNO, ice: ICE };
 
 /**
  * Colour for a normalised value in [0, 1], as [r, g, b].

@@ -73,6 +73,43 @@ ON_SCENE_WINDOW_S = 45.0 * 60.0
 # D009 and ADR002: the integration step, and the search agent's decision interval.
 STEP_S = 60.0
 
+# HOW FAST IT CAN TURN (D032, docs/ADR006.md). At search speed a helicopter turns as an
+# aeroplane does: it banks, and the tilted lift curves its path. A level, balanced turn at
+# bank phi and speed V turns at omega = g tan(phi) / V on a radius r = V / omega (the
+# coordinated-turn relation; e.g. Anderson, Introduction to Flight, "turning flight").
+#
+# The bank is 30 degrees: the most the FAA's procedures use for a routine turn (AIM ch. 5
+# sec. 3, Holding, "Bank Angle": "3 degrees per second, or 30 degree bank angle, or 25
+# degree bank angle, provided a flight director system is used"), and the limit autopilot
+# flight directors hold a turn to (e.g. Garmin, roll hold: "Limits bank angle to 30°").
+# At 90 kt that is 7.0 deg/s on a 379 m radius. The gentler instrument-flight norm, the
+# standard rate of 3 deg/s (FAA Helicopter Flying Handbook ch. 12; 14 degrees of bank at
+# 90 kt, a 884 m radius), is the other side of the bracket and a sensitivity run, as is a
+# helicopter that turns instantly ("as the manual draws it", the pre-D032 referee).
+# Nothing published gives an MH-60T's bank in a search; 30 degrees is the procedural cap.
+STANDARD_GRAVITY_MS2 = 9.80665
+MAX_BANK_DEG = 30.0
+STANDARD_RATE_DEG_S = 3.0
+
+
+def turn_rate_deg_s(bank_deg: float = MAX_BANK_DEG, speed_ms: float = SEARCH_SPEED_MS) -> float:
+    """The rate of a level, coordinated turn: omega = g tan(bank) / V, degrees a second."""
+    if not 0.0 < bank_deg < 90.0 or speed_ms <= 0:
+        raise ValueError(f"bank must lie strictly between 0 and 90 degrees and speed be "
+                         f"positive, got {bank_deg} and {speed_ms}")
+    return float(np.degrees(STANDARD_GRAVITY_MS2 * np.tan(np.radians(bank_deg)) / speed_ms))
+
+
+def turn_radius_m(rate_deg_s: float, speed_ms: float = SEARCH_SPEED_MS) -> float:
+    """The radius flown at a turn rate: r = V / omega."""
+    if not rate_deg_s > 0 or speed_ms <= 0:
+        raise ValueError(f"turn rate and speed must be positive, got {rate_deg_s} and {speed_ms}")
+    return float(speed_ms / np.radians(rate_deg_s))
+
+
+TURN_RATE_DEG_S = turn_rate_deg_s()                  # 7.007 deg/s at 30 degrees and 90 kt
+TURN_RADIUS_M = turn_radius_m(TURN_RATE_DEG_S)       # 378.6 m
+
 SOURCES = {
     "sweep_width_m": "Addendum App. H Tables H-15/H-16 p. H-44: PIW, helicopter, 0.1 NM",
     "search_speed_ms": "Addendum Table H-9 p. H-40: 90 kt, speed correction 1.0",
@@ -82,6 +119,11 @@ SOURCES = {
     "launch_delay_s": "Addendum p. PPO-7: B-0 readiness, ready within 30 minutes",
     "on_scene_window_s": "project requirement R7a/R7b (45 minutes)",
     "step_s": "D009 / ADR002 (60 s)",
+    "max_bank_deg": "FAA AIM ch. 5 sec. 3, Holding, Bank Angle: 30 degrees; autopilot "
+                    "flight directors limit a turn to 30 degrees (D032, ADR006)",
+    "turn_rate_deg_s": "omega = g tan(30 deg) / 90 kt, the coordinated-turn relation",
+    "turn_radius_m": "r = V / omega",
+    "standard_rate_deg_s": "FAA Helicopter Flying Handbook ch. 12: 360 degrees in 2 minutes",
 }
 
 
@@ -174,6 +216,10 @@ def constants() -> dict:
         "launch_delay_s": LAUNCH_DELAY_S,
         "on_scene_window_s": ON_SCENE_WINDOW_S,
         "step_s": STEP_S,
+        "max_bank_deg": MAX_BANK_DEG,
+        "turn_rate_deg_s": TURN_RATE_DEG_S,
+        "turn_radius_m": TURN_RADIUS_M,
+        "standard_rate_deg_s": STANDARD_RATE_DEG_S,
     }
 
 
@@ -190,6 +236,8 @@ def _cli(argv=None) -> dict:
             "area_swept_km2": length * SWEEP_WIDTH_M / 1e6,
             "expanding_square_spacing_m": expanding_square_spacing_m(),
             "sector_radius_m": sector_radius_m(),
+            "seconds_to_turn_90_deg": 90.0 / TURN_RATE_DEG_S,
+            "seconds_to_turn_180_deg": 180.0 / TURN_RATE_DEG_S,
         },
     }
 

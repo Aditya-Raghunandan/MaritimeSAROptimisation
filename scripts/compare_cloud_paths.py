@@ -63,9 +63,12 @@ def compare(n: int, seeds: int, arrival_s: float, sigma: float) -> dict:
     for kind in KINDS:
         out[kind] = {}
         for name, pattern in patterns.items():
+            # The helicopter that turns at once, as when these numbers were recorded (D028,
+            # 4 Oct): the comparison is of clouds, and D032 came later.
             pos = [run(pattern_policy(pattern),
                        SearchEpisode(cloud(kind, n, sigma, arrival_s,
-                                           np.random.default_rng(seed)), marker))["pos"]
+                                           np.random.default_rng(seed)), marker,
+                                     turn_rate_deg_s=float("inf")))["pos"]
                    for seed in range(1, seeds + 1)]
             out[kind][name] = {"mean_pos": float(np.mean(pos)), "pos": pos}
     return {"particles": n, "seeds": seeds, "arrival_s": arrival_s, "sigma": sigma,

@@ -21,6 +21,11 @@ What it records:
     drift      one point drifted by `sar.search.datum.drift_track` under constant forcing,
                including a ragged duration that ends with a short step
     transit    base-to-datum distances and the time to arrive
+    steer      turns flown by `sar.search.kinematics.steer` (D032): the chord ends and the
+               heading at each
+    flown      the first 10 minutes of each pattern case flown by the L1 autopilot
+               (`sar.search.kinematics.follow`), every tick, and the chords one minute of
+               it is swept as
 
 Longitude is written in the frontend's DISPLAY convention, -180 to 180.
 
@@ -37,6 +42,7 @@ import numpy as np
 
 from sar.pipeline.forcing import ConstantForcing
 from sar.search.datum import drift_track, marker_track
+from sar.search.kinematics import AUTOPILOT_DT_S, follow, steer
 from sar.search.patterns import (
     expanding_square,
     on_ground,
@@ -48,6 +54,7 @@ from sar.search.platform import (
     NM_M,
     SEARCH_SPEED_MS,
     SWEEP_WIDTH_M,
+    TURN_RATE_DEG_S,
     constants,
     great_circle_m,
     search_effort_m2,
@@ -98,6 +105,47 @@ def pattern_case(kind: str, args: dict) -> dict:
                     "heading_deg": p.heading_at(t).tolist()},
         "length_m": p.length_m,
     }
+
+
+STEER_CASES = [  # (east, north, heading, turn, duration, turn rate)
+    (0.0, 0.0, 0.0, 90.0, 60.0, TURN_RATE_DEG_S),
+    (120.0, -40.0, 350.0, -175.0, 60.0, TURN_RATE_DEG_S),
+    (0.0, 0.0, 10.0, 500.0, 60.0, TURN_RATE_DEG_S),
+    (5.0, 5.0, 270.0, 13.0, 5.0, TURN_RATE_DEG_S),
+    (0.0, 0.0, 45.0, 0.0, 60.0, TURN_RATE_DEG_S),
+    (0.0, 0.0, 200.0, 180.0, 60.0, 3.0),
+    (0.0, 0.0, 30.0, -60.0, 60.0, float("inf")),
+]
+FLOWN_S = 600.0
+FLOWN_EVERY = 10        # every tenth tick is recorded; the browser flies them all
+
+
+def steer_case(e, n, h, turn, duration, rate) -> dict:
+    p = steer(e, n, h, turn, duration, V, rate)
+    return {"args": {"east_m": e, "north_m": n, "heading_deg": h, "turn_deg": turn,
+                     "duration_s": duration, "speed_ms": V,
+                     "turn_rate_deg_s": None if np.isinf(rate) else rate},
+            "t_s": p.t_s.tolist(), "east_m": p.east_m.tolist(), "north_m": p.north_m.tolist(),
+            "heading_deg": p.heading_deg.tolist()}
+
+
+def flown_case(kind: str, args: dict) -> dict:
+    p = BUILDERS[kind](speed_ms=V, **{**args, "duration_s": max(args["duration_s"], 2 * FLOWN_S)})
+    heading = args["first_bearing_deg"]
+    f = follow(p.east_m, p.north_m, heading, FLOWN_S, V, TURN_RATE_DEG_S)
+    chords = f.path(60.0, 120.0)
+    return {"kind": kind, "args": {**args, "duration_s": max(args["duration_s"], 2 * FLOWN_S),
+                                   "speed_ms": V},
+            "heading_deg": heading, "duration_s": FLOWN_S, "dt_s": AUTOPILOT_DT_S,
+            "turn_rate_deg_s": TURN_RATE_DEG_S,
+            "every": FLOWN_EVERY,
+            "t_s": f.t_s[::FLOWN_EVERY].tolist(), "east_m": f.east_m[::FLOWN_EVERY].tolist(),
+            "north_m": f.north_m[::FLOWN_EVERY].tolist(),
+            "heading": f.heading_deg[::FLOWN_EVERY].tolist(),
+            "rate_deg_s": f.rate_deg_s[::FLOWN_EVERY].tolist(),
+            "minute_2": {"t_s": chords.t_s.tolist(), "east_m": chords.east_m.tolist(),
+                         "north_m": chords.north_m.tolist(),
+                         "heading_deg": chords.heading_deg.tolist()}}
 
 
 def on_ground_case(lat: float, lon: float) -> dict:
@@ -155,6 +203,9 @@ def build() -> dict:
              "time_s": transit_time_s(float(great_circle_m(base[0], base[1], la, lo)))}
             for la, lo in datums
         ],
+        "steer": [steer_case(*c) for c in STEER_CASES],
+        "flown": [flown_case(kind, args) for kind, args in
+                  [next(c for c in PATTERN_CASES if c[0] == k) for k in BUILDERS]],
         "radius_of_action_nm": 300.0,
         "nm_m": NM_M,
     }

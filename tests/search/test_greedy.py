@@ -1,5 +1,7 @@
 """Tests for sar.search.greedy: issue #49's acceptance criteria, on synthetic clouds."""
 
+import math
+
 import numpy as np
 import pytest
 
@@ -11,12 +13,13 @@ from sar.utils.geo import offset_position
 LAT, LON = 26.5, 281.0
 
 
-def east_of_marker(east_m: float, spread_km: float = 0.3, particles: int = 400, seed: int = 1):
-    """A cloud `east_m` due east of a still marker."""
+def east_of_marker(east_m: float, spread_km: float = 0.3, particles: int = 400, seed: int = 1,
+                   **kw):
+    """A cloud `east_m` due east of a still marker; the helicopter arrives pointing north."""
     lat, lon = offset_position(LAT, LON, east_m, 0.0)
     window = steady_window((float(lat), float(lon)), spread_km, particles,
                            np.random.default_rng(seed))
-    return SearchEpisode(window, steady_marker(LAT, LON))
+    return SearchEpisode(window, steady_marker(LAT, LON), **kw)
 
 
 class TestTheMap:
@@ -65,8 +68,27 @@ class TestGreedy:
               f"{np.mean(floor):.3f}, margin {margin:+.3f}")
         assert margin > 0.0
 
-    def test_deciding_inside_the_minute_returns_the_step_as_waypoints(self):
+    def test_deciding_inside_the_minute_turns_and_the_referee_accepts_it(self):
         ep = east_of_marker(1000.0)
+        wp = greedy_policy(decide_s=10.0)(ep)
+        assert isinstance(wp, Waypoints) and wp.heading_deg is not None
+        assert wp.t_s[-1] == 60.0 and wp.heading_deg[0] < 90.0      # still turning east
+        ep.fly(wp)
+        assert ep.k == 1
+
+    def test_it_scores_the_turn_it_would_fly(self):
+        # Mass 1 km due south of a helicopter pointing north: reversing costs a 757 m wide
+        # half circle, so the leg it can fly reaches the mass only by turning, and it does.
+        lat, lon = offset_position(LAT, LON, 0.0, -1200.0)
+        window = steady_window((float(lat), float(lon)), 0.2, 400, np.random.default_rng(2))
+        ep = SearchEpisode(window, steady_marker(LAT, LON))
+        heading = greedy_policy()(ep)
+        assert 90.0 <= heading <= 270.0
+        ep.step(heading)
+        assert ep.remaining < 1.0
+
+    def test_an_instant_helicopter_decides_inside_the_minute_as_before(self):
+        ep = east_of_marker(1000.0, turn_rate_deg_s=math.inf)
         wp = greedy_policy(decide_s=10.0)(ep)
         assert isinstance(wp, Waypoints) and list(wp.t_s) == [10, 20, 30, 40, 50, 60]
         assert wp.east_m[0] == pytest.approx(ep.speed_ms * 10.0)
@@ -77,7 +99,8 @@ class TestGreedy:
     def test_it_does_not_chase_what_it_has_just_crossed_off(self):
         # A tight blob 500 m east is crossed off within two 463 m sub-legs; it then stops
         # flying east instead of carrying on into empty sea.
-        wp = greedy_policy(decide_s=10.0)(east_of_marker(500.0, spread_km=0.05))
+        wp = greedy_policy(decide_s=10.0)(east_of_marker(500.0, spread_km=0.05,
+                                                         turn_rate_deg_s=math.inf))
         assert wp.east_m[0] > 0.0
         assert wp.east_m[-1] < 2.5 * 463.0
 

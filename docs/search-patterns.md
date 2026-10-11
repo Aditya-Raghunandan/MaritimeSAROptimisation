@@ -22,6 +22,13 @@ that took. There it drops a **marker**, which drifts with the water current. The
 The last two are laid out by the drift model's prediction: along the line from the last known
 position to the datum (ADR003 rows 12–14).
 
+**Drawn, then flown** ([ADR006](ADR006.md), D032). The patterns are drawn as the manual draws
+them, with square corners. The helicopter cannot fly those at 90 kt: it turns at most 7.0 deg/s,
+on a 379 m radius, and the tracks are 185 m apart. So the drawing is flown by the L1 autopilot
+(`sar.search.kinematics.follow`). It rounds the corners it can, and loops onto legs closer than
+its turn diameter. On the site, `plan.pattern` is the path flown and `plan.pattern.drawn` the
+drawing.
+
 ## Running it
 
 ```

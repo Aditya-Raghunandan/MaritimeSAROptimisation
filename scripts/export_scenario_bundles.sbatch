@@ -21,7 +21,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 PY="${SAR_PYTHON:-/home/26p67/envs/sar/bin/python}"
 DATA="${SAR_DATA:-/home/26p67/data}"
 CSV="${CSV:-$DATA/derived/scenarios/scenarios.csv}"
-OUT="${OUT:-$DATA/published/scenarios/v1}"
+OUT="${OUT:-$DATA/published/scenarios/v2}"     # format 2: the D032 helicopter
 LAST="${LAST:-$(( $(wc -l < "$CSV") - 1 ))}"
 K="${SLURM_ARRAY_TASK_ID:?submit with --array}"
 

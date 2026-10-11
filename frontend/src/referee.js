@@ -20,6 +20,11 @@
  * interpolated between the two frames), so the closest they come is the distance from the
  * origin to the segment r0 -> r1 of their separation.
  *
+ * IT CANNOT TURN ON THE SPOT (D032). The helicopter turns at most `turnRateDegS`, 7.0 deg/s
+ * by default (kinematics.js), arriving on `headingDeg`. Every waypoint carries the heading
+ * there, and `fly` refuses a path that turns faster or changes speed. A rate of Infinity is
+ * the referee before D032, which turned at once: format 1 bundles were flown by it.
+ *
  * THE SAME ARITHMETIC AS PYTHON. Positions are latitude and longitude in the store
  * convention (0 to 360), as the engine keeps them; distances are metres on a local flat
  * earth with cos(lat) at the reference point (`relativeM`, Python's `relative_m`), and a
@@ -28,7 +33,8 @@
  */
 
 import { M_PER_DEG_LAT, SWEEP_WIDTH_M } from './geo.js';
-import { ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, STEP_S } from './platform.js';
+import { bearing, checkTurns, isInstant, normalise, shortestTurn, steer } from './kinematics.js';
+import { ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, STEP_S, TURN_RATE_DEG_S } from './platform.js';
 
 export { STEP_S };
 export const STEPS = Math.round(ON_SCENE_WINDOW_S / STEP_S);
@@ -137,7 +143,10 @@ export function cloudFromOffsets(f32, frames, particles, marker) {
 export class Episode {
   constructor(cloud, marker, {
     target = null, speedMs = SEARCH_SPEED_MS, halfWidthM = HALF_WIDTH_M, pod = 1, steps = STEPS,
+    headingDeg = 0, turnRateDegS = TURN_RATE_DEG_S,
   } = {}) {
+    if (!(turnRateDegS > 0)) throw new RangeError(`the turn rate must be positive, got ${turnRateDegS}`);
+    if (!Number.isFinite(headingDeg)) throw new RangeError(`the arrival heading must be finite, got ${headingDeg}`);
     if (cloud.frames !== steps + 1) {
       throw new RangeError(`an episode of ${steps} steps needs ${steps + 1} frames, got ${cloud.frames}`);
     }
@@ -148,6 +157,8 @@ export class Episode {
     this.speedMs = speedMs;
     this.halfWidthM = halfWidthM;
     this.pod = pod;
+    this.turnRateDegS = turnRateDegS;
+    this.headingDeg = normalise(headingDeg);
     this.steps = steps;
     this.k = 0;
     this.weight = Float64Array.from(cloud.weight);
@@ -175,13 +186,37 @@ export class Episode {
 
   get remaining() { return this.weight.reduce((s, w) => s + w, 0); }
 
-  /** Fly straight along a heading, relative to the marker, for one step. */
+  /** True for the referee before D032, whose helicopter turns at once. */
+  get instant() { return isInstant(this.turnRateDegS); }
+
+  /**
+   * The path one step flies for a command: a heading, or {turnDeg} (right positive). The
+   * turn at the turn rate, then straight; with an instant turn, one straight leg as before.
+   */
+  waypointsFor(command) {
+    const turn = typeof command === 'object' && command !== null ? command.turnDeg : null;
+    const heading = turn === null ? command : null;
+    if (!Number.isFinite(turn ?? heading)) throw new RangeError(`a heading or turn must be finite degrees, got ${command}`);
+    if (this.instant && heading !== null) {
+      const d = this.speedMs * STEP_S;
+      const b = heading * TO_RAD;
+      return {
+        tS: [STEP_S], eastM: [this.offset[0] + d * Math.sin(b)], northM: [this.offset[1] + d * Math.cos(b)],
+        headingDeg: [normalise(heading)],
+      };
+    }
+    const by = turn ?? shortestTurn(this.headingDeg, heading);
+    return steer(this.offset[0], this.offset[1], this.headingDeg, by, STEP_S, this.speedMs, this.turnRateDegS);
+  }
+
+  /** Turn to a heading, relative to the marker, and fly on along it, for one step. */
   step(headingDeg) {
-    const d = this.speedMs * STEP_S;
-    const b = headingDeg * TO_RAD;
-    return this.fly({
-      tS: [STEP_S], eastM: [this.offset[0] + d * Math.sin(b)], northM: [this.offset[1] + d * Math.cos(b)],
-    });
+    return this.fly(this.waypointsFor(headingDeg));
+  }
+
+  /** Turn by `turnDeg`, right positive, then fly straight, for one step (D032). */
+  turn(turnDeg) {
+    return this.fly(this.waypointsFor({ turnDeg }));
   }
 
   /** Fly one step through waypoints {tS, eastM, northM}; returns the drain rate of the step. */
@@ -202,6 +237,11 @@ export class Episode {
         throw new RangeError(`the path flies faster than the helicopter's ${this.speedMs} m/s`);
       }
       flown += leg;
+    }
+    if (!this.instant) {
+      if (!waypoints.headingDeg) throw new RangeError('a referee that limits the turn rate needs the heading at every waypoint (D032)');
+      checkTurns(wt, waypoints.eastM, waypoints.northM, waypoints.headingDeg,
+        [this.offset[0], this.offset[1], this.headingDeg], this.speedMs, this.turnRateDegS);
     }
 
     const t0 = this.tS;
@@ -249,8 +289,15 @@ export class Episode {
       if (this.target) this.scoreTarget(t0 + t[i], t0 + t[i + 1], ground[i], ground[i + 1]);
     }
 
-    this.distance += flown;
-    this.offset = [east[east.length - 1], north[north.length - 1]];
+    // A turning referee has just checked the path is flown at full speed; the chords of its
+    // arcs are a little shorter than the arcs.
+    this.distance += this.instant ? flown : this.speedMs * STEP_S;
+    const last = east.length - 1;
+    this.offset = [east[last], north[last]];
+    if (waypoints.headingDeg) this.headingDeg = normalise(waypoints.headingDeg[waypoints.headingDeg.length - 1]);
+    else if (Math.hypot(east[last] - east[last - 1], north[last] - north[last - 1]) > 0) {
+      this.headingDeg = bearing(east[last] - east[last - 1], north[last] - north[last - 1]);
+    }
     for (let i = 1; i < t.length; i += 1) this.track.push([t0 + t[i], ...ground[i]]);
     this.removed.push(removedStep);
     this.k += 1;
@@ -305,6 +352,7 @@ export class Episode {
       expectedTtdS: ttd,
       distanceM: this.distance,
       drainRate: [...this.removed],
+      turnRateDegS: this.instant ? null : this.turnRateDegS,
     };
     if (this.target) {
       const [closest, when] = this.closest;

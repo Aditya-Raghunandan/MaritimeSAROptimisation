@@ -29,15 +29,23 @@
  * 90 kt, the same 185.2 m strip and the same closest-approach test against the buoy, if
  * one is chosen -- only the heading comes from the keyboard instead of a pattern.
  * `freePlan` and `ManualFlight` are that.
+ *
+ * IT CANNOT TURN ON THE SPOT (D032). At 90 kt the helicopter turns at most 7.0 deg/s, on a
+ * 379 m radius (kinematics.js). A pattern is drawn as the manual draws it and then flown by
+ * the L1 autopilot from the heading the helicopter arrives on (its transit bearing), so the
+ * plan's `pattern` is the path it really flies and `pattern.drawn` the manual's. A person's
+ * keys ask for a heading, and the helicopter swings round to it at that rate.
  */
 
 import { SWEEP_WIDTH_M } from './geo.js';
 import {
-  M_PER_DEG_LAT, PATTERNS, eastNorth, headingAt, markerAt, offsetPosition, onGround,
+  M_PER_DEG_LAT, PATTERNS, headingAt, markerAt, offsetPosition, onGround,
 } from './patterns.js';
+import { flownPattern, normalise, steerTo } from './kinematics.js';
 import { driftTrack } from './pointDrift.js';
 import {
-  LAUNCH_DELAY_S, ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, distanceM, sectorRadiusM, transitTimeS,
+  LAUNCH_DELAY_S, ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, TURN_RATE_DEG_S, distanceM, sectorRadiusM,
+  transitTimeS,
 } from './platform.js';
 
 /** Patterns laid out along the drift model's predicted path rather than from the datum alone. */
@@ -92,6 +100,7 @@ function flatBearing(a, b) {
 export function planSearch({
   base, lkp, reportMs, patternKind = 'expanding_square', patternArgs = {},
   targetLeeway = 0, sample, firstBearingDeg = null, windowS = ON_SCENE_WINDOW_S,
+  turnRateDegS = TURN_RATE_DEG_S,
 }) {
   if (!PATTERNS[patternKind]) return { error: `unknown pattern ${patternKind}` };
   let elapsed = transitTimeS(distanceM(base, lkp));
@@ -145,7 +154,13 @@ export function planSearch({
     args.halfLengthM = Math.max(line.lengthM, sectorRadiusM());
   }
 
-  const pattern = PATTERNS[patternKind].build({ ...args, firstBearingDeg: bearing, durationS: windowS });
+  // Endless patterns are drawn for two windows, so the autopilot, which gets along a
+  // drawing faster than the clock by rounding its corners, never runs out of legs.
+  const drawnS = patternKind === 'parallel_track' || turnRateDegS === Infinity ? windowS : 2 * windowS;
+  const drawn = PATTERNS[patternKind].build({ ...args, firstBearingDeg: bearing, durationS: drawnS });
+  const pattern = flownPattern(drawn, {
+    headingDeg: flatBearing(base, datum), durationS: windowS, turnRateDegS,
+  });
   return {
     base, lkp, reportMs, datum, datumTrack, marker, pattern, patternKind, datumLine: line,
     patternArgs: args,
@@ -349,14 +364,18 @@ export function freePlan({ spawn, startMs, lkp = null, windowS = ON_SCENE_WINDOW
  * heading is stored as one segment, so a long flight stays a short path to draw.
  */
 export class ManualFlight {
-  constructor(plan, targetAt, { speedMs = SEARCH_SPEED_MS, halfWidthM = SWEEP_WIDTH_M / 2, maxStepS = 5 } = {}) {
+  constructor(plan, targetAt, {
+    speedMs = SEARCH_SPEED_MS, halfWidthM = SWEEP_WIDTH_M / 2, maxStepS = 5, turnRateDegS = TURN_RATE_DEG_S,
+  } = {}) {
     if (plan.pattern) throw new Error('ManualFlight needs a plan with no pattern (patternKind: manual)');
     this.plan = plan;
     this.targetAt = targetAt;
     this.speedMs = speedMs;
     this.halfWidthM = halfWidthM;
     this.maxStepS = maxStepS;
-    this.heading = plan.firstBearingDeg;
+    this.turnRateDegS = turnRateDegS;
+    this.heading = normalise(plan.firstBearingDeg);
+    this.command = this.heading;
     this.tS = [plan.arriveS];
     this.lat = [plan.datum.lat];
     this.lon = [plan.datum.lon];
@@ -383,9 +402,9 @@ export class ManualFlight {
     return { lat: this.lat[k], lon: this.lon[k], heading: this.heading };
   }
 
-  /** Fly `dtS` seconds. A heading of null keeps the current one. Returns `done`. */
+  /** Fly `dtS` seconds, turning to `heading` (null keeps the last one asked for). Returns `done`. */
   advance(dtS, heading = null) {
-    if (heading !== null && heading !== undefined) this.heading = heading;
+    if (heading !== null && heading !== undefined) this.command = normalise(heading);
     let left = Math.min(dtS, this.plan.endS - this.s);
     while (left > 1e-9 && !this.found) {
       const dt = Math.min(left, this.maxStepS);
@@ -395,12 +414,24 @@ export class ManualFlight {
     return this.done;
   }
 
+  /** One step: the turn toward the command at the turn rate, piece by piece, then straight. */
   _step(dt) {
+    const p = steerTo(0, 0, this.heading, this.command, dt, this.speedMs, this.turnRateDegS);
+    let t0 = 0;
+    let e0 = 0;
+    let n0 = 0;
+    for (let i = 0; i < p.tS.length && !this.found; i += 1) {
+      this.heading = p.headingDeg[i];
+      this._piece(p.tS[i] - t0, p.eastM[i] - e0, p.northM[i] - n0);
+      [t0, e0, n0] = [p.tS[i], p.eastM[i], p.northM[i]];
+    }
+  }
+
+  _piece(dt, de, dn) {
     const k = this.tS.length - 1;
     const sa = this.tS[k];
     const sb = sa + dt;
     const from = [this.lat[k], this.lon[k]];
-    const [de, dn] = eastNorth(this.heading, this.speedMs * dt);
     const to = offsetPosition(from[0], from[1], de, dn);
 
     const ta = this.targetAt(this.plan.reportMs + sa * 1000);

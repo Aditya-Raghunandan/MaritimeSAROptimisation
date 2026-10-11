@@ -80,9 +80,13 @@ def style(ax, aspect=(1, 1, 0.55)):
 
 def mountain(folder: Path, out: Path, fps: int = 12) -> Path:
     meta, window, marker, target = load_window(folder, "rv_2h")
-    steps = [Waypoints(np.array(s["t_s"]), np.array(s["east_m"]), np.array(s["north_m"]))
+    steps = [Waypoints(np.array(s["t_s"]), np.array(s["east_m"]), np.array(s["north_m"]),
+                       s.get("heading_deg"))
              for s in meta["flights"]["expanding-square"]["steps"]]
-    ep = SearchEpisode(window, marker)
+    # The helicopter the bundle was flown with: format 2 turns at its rate (D032), format 1
+    # turned at once.
+    ep = SearchEpisode(window, marker, heading_deg=meta.get("arrival_heading_deg") or 0.0,
+                       turn_rate_deg_s=meta.get("turn_rate_deg_s") or float("inf"))
     half = 14  # cells each way: a 7 km square about the marker
     edges = (np.arange(-half, half + 1)) * CELL_M
     centres = 0.5 * (edges[:-1] + edges[1:]) / 1000.0

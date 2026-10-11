@@ -334,3 +334,45 @@ class TestRandomVelocity:
     def test_a_bad_memory_time_raises(self, bad):
         with pytest.raises(ValueError, match="memory time"):
             velocity_memory(60.0, bad)
+
+
+class TestSigmaUByTheCurrent:
+    """D033: the random velocity sized by the model's current at the start."""
+
+    def test_it_grows_with_the_current_and_stops_at_the_cap(self):
+        from sar.model.position import SIGMA_U_RULE, sigma_u_for_current
+        cap = SIGMA_U_RULE["cap_speed_ms"]
+        got = sigma_u_for_current(np.array([0.0, 0.3, 0.8, cap, cap + 1.0]))
+        assert np.all(np.diff(got[:4]) > 0) and got[4] == got[3]
+        assert got[0] == pytest.approx(np.hypot(SIGMA_U_RULE["a"], SIGMA_U_RULE["slide_ms"]))
+
+    def test_a_negative_or_missing_speed_is_refused(self):
+        from sar.model.position import sigma_u_for_current
+        for bad in (-0.1, float("nan")):
+            with pytest.raises(ValueError):
+                sigma_u_for_current(bad)
+
+    def test_one_value_per_particle_draws_what_one_value_for_all_draws(self):
+        from sar.model.position import evolve_velocity_error, start_velocity_error
+        a = start_velocity_error((5, 2), 0.3, np.random.default_rng(1))
+        b = start_velocity_error((5, 2), np.full(5, 0.3), np.random.default_rng(1))
+        assert np.array_equal(a, b)
+        ea = evolve_velocity_error(a, 60.0, 0.3, rng=np.random.default_rng(2))
+        eb = evolve_velocity_error(b, 60.0, np.full(5, 0.3), rng=np.random.default_rng(2))
+        assert np.array_equal(ea, eb)
+
+    def test_each_particle_spreads_by_its_own_sigma_u(self):
+        from sar.model.position import start_velocity_error
+        u = start_velocity_error((20000, 2), np.repeat([0.1, 0.5], 10000), np.random.default_rng(3))
+        assert np.std(u[:10000]) == pytest.approx(0.1, rel=0.03)
+        assert np.std(u[10000:]) == pytest.approx(0.5, rel=0.03)
+
+    @pytest.mark.parametrize("shape", ["linear", "quadrature"])
+    def test_the_engine_and_the_calibration_read_a_rule_the_same_way(self, shape):
+        from sar.model.position import sigma_u_for_current
+        from sar.validate.calibrate_sigma import rule_sigma_u
+        engine = {"shape": shape, "a": 0.18, "b": 0.4, "cap_speed_ms": 1.3, "slide_ms": 0.035}
+        fitted = {"line": {"shape": shape, "a": 0.18, "b": 0.4, "cap_speed_ms": 1.3},
+                  "slide": {"value": 0.035}}
+        speeds = np.array([0.0, 0.2, 0.7, 1.3, 2.5])
+        assert sigma_u_for_current(speeds, engine) == pytest.approx(rule_sigma_u(fitted, speeds))

@@ -51,9 +51,24 @@ export function add(entry, storage = globalThis.localStorage) {
   }
 }
 
-/** The best n entries for one mode. */
+/**
+ * The best n players for one mode: one line per name (the same nickname, ignoring case and
+ * spaces at the ends, is the same player), with that player's highest score. Every flight is
+ * still kept in storage and in the exported file.
+ */
 export function top(list, mode, n = 8) {
-  return list.filter((e) => e.mode === mode).slice(0, n);
+  const best = new Map();
+  for (const e of list) {
+    if (e.mode !== mode) continue;
+    const key = String(e.name ?? '').trim().toLowerCase();
+    const held = best.get(key);
+    if (!held || e.score > held.score || (e.score === held.score && e.when < held.when)) {
+      best.set(key, e);
+    }
+  }
+  return [...best.values()]
+    .sort((a, b) => b.score - a.score || String(a.when).localeCompare(String(b.when)))
+    .slice(0, n);
 }
 
 /** A nickname fit for a public screen: trimmed, short, plain characters only. */

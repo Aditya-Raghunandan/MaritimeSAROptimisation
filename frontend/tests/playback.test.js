@@ -6,7 +6,7 @@ function window() {
   const flights = {};
   for (const [name, f] of Object.entries(golden.flights)) {
     flights[name] = {
-      steps: f.steps.map((s) => ({ tS: s.t_s, eastM: s.east_m, northM: s.north_m })),
+      steps: f.steps.map((s) => ({ tS: s.t_s, eastM: s.east_m, northM: s.north_m, headingDeg: s.heading_deg })),
       python: { pos: f.pos },
     };
   }
@@ -21,6 +21,8 @@ function window() {
     marker: { tS: golden.marker.t_s, lat: golden.marker.lat, lon: golden.marker.lon },
     target: { tS: golden.target.t_s, lat: golden.target.lat, lon: golden.target.lon },
     flights,
+    turnRateDegS: golden.constants.turn_rate_deg_s,
+    arrivalHeadingDeg: golden.constants.arrival_heading_deg,
   };
 }
 
@@ -48,6 +50,34 @@ describe('a recorded flight', () => {
   });
 });
 
+describe('the trail behind the helicopter', () => {
+  it('follows a recorded flight\'s path through the minute in progress, not a chord', () => {
+    const f = new RecordedFlight(window(), 'expanding-square');
+    f.advanceTo(30);                                        // inside the first minute
+    const trail = f.trail(30);
+    const inMinute = f.steps[0].tS.filter((s) => s < 30).length;
+    expect(trail).toHaveLength(1 + inMinute + 1);           // start, the waypoints, the helicopter
+    expect(inMinute).toBeGreaterThan(1);
+    f.advanceTo(60);
+    // When the minute finishes the trail does not jump: the same points, now from the referee.
+    const done = f.trail(60).slice(0, trail.length - 1);
+    trail.slice(0, -1).forEach((p, i) => {
+      expect(done[i][1]).toBeCloseTo(p[1], 9);
+      expect(done[i][2]).toBeCloseTo(p[2], 9);
+    });
+  });
+
+  it('follows a player\'s turn as it happens', () => {
+    const f = new PlayerFlight(window(), { heading: 0 });
+    f.steer(180);
+    f.advanceTo(20);
+    const trail = f.trail(22);
+    expect(trail.length).toBeGreaterThan(5);                // the arc, not one straight segment
+    const times = trail.map((p) => p[0]);
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+  });
+});
+
 describe('a player', () => {
   it('is scored by the browser exactly as Python scores the same headings', () => {
     const { record } = golden.player;
@@ -63,6 +93,15 @@ describe('a player', () => {
     expect(f.record().t_s).toEqual(record.t_s);
     expect(f.record().heading_deg.map((h) => Math.round(h * 1e9) / 1e9))
       .toEqual(record.heading_deg.map((h) => Math.round(h * 1e9) / 1e9));
+    expect(f.record().turn_rate_deg_s).toBeCloseTo(record.turn_rate_deg_s, 12);
+  });
+
+  it('turns to what it is asked for at the turn rate, and is drawn on the turn', () => {
+    const f = new PlayerFlight(window(), { heading: 0 });
+    f.steer(180);
+    f.advanceTo(10);
+    expect(f.heading).toBeCloseTo(10 * f.turnRateDegS, 9);     // 70 degrees round, not 180
+    expect(f.pose(12).heading).toBeCloseTo(12 * f.turnRateDegS, 9);
   });
 
   it('holds a heading for one leg, and flies a minute at a time', () => {

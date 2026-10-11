@@ -22,13 +22,16 @@ particle to well under a millimetre (checked here for every window, against the 
 cloud) and its score agrees with the paper's to about 1e-6.
 
 The flights are the benchmark's (`sar.search.benchmark`), recorded as they are flown, and the
-numbers beside them are the referee's, computed here. Nothing about a window is stored that
+numbers beside them are the referee's, computed here. Since D032 (format 2) the helicopter
+turns at most `turn_rate_deg_s` and arrives on `arrival_heading_deg`; every step carries the
+heading at each waypoint, so the browser's referee checks the turns as Python's does. A
+format 1 window (scenarios/v1) was flown by a helicopter that turned at once. Nothing about a window is stored that
 cannot be rebuilt from its row and seed.
 
     python scripts/export_scenario_bundles.py export --csv scenarios.csv --forcing-dir DATA \\
-        --rows 1-55 --out DATA/published/scenarios/v1
-    python scripts/export_scenario_bundles.py upload --src DATA/published/scenarios/v1 \\
-        --repo AdityaRugs/MaritimeSARoperations --path-in-repo scenarios/v1
+        --rows 1-55 --out DATA/published/scenarios/v2
+    python scripts/export_scenario_bundles.py upload --src DATA/published/scenarios/v2 \\
+        --repo AdityaRugs/MaritimeSARoperations --path-in-repo scenarios/v2
 """
 
 from __future__ import annotations
@@ -44,14 +47,21 @@ import numpy as np
 import pandas as pd
 
 from sar.pipeline.gridded import GriddedForcing
-from sar.search.benchmark import GREEDY, NOISE, SEARCHERS, recorded, searcher
-from sar.search.episode import STEPS, SearchEpisode, run
-from sar.search.platform import STEP_S, SWEEP_WIDTH_M
-from sar.search.scenario import datum_line, read_scenarios, scenario_search, straightness
+from sar.search.benchmark import GREEDY, NOISE, NOISE_RECORD, SEARCHERS, recorded, searcher
+from sar.search.episode import STEPS, run
+from sar.search.platform import STEP_S, SWEEP_WIDTH_M, TURN_RATE_DEG_S
+from sar.search.scenario import (
+    arrival_heading,
+    datum_line,
+    read_scenarios,
+    scenario_search,
+    search_episode,
+    straightness,
+)
 from sar.search.sweep import relative_m
 from sar.utils.geo import offset_position, to_display_longitude
 
-FORMAT = 1
+FORMAT = 2              # 2: the helicopter turns at TURN_RATE_DEG_S (D032); 1 turned at once
 FIELD_HALF_KM, FIELD_STEP_KM, FIELD_EVERY_MIN = 20.0, 2.0, 5
 MAX_REBUILD_ERROR_M = 0.01
 
@@ -101,12 +111,14 @@ def flights(setup, row, hours: float, greedy: dict) -> dict:
     for name in SEARCHERS:
         policy, first, layout = searcher(name, setup, row, hours, greedy)
         flying, steps = recorded(policy)
-        m = run(flying, SearchEpisode(setup.window, setup.marker, target=setup.target))
+        m = run(flying, search_episode(setup))
         target = m.get("target") or {}
         out[name] = {
             "layout": layout, "first_bearing_deg": first,
             "steps": [{"t_s": _floats(s.t_s), "east_m": _floats(s.east_m),
-                       "north_m": _floats(s.north_m)} for s in steps],
+                       "north_m": _floats(s.north_m),
+                       "heading_deg": None if s.heading_deg is None else _floats(s.heading_deg)}
+                      for s in steps],
             "python": {"pos": m["pos"], "drain_rate": m["removed_per_step"],
                        "expected_ttd_s": m["expected_ttd_s"],
                        "found": target.get("found"), "found_s": target.get("found_s"),
@@ -150,12 +162,15 @@ def export_row(row, forcing, noises, arrivals_h, particles: int, out: Path,
             target = setup.target
             record = {
                 "format": FORMAT, "scenario": row["scenario"], "noise": noise,
-                "noise_settings": NOISE[noise], "arrival_h": hours,
+                "noise_settings": NOISE_RECORD[noise], "arrival_h": hours,
+                "sigma_u": setup.sigma_u, "start_current_ms": setup.start_current_ms,
                 "arrival_s": setup.arrival_s,
                 "start_utc": str(row["start"]), "window_start_utc":
                     str(np.datetime_as_string(setup.window.times[0], unit="s")),
                 "frames": int(cloud.shape[0]), "particles": int(cloud.shape[1]),
                 "step_s": STEP_S, "sweep_width_m": SWEEP_WIDTH_M, "pod": 1.0,
+                "turn_rate_deg_s": TURN_RATE_DEG_S,
+                "arrival_heading_deg": arrival_heading(setup),
                 "weight": float(weight[0]), "cloud": f"{name}.f32",
                 "cloud_layout": "float32 LE [frame][particle][east_m, north_m] from the "
                                 "marker at that frame; longitude in the store convention",
@@ -260,7 +275,7 @@ def main(argv=None):
     e.add_argument("--csv", required=True)
     e.add_argument("--forcing-dir", required=True)
     e.add_argument("--rows", nargs="+", required=True, help="names or 1-based rows, e.g. 1-55")
-    e.add_argument("--noise", nargs="+", choices=sorted(NOISE), default=["rv", "rw"])
+    e.add_argument("--noise", nargs="+", choices=sorted(NOISE), default=["rvc", "rv"])
     e.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0])
     e.add_argument("--particles", type=int, default=10_000)
     e.add_argument("--out", required=True)
@@ -306,7 +321,8 @@ def main(argv=None):
                                   args.particles, out, GREEDY))
         print(f"{name}: {len(entries[-1]['windows'])} windows in "
               f"{time.perf_counter() - t0:.1f} s", flush=True)
-    write_index(out, entries, {"particles": args.particles, "noise": NOISE, "greedy": GREEDY,
+    write_index(out, entries, {"particles": args.particles, "noise": NOISE_RECORD, "greedy": GREEDY,
+                               "format": FORMAT, "turn_rate_deg_s": TURN_RATE_DEG_S,
                                "arrival_h": args.arrival_h, "searchers": list(SEARCHERS),
                                "commit": score.git_commit()})
 

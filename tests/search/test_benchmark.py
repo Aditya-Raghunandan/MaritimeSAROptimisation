@@ -1,12 +1,14 @@
 """Tests for sar.search.benchmark: a recorded flight replays to the same score, bit for bit."""
 
+import math
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from sar.pipeline.forcing import ConstantForcing
 from sar.search.benchmark import SEARCHERS, recorded, searcher
-from sar.search.episode import SearchEpisode, Waypoints, run
+from sar.search.episode import SearchEpisode, Turn, Waypoints, run
 from sar.search.scenario import scenario_search
 
 FORCING = ConstantForcing(current=(1.0, 0.5), wind=(5.0, 2.0))
@@ -45,11 +47,27 @@ def test_an_unknown_searcher_is_refused(setup):
         searcher("ppo", setup, row(), 1.0)
 
 
-def test_headings_become_one_sub_leg_at_full_speed(setup):
+def test_a_heading_becomes_the_path_the_referee_flies_for_it(setup):
     flying, steps = recorded(lambda ep: 90.0)
     ep = SearchEpisode(setup.window, setup.marker)
+    expected = ep.waypoints_for(90.0)
+    ep.fly(flying(ep))
+    assert np.array_equal(steps[0].east_m, expected.east_m)
+    assert steps[0].heading_deg[-1] == 90.0 and steps[0].t_s.size > 1
+    assert np.isclose(ep.offset[0], steps[0].east_m[-1])
+
+
+def test_a_turn_is_recorded_as_its_path(setup):
+    flying, steps = recorded(lambda ep: Turn(-45.0))
+    ep = SearchEpisode(setup.window, setup.marker, heading_deg=90.0)
+    ep.fly(flying(ep))
+    assert steps[0].heading_deg[-1] == pytest.approx(45.0)
+
+
+def test_an_instant_heading_is_one_sub_leg_at_full_speed(setup):
+    flying, steps = recorded(lambda ep: 90.0)
+    ep = SearchEpisode(setup.window, setup.marker, turn_rate_deg_s=math.inf)
     ep.fly(flying(ep))
     assert list(steps[0].t_s) == [60.0]
     assert steps[0].east_m[0] == pytest.approx(ep.speed_ms * 60.0)
     assert abs(steps[0].north_m[0]) < 1e-9
-    assert np.isclose(ep.offset[0], steps[0].east_m[0])

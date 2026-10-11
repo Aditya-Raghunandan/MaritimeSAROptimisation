@@ -4,7 +4,9 @@
  * last known position and, when revealed, the real buoy (D031, Stages 4 and 5).
  *
  * The scenario page draws one of these and the game's reveal draws three side by side; the
- * flight (playback.js) decides everything, this only draws it.
+ * flight (playback.js) decides everything, this only draws it. The helicopter points the
+ * way it is flying, and a flight being steered by a person shows, dashed, the turn it is
+ * about to make (D032: it cannot turn on the spot, so the bend is worth seeing coming).
  */
 
 import L from 'leaflet';
@@ -46,6 +48,9 @@ export class Scene {
     this.strip = L.polyline([], { color: colour, opacity: 0.45, lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(map);
     this.path = L.polyline([], { color: '#fff', weight: 1, opacity: 0.9, interactive: false }).addTo(map);
     this.heli = L.marker([0, 0], { icon: HELI(colour), interactive: false });
+    this.ahead = L.polyline([], {
+      color: '#ffcd8d', weight: 2, opacity: 0.85, dashArray: '6 6', interactive: false,
+    });
     this.marker = L.marker([0, 0], { icon: DOT('#ffcd8d', 10), interactive: false });
     this.lkp = L.marker([0, 0], { icon: DOT('#c3c2b7', 9, 'last known position'), interactive: false });
     this.buoy = L.marker([0, 0], { icon: DOT('#ff4d6d', 14, 'the real buoy'), interactive: false });
@@ -54,7 +59,29 @@ export class Scene {
   }
 
   /** A new window: the cloud at arrival sets the view and the colour scale. */
-  setWindow(window, { fit = true } = {}) {
+  /**
+   * About 400 particles at arrival and at the end of the window, for fitting the view: a
+   * sample, so the few far outliers of 10,000 do not set the zoom.
+   */
+  cloudPoints({ startOnly = false } = {}) {
+    const { cloud } = this.window;
+    const n = cloud.particles;
+    const last = cloud.lat.length - n;
+    const pts = [];
+    for (let j = 0; j < n; j += Math.max(1, Math.floor(n / 400))) {
+      pts.push(ll(cloud.lat[j], cloud.lon[j]));
+      if (!startOnly) pts.push(ll(cloud.lat[last + j], cloud.lon[last + j]));
+    }
+    return pts;
+  }
+
+  /**
+   * A new window: the cloud at arrival sets the view and the colour scale. The view fits the
+   * cloud at arrival and where it has drifted to by the end; `startOnly` fits the arrival
+   * alone, and `zoomOut` steps back that many whole zoom levels: the game flies with room to
+   * turn in, and its camera follows the drift.
+   */
+  setWindow(window, { fit = true, zoomOut = 0, startOnly = false } = {}) {
     this.window = window;
     const { cloud, marker } = window;
     const n = cloud.particles;
@@ -68,14 +95,22 @@ export class Scene {
     this.heli.remove();
     this.hideBuoy();
     if (fit) {
-      const last = cloud.lat.length - n;
-      const pts = [];
-      for (let j = 0; j < n; j += Math.max(1, Math.floor(n / 400))) {
-        pts.push(ll(cloud.lat[j], cloud.lon[j]), ll(cloud.lat[last + j], cloud.lon[last + j]));
-      }
-      this.map.fitBounds(L.latLngBounds(pts).pad(0.05), { animate: false });
+      this.map.fitBounds(L.latLngBounds(this.cloudPoints({ startOnly })).pad(0.05), { animate: false });
+      if (zoomOut) this.map.setZoom(this.map.getZoom() - zoomOut, { animate: false });
     }
     this.restyle();
+  }
+
+  /** Zoom out to the cloud, the flown path and where the real buoy went up to t. */
+  fitAll(t, { pad = 0.08 } = {}) {
+    const pts = [...this.cloudPoints(), ...this.path.getLatLngs()];
+    const target = this.window?.target;
+    if (target) {
+      const end = Math.min(t, target.tS[target.tS.length - 1]);
+      for (let s = Math.max(target.tS[0], 0); s < end; s += 300) pts.push(ll(...trackAt(target, s)));
+      pts.push(ll(...trackAt(target, Math.max(Math.max(target.tS[0], 0), end))));
+    }
+    this.map.fitBounds(L.latLngBounds(pts).pad(pad), { animate: true });
   }
 
   /** The search at t seconds after arrival, as `flight` has flown it so far. */
@@ -83,12 +118,20 @@ export class Scene {
     // requestAnimationFrame's clock can start a frame a hair before the one a loop stored.
     const t = Math.min(flight.duration, Math.max(0, time));
     const { lat, lon } = flight.ep.particlesAt(t);
-    this.probability.setState({ lat, lon, weight: flight.ep.weight, marker: this.window.marker, t });
+    this.probability.setState({
+      lat, lon, weight: flight.ep.weight, prior: this.window.cloud.weight, marker: this.window.marker, t,
+    });
     const trail = flight.trail(t).map(([, la, lo]) => ll(la, lo));
     this.strip.setLatLngs(trail);
     this.path.setLatLngs(trail);
     this.heli.setLatLng(trail[trail.length - 1]);
     if (!this.map.hasLayer(this.heli)) this.heli.addTo(this.map);
+    const svg = this.heli.getElement()?.querySelector('svg');
+    if (svg && flight.headingAt) svg.style.transform = `rotate(${flight.headingAt(t)}deg)`;
+    if (flight.preview && t < flight.duration) {
+      this.ahead.setLatLngs(flight.preview(t).map(([la, lo]) => ll(la, lo)));
+      if (!this.map.hasLayer(this.ahead)) this.ahead.addTo(this.map);
+    } else this.ahead.remove();
     this.marker.setLatLng(ll(...trackAt(this.window.marker, Math.min(t, 2700))));
     if (this.map.hasLayer(this.buoy)) this.placeBuoy(t);
   }
@@ -125,7 +168,7 @@ export class Scene {
 
   destroy() {
     this.map.off('zoomend', this.restyle, this);
-    for (const layer of [this.probability, this.strip, this.path, this.heli, this.marker, this.lkp,
-      this.buoy, this.buoyTrail]) layer.remove();
+    for (const layer of [this.probability, this.strip, this.path, this.heli, this.ahead, this.marker,
+      this.lkp, this.buoy, this.buoyTrail]) layer.remove();
   }
 }

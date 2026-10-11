@@ -98,3 +98,24 @@ since either would move mass. Build the grid with `cells_multiple_of=factor` ins
 - **cos φ in the integrator.** `sar.utils.geo.metres_per_degree_lon(lat)` is the shared
   conversion, and it takes latitude as an argument so that `drift.py` cannot freeze it.
   Freezing it is an 18.2 % eastward error that looks like physics.
+
+## How the site draws it (display only)
+
+The scenario page and the game draw the map in the browser from the published particles
+(`frontend/src/probabilityMap.js` for the arithmetic, `probabilityLayer.js` for the
+drawing). None of this reaches a score: the referee sweeps particles, never these cells.
+
+- **Smoothed.** 10,000 particles over 250 m cells are a few per cell, so raw bins are
+  speckle. The map is a kernel density estimate: a cell sized to the cloud by Silverman's
+  rule, h = s·n^(-1/6) with s the robust spread across the cloud's narrow axis (250 m for a
+  small cloud, up to ~1.75 km for a 3 h jet cloud), blurred one cell wide.
+- **The search stays sharp.** The drawn map is the smooth density before the search times
+  the share left at each place, measured on cells down to 250 m. Unsearched sea keeps a share
+  of exactly 1; a searched patch goes dark where the strip went instead of being smeared.
+- **Coloured by containment.** A cell's colour is the share of the probability in likelier
+  cells, fixed on arrival, so the middle of the ramp is the edge of the smallest area holding
+  half the probability and a drained cell only ever darkens.
+- **Two lines, retaken every frame:** the smallest areas holding half and 90 % of what is
+  left, which is where to fly next.
+- **Three ramps** a visitor can pick (viridis, inferno "heat", a one-hue "ice"), each rising
+  monotonically in OKLab lightness, checked in `frontend/tests/probabilityMap.test.js`.

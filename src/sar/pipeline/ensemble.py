@@ -11,9 +11,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sar.model.position import (CALIBRATED_SIGMA, CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H,
+from sar.model.position import (BY_CURRENT, CALIBRATED_SIGMA, CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H,
                                 DEFAULT_SIGMA, DEFAULT_SIGMA_U, INTEGRATION_STEP_SECONDS,
-                                MEMORY_TIME_S, calculate_position)
+                                MEMORY_TIME_S, calculate_position, sigma_u_for_current)
 from sar.pipeline.forcing import ConstantForcing
 from sar.pipeline.gridded import GriddedForcing
 from sar.pipeline.track import _STEP_TOLERANCE, DriftPipeline
@@ -302,10 +302,11 @@ def add_run_arguments(parser) -> None:
     parser.add_argument("--duration", type=parse_span, required=True,
                         help="how long to track, such as 48h, 90m or 3600")
     noise = parser.add_mutually_exclusive_group()
-    noise.add_argument("--sigma-u", type=float, default=CALIBRATED_SIGMA_U,
-                       help=f"the random velocity with memory (D030), m/s per axis, default "
-                            f"{CALIBRATED_SIGMA_U:g}: matched at {CALIBRATION_HORIZON_H} h; 0 "
-                            "for one deterministic path")
+    noise.add_argument("--sigma-u", type=parse_sigma_u, default=BY_CURRENT,
+                       help=f"the random velocity with memory (D030), m/s per axis, or auto "
+                            f"(the default): sized by the current at the datum (D033). "
+                            f"{CALIBRATED_SIGMA_U:g} is the pooled value matched at "
+                            f"{CALIBRATION_HORIZON_H} h; 0 for one deterministic path")
     noise.add_argument("--sigma", type=float, default=None,
                        help=f"instead, the random walk in m/s^0.5 (D028: {CALIBRATED_SIGMA:g} at "
                             f"{CALIBRATION_HORIZON_H} h), for comparisons with earlier runs")
@@ -321,6 +322,34 @@ def add_run_arguments(parser) -> None:
                              "(sar.pipeline.gridded, issue #88)")
     parser.add_argument("--constant-wind", nargs=2, type=float, metavar=("U", "V"),
                         help="uniform steady 10 m wind in m/s, default calm")
+
+
+def start_current_ms(forcing, lat: float, lon: float, start) -> float:
+    """The model's current speed at a point and time, m/s: what sizes sigma_u (D033)."""
+    current, _ = forcing.sample([float(lat)], [float(lon)], np.datetime64(start, "us"))
+    speed = float(np.hypot(*current[0]))
+    if not np.isfinite(speed):
+        raise ValueError(f"no current at {lat:.3f}, {lon:.3f} at {start}: on land or off the "
+                         "grid, so sigma_u cannot be sized by it")
+    return speed
+
+
+def resolve_sigma_u(sigma_u, forcing, lat: float, lon: float, start) -> tuple[float, float | None]:
+    """A number, or BY_CURRENT ("by-current", or "auto" on the command line) sized by the
+    current at the start (D033). Returns (sigma_u, the start current or None)."""
+    if isinstance(sigma_u, str):
+        if sigma_u not in (BY_CURRENT, "auto"):
+            raise ValueError(f"sigma_u is m/s or {BY_CURRENT!r}, got {sigma_u!r}")
+        speed = start_current_ms(forcing, lat, lon, start)
+        return sigma_u_for_current(speed), speed
+    return float(sigma_u), None
+
+
+def parse_sigma_u(text: str):
+    """--sigma-u: a number of m/s, or auto (sized by the current at the start, D033)."""
+    if text.strip().lower() in ("auto", BY_CURRENT):
+        return BY_CURRENT
+    return float(text)
 
 
 def random_term(args) -> dict:
@@ -360,14 +389,23 @@ def _cli(argv=None) -> Path:
         forcing = forcing_from(args)
     except (ValueError, FileNotFoundError) as error:
         parser.error(str(error))
+    noise = random_term(args)
+    try:
+        noise["sigma_u"], speed = resolve_sigma_u(noise["sigma_u"], forcing, args.lat, args.lon,
+                                                  args.start)
+    except ValueError as error:
+        parser.error(str(error))
     spec = {"forcing": forcing, "particles": args.particles, "start": args.start,
             "lat": args.lat, "lon": args.lon, "duration": args.duration,
             "timestep": args.timestep, "datum_sigma_km": args.datum_sigma_km,
-            **random_term(args), "seed": args.seed, "save_every": args.save_every}
+            **noise, "seed": args.seed, "save_every": args.save_every}
     log = {} if args.with_forcing else None
     # Drawn once, so a run without --seed still records the entropy it actually used.
     seq = np.random.SeedSequence(args.seed)
     run = describe_run(**spec, entropy=seq.entropy)
+    if speed is not None:
+        run["sigma_u_by_current"] = {"start_current_ms": speed, "sigma_u": noise["sigma_u"],
+                                     "rule": "D033, sar.model.position.SIGMA_U_RULE"}
     if (Path(args.out) / "derived" / f"{run_name(run)}.csv").exists() and not args.force:
         parser.error(f"{run_name(run)}.csv already exists in {args.out}/derived; pass --seed "
                      "to keep both runs, or --force to replace it")

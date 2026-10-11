@@ -7,6 +7,14 @@
  * side by side, by the Coast Guard's Expanding Square and by the AI (the greedy search until
  * the trained agent exists, and labelled so), and the real buoy is revealed.
  *
+ * FLYING IT. The helicopter turns as the real one does, at most 7 degrees a second (D032),
+ * so it swings round on a 379 m curve instead of snapping to a new heading. Three ways to
+ * say where to go, whichever was used last wins:
+ *   the mouse      it flies toward the pointer, and circles it once there (a click takes off);
+ *   a controller   the left stick or the d-pad points the way (the Gamepad API: a PS5 or Xbox
+ *                  pad, or any home-made stick that shows up as a USB game controller);
+ *   the keys       arrows or WASD, a compass direction each, two for a diagonal.
+ *
  * FAIR BY CONSTRUCTION. All three are scored by referee.js, the browser's copy of the
  * paper's referee, over the same published cloud: the rivals' flights are the paper's own,
  * replayed, and the player's flight is a heading record Python's replay_policy scores the
@@ -19,14 +27,19 @@ import 'leaflet/dist/leaflet.css';
 import { FieldLayer } from './fieldLayer.js';
 import { add, load, nickname, score, top, verdict } from './leaderboard.js';
 import { PlayerFlight, RecordedFlight, SAMPLE_S } from './playback.js';
+import { ProbabilityLegend } from './probabilityLayer.js';
 import { Scene } from './scene.js';
 import {
-  SCENARIO_ROOT, SEARCHER_INFO, display, loadBenchmark, loadField, loadIndex, loadWindow,
+  SEARCHER_INFO, SHOWCASE_ROOT, bestNoise, display, loadBenchmark, loadField, loadIndex,
+  loadWindow,
 } from './scenarioData.js';
+import { bearing } from './kinematics.js';
+import { M_PER_DEG_LAT } from './geo.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 import { esriTiles } from './tiles.js';
 
-const NOISE = 'rv';
+// The drift model the game flies over: the newest a scenario has (rvc, sized by the current,
+// D033, once published; rv until then). Chosen per scenario in fly().
 const ARRIVAL_H = 2;
 const WINDOW_S = 45 * 60;
 // ?speed=10 plays everything ten times faster: for rehearsing the stand and for the tests.
@@ -40,7 +53,70 @@ const $ = (id) => document.getElementById(id);
 const game = {
   index: null, scenario: null, mode: 'map', name: 'Player', window: null, field: null,
   player: null, held: new Set(), t: 0, last: 0, running: false, result: null,
+  input: 'keys', pointer: null, pad: null,
 };
+
+const HINT = 'Point with the mouse where you want to fly and click to take off. The helicopter '
+  + 'turns like the real one, 7\u00b0 a second, so plan your turns. '
+  + 'Arrow keys, WASD or a game controller work too.';
+
+/* ---------------------------------------------------------------- steering */
+
+/** The compass heading from the helicopter now to a point on the map, [lat, display lon]. */
+function headingTo(latlng) {
+  const [lat, lon] = game.player.position(game.t);
+  const dLon = latlng.lng - display(lon);
+  const east = dLon * M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180);
+  const north = (latlng.lat - lat) * M_PER_DEG_LAT;
+  return Math.hypot(east, north) < 1 ? null : bearing(east, north);
+}
+
+/** The first connected game controller's stick or d-pad as a heading, or null. */
+function padHeading() {
+  const pads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : [];
+  for (const pad of pads) {
+    if (!pad) continue;
+    const [x = 0, y = 0] = pad.axes;
+    if (Math.hypot(x, y) > 0.45) return bearing(x, -y);
+    const b = (i) => Boolean(pad.buttons[i]?.pressed);
+    const held = new Set([b(12) && 'up', b(13) && 'down', b(14) && 'left', b(15) && 'right'].filter(Boolean));
+    const h = headingFromKeys(held);
+    if (h !== null) return h;
+    if (pad.buttons.some((btn) => btn.pressed)) return undefined;   // pressed, but no direction
+  }
+  return null;
+}
+
+/** What the player is asking for now, from whichever input they used last. */
+function wanted() {
+  const pad = padHeading();
+  if (pad !== null) {
+    game.input = 'pad';
+    return pad ?? null;
+  }
+  if (game.input === 'mouse' && game.pointer) return headingTo(game.pointer);
+  if (game.input === 'keys') return headingFromKeys(game.held);
+  return null;
+}
+
+function takeOff() {
+  if (game.running || game.t !== 0 || !$('fly').classList.contains('on')) return;
+  game.running = true;
+  game.last = performance.now();
+  $('hint').style.display = 'none';
+  requestAnimationFrame(flyTick);
+}
+
+/** Before take-off, a controller is only seen by asking it, so ask every frame. */
+function waitForPad() {
+  if (!$('fly').classList.contains('on') || game.running || game.t !== 0) return;
+  if (padHeading() !== null) {
+    game.input = 'pad';
+    takeOff();
+    return;
+  }
+  requestAnimationFrame(waitForPad);
+}
 
 function basemap() {
   return esriTiles('Canvas/World_Dark_Gray_Base', {
@@ -82,7 +158,7 @@ function attract() {
   drawBoards();
   // The two 3D loops (scripts/render_showcase.py), one after the other.
   const video = $('showcase');
-  const loops = ['mountain', 'cube'].map((n) => `${SCENARIO_ROOT}/../showcase/${n}.webm`);
+  const loops = ['mountain', 'cube'].map((n) => `${SHOWCASE_ROOT}/${n}.webm`);
   let i = 0;
   video.loop = false;
   video.onended = () => { i = (i + 1) % loops.length; video.src = loops[i]; video.play().catch(() => {}); };
@@ -129,13 +205,15 @@ function choose(s) {
 let flyMap = null;
 let flyScene = null;
 let fieldLayer = null;
+const flyLegend = new ProbabilityLegend({ compact: true });
 
 async function fly() {
   game.name = nickname($('name').value);
   $('status').textContent = 'loading the sea…';
   $('goBtn').disabled = true;            // one flight per click, however slow the download
   try {
-    game.window = await loadWindow(game.scenario.scenario, NOISE, ARRIVAL_H);
+    game.noise = bestNoise(game.scenario);
+    game.window = await loadWindow(game.scenario.scenario, game.noise, ARRIVAL_H);
     game.field = await loadField(game.scenario.scenario, ARRIVAL_H, game.index);
   } catch (err) {
     $('status').textContent = `could not load this buoy: ${err.message}`;
@@ -146,26 +224,62 @@ async function fly() {
   $('status').textContent = '';
   show('fly');
   if (!flyMap) {
-    flyMap = newMap('flyMap', { keyboard: false });
+    // Dragging pans the map; steering waits while it does, so a pan is never a turn.
+    flyMap = newMap('flyMap', { keyboard: false, doubleClickZoom: false, boxZoom: false });
     fieldLayer = new FieldLayer();
+    flyMap.on('dragstart', () => { game.panning = true; });
+    flyMap.on('dragend', () => {
+      game.panning = false;
+      game.pannedAt = performance.now();
+    });
+    flyMap.on('mousemove', (e) => {
+      if (game.panning) return;
+      game.pointer = e.latlng;
+      if (game.running) game.input = 'mouse';
+    });
+    flyMap.on('click', (e) => {
+      game.pointer = e.latlng;
+      game.input = 'mouse';
+      takeOff();
+    });
   }
   flyMap.invalidateSize();
   if (flyScene) flyScene.destroy();
   const showCloud = game.mode === 'map';
   flyScene = new Scene(flyMap, { colour: '#ffffff', showCloud });
-  flyScene.setWindow(game.window);
-  if (showCloud) fieldLayer.remove(); else fieldLayer.addTo(flyMap);
+  // The cloud where the search starts, one zoom level out: room round it for the helicopter to
+  // turn in. In fast water the cloud then drifts several km, and the camera follows.
+  flyScene.setWindow(game.window, { startOnly: true, zoomOut: 1 });
+  if (showCloud) {
+    fieldLayer.remove();
+    flyLegend.addTo(flyMap);
+  } else {
+    fieldLayer.addTo(flyMap);
+    flyLegend.remove();
+  }
   $('hudPosCard').style.display = showCloud ? '' : 'none';
-  game.player = new PlayerFlight(game.window, { heading: game.window.meta.drift_bearing_deg ?? 0 });
+  // It arrives pointing along the drift, as every searcher in the benchmark does.
+  game.player = new PlayerFlight(game.window);
   game.t = 0;
   game.running = false;
+  game.pointer = null;
   $('hint').style.display = '';
-  $('hint').textContent = 'Arrow keys or WASD to steer. Press any arrow to take off.';
+  $('hint').textContent = HINT;
   drawFly();
+  requestAnimationFrame(waitForPad);
 }
+
+/** Seconds after a pan before the camera follows the helicopter again. */
+const FOLLOW_AFTER_PAN_MS = 4000;
 
 function drawFly() {
   flyScene.update(game.t, game.player);
+  // If the helicopter flies off the screen the camera follows it, unless the player has just
+  // panned away to look at something.
+  if (!game.panning && performance.now() - (game.pannedAt ?? 0) > FOLLOW_AFTER_PAN_MS) {
+    const [lat, lon] = game.player.position(game.t);
+    flyMap.panInside([lat, display(lon)], { padding: [60, 60], animate: false });
+  }
   if (game.mode === 'currents') {
     const c = game.window.meta.field_centre;
     fieldLayer.setState({ field: game.field, centre: [c.lat, c.lon], t: game.t });
@@ -178,7 +292,7 @@ function flyTick(now) {
   if (!game.running) return;
   const dt = Math.max(0, Math.min(0.1, (now - game.last) / 1000));
   game.last = now;
-  const heading = headingFromKeys(game.held);
+  const heading = wanted();
   if (heading !== null) game.player.steer(heading);
   game.t = Math.min(WINDOW_S, game.t + dt * FLY_SPEED);
   game.player.advanceTo(game.t);
@@ -227,7 +341,7 @@ function reveal() {
 
 /** The player's flight again from the start, so it can be watched beside the others. */
 function rewind(player) {
-  const again = new PlayerFlight(game.window, { heading: player.headings.headingDeg[0] ?? 0 });
+  const again = new PlayerFlight(game.window);
   again.script = player.record();
   return again;
 }
@@ -259,8 +373,11 @@ function revealTick(now) {
   $('posAi').textContent = pct(game.flights[2].metrics().pos);
   if (game.t >= WINDOW_S) {
     for (const s of game.scenes) s.showBuoy(WINDOW_S);
+    // The real buoy is often kilometres outside the cloud: zoom out until it is in view (the
+    // other panels follow the first), and leave it up long enough to look at.
+    game.scenes[0].fitAll(WINDOW_S);
     game.revealing = false;
-    setTimeout(results, 2500 / SPEED_UP);
+    setTimeout(results, 7000 / SPEED_UP);
     return;
   }
   requestAnimationFrame(revealTick);
@@ -309,7 +426,7 @@ async function results() {
 async function benchmark() {
   try {
     const b = await loadBenchmark();
-    const rows = (b.scenarios55 ?? b).filter((r) => r.noise === NOISE && r.arrival_h === ARRIVAL_H)
+    const rows = (b.scenarios55 ?? b).filter((r) => r.noise === game.noise && r.arrival_h === ARRIVAL_H)
       .sort((x, y) => y.pos - x.pos);
     $('benchNote').textContent = `Over all ${rows[0]?.n_groups ?? 55} buoys, the helicopter arriving 2 hours after the call:`;
     $('benchTable').innerHTML = '<tr><th>Searcher</th><th>Searched, on average</th><th>Found the person</th></tr>'
@@ -352,6 +469,7 @@ async function main() {
   $('goBtn').addEventListener('click', () => { game.saved = false; fly(); });
   $('skipBtn').addEventListener('click', () => {
     for (const s of game.scenes ?? []) s.showBuoy(WINDOW_S);
+    game.scenes?.[0]?.fitAll(WINDOW_S);
     results();
   });
   $('againBtn').addEventListener('click', attract);
@@ -361,12 +479,8 @@ async function main() {
     if (!d || !$('fly').classList.contains('on')) return;
     e.preventDefault();
     game.held.add(d);
-    if (!game.running && game.t === 0) {
-      game.running = true;
-      game.last = performance.now();
-      $('hint').style.display = 'none';
-      requestAnimationFrame(flyTick);
-    }
+    game.input = 'keys';
+    takeOff();
   });
   window.addEventListener('keyup', (e) => {
     const d = keyDirection(e.code);

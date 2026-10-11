@@ -55,6 +55,7 @@
       /* pick */
       #pick { grid-template-columns: 1fr 380px; }
       #pickMap, #flyMap { min-height: 0; height: 100%; background: #111; }
+      #flyMap { cursor: crosshair; }
       #pick aside { padding: 16px; display: flex; flex-direction: column; gap: 12px; background: var(--surface-1); border-left: 1px solid var(--line); }
       .modes { display: grid; gap: 8px; }
       .modes button { text-align: left; background: var(--surface-2); border: 2px solid var(--line); border-radius: 10px; padding: 10px 12px; }
@@ -73,6 +74,7 @@
       .hint {
         position: absolute; z-index: 500; bottom: 18px; left: 50%; transform: translateX(-50%);
         background: #000b; padding: 8px 14px; border-radius: 10px; color: #ffcd8d; pointer-events: none;
+        max-width: min(720px, calc(100% - 32px)); text-align: center;
       }
 
       /* reveal */
@@ -146,7 +148,7 @@
         <div class="card"><b id="hudTime">45:00</b><span class="muted">left</span></div>
         <div class="card" id="hudPosCard"><b id="hudPos">0 %</b><span class="muted">searched</span></div>
       </div>
-      <div class="hint" id="hint">Arrow keys or WASD to steer. Press any arrow to take off.</div>
+      <div class="hint" id="hint">Point with the mouse where you want to fly and click to take off.</div>
     </section>
 
     <section class="screen" id="reveal">
