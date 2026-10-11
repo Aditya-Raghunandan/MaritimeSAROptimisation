@@ -13,10 +13,10 @@ from sar.pipeline.ensemble import Ensemble
 from sar.rl.features import Context, heading_of, observe, time_weighted_return
 from sar.rl.windows import is_test, load, parse_windows_name
 from sar.search.benchmark import BASELINE, GREEDY, SEARCHERS, recorded, searcher
-from sar.search.episode import SearchEpisode, run
+from sar.search.episode import run
 from sar.search.patterns import MarkerTrack
 from sar.search.platform import STEP_S
-from sar.search.scenario import SearchSetup
+from sar.search.scenario import SearchSetup, search_episode
 from sar.utils.geo import offset_position, to_display_longitude
 
 PPO = "ppo"
@@ -46,7 +46,7 @@ def _floats(a, digits: int = 9) -> list:
 def flight_entry(policy, first_bearing, layout: str, setup: SearchSetup) -> dict:
     """One searcher flown and recorded, in scripts/export_scenario_bundles.py's `flights` format."""
     flying, steps = recorded(policy)
-    m = run(flying, SearchEpisode(setup.window, setup.marker, target=setup.target))
+    m = run(flying, search_episode(setup))
     target = m.get("target") or {}
     return {"layout": layout, "first_bearing_deg": first_bearing,
             "steps": [{"t_s": _floats(s.t_s), "east_m": _floats(s.east_m),

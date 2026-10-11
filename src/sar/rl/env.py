@@ -11,6 +11,7 @@ import numpy as np
 from sar.rl.features import SIZE, Context, heading_of, observe, reward
 from sar.rl.windows import SearchWindows, load, parse_windows_name
 from sar.search.episode import SearchEpisode
+from sar.search.scenario import search_episode
 
 
 def window_items(sources, arrivals_min=None) -> list[tuple[object, int]]:
@@ -59,7 +60,7 @@ class SearchEnv(gym.Env):
         windows = self._windows(source)
         setup = windows.setup(k)
         self.context = Context(windows.lkp, setup.arrival_s, setup.drift_bearing_deg)
-        self.episode = SearchEpisode(setup.window, setup.marker)
+        self.episode = search_episode(setup)
         self.pos = 0.0
         return observe(self.episode, self.context), {"window": windows.name,
                                                      "arrival_s": setup.arrival_s}

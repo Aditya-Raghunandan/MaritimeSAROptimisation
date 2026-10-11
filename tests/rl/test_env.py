@@ -15,7 +15,8 @@ from sar.rl.features import (
     reward,
     time_weighted_return,
 )
-from sar.search.episode import STEPS, SearchEpisode, run
+from sar.search.episode import STEPS, run
+from sar.search.scenario import search_episode
 
 
 class TestReward:
@@ -62,7 +63,7 @@ class TestSearchEnv:
         assert total == pytest.approx(time_weighted_return(removed), rel=1e-12)
         setup = windows.setup(1)
         flown = iter(actions)
-        again = run(lambda ep: heading_of(next(flown), 36), SearchEpisode(setup.window, setup.marker))
+        again = run(lambda ep: heading_of(next(flown), 36), search_episode(setup))
         assert info["pos"] == pytest.approx(again["pos"], abs=1e-12)
         assert again["removed_per_step"] == pytest.approx(removed, abs=1e-15)
 
@@ -90,3 +91,15 @@ class TestSearchEnv:
         vector = dict(zip(VECTOR, obs[-len(VECTOR):]))
         assert vector["time_left"] == 1.0 and vector["remaining"] == pytest.approx(1.0)
         assert vector["arrival_h"] == pytest.approx(0.5)
+
+    def test_the_heading_inputs_start_along_the_drift_and_follow_the_turns(self, windows):
+        env = SearchEnv([windows], headings=8)
+        obs, _ = env.reset(seed=0, options={"item": 0})
+        vector = dict(zip(VECTOR, obs[-len(VECTOR):]))
+        start = np.radians(env.context.drift_bearing_deg or 0.0)
+        assert (vector["heading_sin"], vector["heading_cos"]) == pytest.approx(
+            (np.sin(start), np.cos(start)), abs=1e-6)
+        obs, *_ = env.step(2)
+        vector = dict(zip(VECTOR, obs[-len(VECTOR):]))
+        assert env.episode.heading_deg == pytest.approx(90.0, abs=1e-6)
+        assert (vector["heading_sin"], vector["heading_cos"]) == pytest.approx((1.0, 0.0), abs=1e-6)

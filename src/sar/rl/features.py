@@ -12,7 +12,7 @@ MAP_CELLS, MAP_CELL_M = 32, 1000.0      # project choice: the plan's 32 x 32 map
 NEAR_CELLS, NEAR_CELL_M = 16, 250.0     # D007's 250 m episode cell, 4 km about the helicopter
 KM10 = 10_000.0                         # project choice: distances in tens of km keep the inputs near 1
 VECTOR = ("heli_east", "heli_north", "lkp_east", "lkp_north", "time_left", "remaining",
-          "arrival_h", "drift_sin", "drift_cos")
+          "arrival_h", "drift_sin", "drift_cos", "heading_sin", "heading_cos")
 SIZE = MAP_CELLS ** 2 + NEAR_CELLS ** 2 + len(VECTOR)
 
 
@@ -70,7 +70,8 @@ def observe(episode, context: Context) -> np.ndarray:
     lkp_east, lkp_north = relative_m(*context.lkp, *episode.position)
     b = context.drift_bearing_deg
     drift = (0.0, 0.0) if b is None else (np.sin(np.radians(b)), np.cos(np.radians(b)))
+    h = np.radians(episode.heading_deg)       # where it points now: a turn costs time since D032
     vector = [ox / KM10, oy / KM10, float(lkp_east) / KM10, float(lkp_north) / KM10,
               1.0 - episode.t_s / episode.duration_s, episode.remaining,
-              context.arrival_s / 3600.0, *drift]
+              context.arrival_s / 3600.0, *drift, np.sin(h), np.cos(h)]
     return np.concatenate((far, near, vector)).astype(np.float32)
