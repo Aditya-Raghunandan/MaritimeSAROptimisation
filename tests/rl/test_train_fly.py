@@ -1,5 +1,6 @@
 """Tests for sar.rl.train and sar.rl.fly: the split, a tiny run, and flights in the site's bundle format."""
 
+import importlib.util
 import json
 import shutil
 from pathlib import Path
@@ -13,6 +14,11 @@ from sar.rl import fly, train
 from sar.rl.env import SearchEnv
 from sar.rl.windows import is_test, load
 
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "plot_training.py"
+spec = importlib.util.spec_from_file_location("plot_training", SCRIPT)
+plot_training = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(plot_training)
+
 FIXTURE = Path(__file__).resolve().parents[2] / "frontend/tests/e2e/fixtures/scenarios/v1/S01"
 
 
@@ -21,7 +27,8 @@ def trained(windows_dir, tmp_path_factory):
     out = tmp_path_factory.mktemp("runs")
     return train._cli(["--windows", str(windows_dir), "--validation-every", "3",
                        "--arrival-min", "30", "45", "60", "--headings", "8", "--timesteps", "128",
-                       "--envs", "1", "--seed", "1", "--eval-every", "64", "--out", str(out)])
+                       "--envs", "1", "--seed", "1", "--eval-every", "64", "--patience", "0",
+                       "--improve-threshold", "0", "--out", str(out)])
 
 
 class TestSplit:
@@ -45,6 +52,31 @@ class TestTrain:
         config = json.loads((trained / "config.json").read_text())
         assert config["arguments"]["headings"] == 8 and config["test_files"] == 1
         assert not any("20190129" in name for name in config["train"])
+        assert config["trained_timesteps"] >= 128
+
+    def test_patience_stops_a_run_that_stops_improving(self, windows_dir, tmp_path):
+        run = train._cli(["--windows", str(windows_dir), "--validation-every", "3",
+                          "--arrival-min", "30", "--headings", "8", "--timesteps", "4096",
+                          "--envs", "1", "--seed", "1", "--eval-every", "64", "--patience", "1",
+                          "--improve-threshold", "1", "--out", str(tmp_path)])
+        assert json.loads((run / "config.json").read_text())["trained_timesteps"] == 128
+
+    def test_the_curves_mark_the_best_validation(self, trained):
+        data = plot_training.draw(trained, patience=1, threshold=1.0)
+        assert (trained / "training_curves.png").exists()
+        assert data["last_gain_steps"] == 64 and data["would_stop_steps"] == 128
+        assert data["best"]["reward"] == max(v["reward"] for v in data["validation"])
+
+
+class TestPlateau:
+    def test_a_gain_under_the_threshold_does_not_count(self):
+        assert train.plateau([0.5, 0.6, 0.6005, 0.6008, 0.6009], 3, 0.001) == (1, 4)
+
+    def test_a_real_gain_resets_the_count(self):
+        assert train.plateau([0.5, 0.6, 0.6, 0.65, 0.65, 0.65], 3, 0.001) == (3, None)
+
+    def test_patience_zero_never_stops(self):
+        assert train.plateau([0.7] * 50, 0, 0.001) == (0, None)
 
 
 class TestFly:

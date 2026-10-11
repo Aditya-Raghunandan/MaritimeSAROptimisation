@@ -39,6 +39,39 @@ def git_commit() -> str:
         return "unknown"
 
 
+def plateau(scores, patience: int, threshold: float) -> tuple[int | None, int | None]:
+    """(last validation that beat the best by more than threshold, the one `patience` later that stops training)."""
+    best, improved, waited = -np.inf, None, 0
+    for i, score in enumerate(scores):
+        if score > best + threshold:
+            best, improved, waited = score, i, 0
+        else:
+            waited += 1
+            if patience and waited >= patience:
+                return improved, i
+    return improved, None
+
+
+def stop_on_plateau(patience: int, threshold: float):
+    """An EvalCallback callback_after_eval that ends training once `plateau` says stop."""
+    from stable_baselines3.common.callbacks import BaseCallback
+
+    class StopOnPlateau(BaseCallback):
+        def __init__(self):
+            super().__init__()
+            self.scores = []
+
+        def _on_step(self) -> bool:
+            self.scores.append(float(self.parent.last_mean_reward))
+            if plateau(self.scores, patience, threshold)[1] is None:
+                return True
+            print(f"validation has not beaten its best by {threshold} in {patience} checks: "
+                  f"stopping at {self.num_timesteps:,} steps")
+            return False
+
+    return StopOnPlateau()
+
+
 def _cli(argv=None) -> Path:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--windows", required=True, help="directory of windows_*.npz files")
@@ -54,6 +87,11 @@ def _cli(argv=None) -> Path:
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--eval-every", type=int, required=True,
                         help="environment steps between scores on the validation weeks")
+    parser.add_argument("--patience", type=int, required=True,
+                        help="stop after this many validations in a row without beating the best "
+                             "by --improve-threshold; 0 never stops early")
+    parser.add_argument("--improve-threshold", type=float, required=True,
+                        help="how much a validation must beat the best by to count, such as 0.001")
     parser.add_argument("--out", required=True, help="directory the run's folder goes in")
     parser.add_argument("--force", action="store_true", help="replace an existing run folder")
     args = parser.parse_args(argv)
@@ -70,6 +108,8 @@ def _cli(argv=None) -> Path:
     groups = split(args.windows, args.validation_every)
     if not groups["train"]:
         parser.error(f"no training windows in {args.windows}")
+    if args.patience and not groups["validation"]:
+        parser.error("--patience needs validation windows; pass --patience 0 with --validation-every 0")
     run = Path(args.out) / f"ppo_h{args.headings}_seed{args.seed}_T{args.timesteps}"
     if run.exists() and not args.force:
         parser.error(f"{run} exists; pass --force to replace it")
@@ -92,11 +132,13 @@ def _cli(argv=None) -> Path:
                                 log_path=str(run / "eval"),
                                 eval_freq=max(args.eval_every // args.envs, 1),
                                 n_eval_episodes=len(window_items(sources, args.arrival_min)),
-                                deterministic=True)
+                                deterministic=True,
+                                callback_after_eval=(stop_on_plateau(args.patience, args.improve_threshold)
+                                                     if args.patience else None))
     else:
         print("no validation windows: best_model.zip will not be written", file=sys.stderr)
 
-    (run / "config.json").write_text(json.dumps({
+    config = {
         "arguments": vars(args), "git_commit": git_commit(),
         "stable_baselines3": stable_baselines3.__version__,
         "observation": {"size": SIZE, "map": [MAP_CELLS, MAP_CELL_M],
@@ -105,9 +147,12 @@ def _cli(argv=None) -> Path:
         "train": [p.name for p in groups["train"]],
         "validation": [p.name for p in groups["validation"]],
         "test_files": len(groups["test"]),
-    }, indent=1))
+    }
+    (run / "config.json").write_text(json.dumps(config, indent=1))
     model.learn(total_timesteps=args.timesteps, callback=callback)
     model.save(run / "model.zip")
+    config["trained_timesteps"] = int(model.num_timesteps)
+    (run / "config.json").write_text(json.dumps(config, indent=1))
     env.close()
     print(run)
     return run

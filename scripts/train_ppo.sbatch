@@ -12,7 +12,7 @@
 #     sbatch scripts/train_ppo.sbatch --windows /home/26p67/data/derived/rl/windows \
 #         --validation-every 8 \
 #         --arrival-min 30 45 60 --headings 36 --timesteps 2000000 --envs 4 --seed 1 \
-#         --eval-every 100000 --out /home/26p67/data/derived/rl/runs
+#         --eval-every 100000 --patience 5 --improve-threshold 0.001 --out /home/26p67/data/derived/rl/runs
 
 set -euo pipefail
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1

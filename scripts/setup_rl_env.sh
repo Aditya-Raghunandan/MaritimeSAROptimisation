@@ -56,9 +56,9 @@ SMOKE="$(dirname "$WINDOWS")/smoke_$$"
 trap 'rm -rf "$SMOKE"' EXIT
 PYTHONPATH=src srun --partition="$PARTITION" --time=00:15:00 --mem=8G "$ENV/bin/python" -m sar.rl.train \
     --windows "$WINDOWS" --validation-every 8 --arrival-min 30 45 60 --headings 36 \
-    --timesteps 256 --envs 1 --seed 1 --eval-every 100000000 --out "$SMOKE" \
+    --timesteps 256 --envs 1 --seed 1 --eval-every 100000000 --patience 0 --improve-threshold 0 --out "$SMOKE" \
     || fail "the training run did not start; the traceback above says why"
 
 echo
 echo "ALL GOOD. Submit training with:"
-echo "  sbatch scripts/train_ppo.sbatch --windows $WINDOWS --validation-every 8 --arrival-min 30 45 60 --headings 36 --timesteps 3000000 --envs 4 --seed 1 --eval-every 100000 --out $(dirname "$WINDOWS")/runs"
+echo "  sbatch scripts/train_ppo.sbatch --windows $WINDOWS --validation-every 8 --arrival-min 30 45 60 --headings 36 --timesteps 3000000 --envs 4 --seed 1 --eval-every 100000 --patience 5 --improve-threshold 0.001 --out $(dirname "$WINDOWS")/runs"
