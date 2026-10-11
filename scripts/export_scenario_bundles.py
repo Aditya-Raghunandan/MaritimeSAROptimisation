@@ -28,6 +28,9 @@ heading at each waypoint, so the browser's referee checks the turns as Python's 
 format 1 window (scenarios/v1) was flown by a helicopter that turned at once. Nothing about a window is stored that
 cannot be rebuilt from its row and seed.
 
+`--ppo-model RUN/best_model.zip` adds the trained agent's flight as "ppo", flown and recorded
+like the rest (scenarios/v3: v2's windows plus the agent). index.json records which model.
+
     python scripts/export_scenario_bundles.py export --csv scenarios.csv --forcing-dir DATA \\
         --rows 1-55 --out DATA/published/scenarios/v2
     python scripts/export_scenario_bundles.py upload --src DATA/published/scenarios/v2 \\
@@ -105,11 +108,15 @@ def field_grid(forcing, datum, start) -> np.ndarray:
     return out
 
 
-def flights(setup, row, hours: float, greedy: dict) -> dict:
-    """Every searcher flown and recorded: its steps, and the referee's numbers for it."""
+def flights(setup, row, hours: float, greedy: dict, ppo=None) -> dict:
+    """Every searcher flown and recorded: its steps, and the referee's numbers for it.
+
+    `ppo`, score_scenarios.PPOSearcher, adds the trained agent as "ppo".
+    """
     out = {}
-    for name in SEARCHERS:
-        policy, first, layout = searcher(name, setup, row, hours, greedy)
+    for name in SEARCHERS + (("ppo",) if ppo else ()):
+        policy, first, layout = (ppo(setup, row) if name == "ppo"
+                                 else searcher(name, setup, row, hours, greedy))
         flying, steps = recorded(policy)
         m = run(flying, search_episode(setup))
         target = m.get("target") or {}
@@ -128,7 +135,7 @@ def flights(setup, row, hours: float, greedy: dict) -> dict:
 
 
 def export_row(row, forcing, noises, arrivals_h, particles: int, out: Path,
-               greedy: dict) -> dict:
+               greedy: dict, ppo=None) -> dict:
     """Every window of one row; returns its entry for index.json.
 
     `forcing` is a backend, or a data root, opened once for the latest arrival's window.
@@ -187,7 +194,7 @@ def export_row(row, forcing, noises, arrivals_h, particles: int, out: Path,
                     "lon": _floats(target.lon, 10)},
                 "field": f"field_{hours:g}h.f32",
                 "field_centre": {"lat": centre[0], "lon": centre[1]},
-                "flights": flights(setup, row, hours, greedy),
+                "flights": flights(setup, row, hours, greedy, ppo),
             }
             (folder / f"{name}.json").write_text(json.dumps(record, separators=(",", ":")))
             windows.append(name)
@@ -278,6 +285,7 @@ def main(argv=None):
     e.add_argument("--noise", nargs="+", choices=sorted(NOISE), default=["rvc", "rv"])
     e.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0])
     e.add_argument("--particles", type=int, default=10_000)
+    e.add_argument("--ppo-model", help="the trained agent's best_model.zip: adds its flight")
     e.add_argument("--out", required=True)
     b = sub.add_parser("benchmark", help="benchmark.json for the site from summary.csv files")
     b.add_argument("--summary", nargs=2, action="append", metavar=("NAME", "CSV"), required=True)
@@ -310,6 +318,7 @@ def main(argv=None):
     score = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(score)
 
+    ppo = score.PPOSearcher(args.ppo_model) if args.ppo_model else None
     table = read_scenarios(args.csv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -318,12 +327,14 @@ def main(argv=None):
         row = table[table["scenario"] == name].iloc[0]
         t0 = time.perf_counter()
         entries.append(export_row(row, args.forcing_dir, args.noise, args.arrival_h,
-                                  args.particles, out, GREEDY))
+                                  args.particles, out, GREEDY, ppo))
         print(f"{name}: {len(entries[-1]['windows'])} windows in "
               f"{time.perf_counter() - t0:.1f} s", flush=True)
     write_index(out, entries, {"particles": args.particles, "noise": NOISE_RECORD, "greedy": GREEDY,
                                "format": FORMAT, "turn_rate_deg_s": TURN_RATE_DEG_S,
-                               "arrival_h": args.arrival_h, "searchers": list(SEARCHERS),
+                               "arrival_h": args.arrival_h,
+                               "searchers": list(SEARCHERS) + (["ppo"] if ppo else []),
+                               "ppo": None if ppo is None else ppo.record,
                                "commit": score.git_commit()})
 
 

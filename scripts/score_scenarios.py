@@ -19,6 +19,13 @@ doctrinal_searcher` exactly as the site lays them; greedy and the random floor
 (`sar.search.greedy`, #49). The random floor's seed is the row's seed and the arrival, so
 both noise models are searched with the same random headings.
 
+THE TRAINED AGENT. `--searchers ... ppo --ppo-model RUN/best_model.zip` adds the PPO policy
+(`sar.rl`, D005) as a seventh searcher: one of its compass headings a minute, chosen from the
+observation it was trained on (`sar.rl.features.observe`), flown by the same referee and
+helicopter as the rest. The model file's sha256, its run and the commit it was trained at go
+in the manifest, so a folder never mixes two agents. Needs the `rl` extra (stable-baselines3,
+torch); nothing else here imports it.
+
 THE HELICOPTER TURNS AT 7 DEG/S (D032). Every flight is flown by a helicopter that turns
 at most `--turn-rate` degrees a second (default `TURN_RATE_DEG_S`, a 30 degree bank at
 90 kt), arriving along the drift (`sar.search.scenario.search_episode`). `--turn-rate inf`
@@ -83,6 +90,40 @@ RESAMPLES = 1000
 STRAIGHT_AT = 0.95
 BOOTSTRAP_SEED = 20261007
 REPO = Path(__file__).resolve().parents[1]
+PPO = "ppo"
+
+
+class PPOSearcher:
+    """The trained agent as a benchmark searcher, loaded once: `ppo(setup, row)` is what
+    `sar.search.benchmark.searcher` returns for the others, (policy, None, layout).
+
+    `record` is what the manifest and the site's index keep: which model, byte for byte.
+    """
+
+    def __init__(self, path):
+        from sar.rl.features import SIZE
+        from sar.rl.fly import load_policy
+
+        self.path = Path(path).resolve()
+        config = json.loads((self.path.parent / "config.json").read_text())
+        size = config.get("observation", {}).get("size")
+        if size != SIZE:
+            raise ValueError(f"{self.path} was trained on a {size}-number observation; "
+                             f"sar.rl.features builds {SIZE}, so it would be flown blind")
+        self.model, self.headings = load_policy(self.path)
+        self.record = {"run": self.path.parent.name, "file": self.path.name,
+                       "sha256": sha256(self.path), "headings": self.headings,
+                       "trained_commit": config.get("git_commit"),
+                       "trained_arrival_min": config.get("arguments", {}).get("arrival_min")}
+
+    def __call__(self, setup, row):
+        from sar.rl.features import Context
+        from sar.rl.fly import ppo_policy
+
+        context = Context((float(row["lat"]), float(row["lon"])), float(setup.arrival_s),
+                          setup.drift_bearing_deg)
+        return (ppo_policy(self.model, self.headings, context), None,
+                f"trained agent ({self.record['run']}), {self.headings} headings every 60 s")
 
 
 def row_names(spec, table: pd.DataFrame) -> list[str]:
@@ -117,10 +158,12 @@ def _scenario_fields(row) -> dict:
 
 def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
               greedy: dict | None = None,
-              turn_rate_deg_s: float = TURN_RATE_DEG_S) -> list[dict]:
+              turn_rate_deg_s: float = TURN_RATE_DEG_S,
+              ppo: PPOSearcher | None = None) -> list[dict]:
     """Every (noise, arrival, searcher) flight over one row, as flat dicts.
 
     `forcing` is a backend, or a data root, opened once for the latest arrival's window.
+    `ppo` flies the searcher named "ppo".
     """
     if isinstance(forcing, (str, Path)):
         start = np.datetime64(str(row["start"]), "us")
@@ -135,7 +178,8 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
                                     **NOISE[noise])
             beached = float(np.mean(setup.window.beached[-1]))
             for name in searchers:
-                policy, first, layout = searcher(name, setup, row, hours, greedy)
+                policy, first, layout = (ppo(setup, row) if name == PPO
+                                         else searcher(name, setup, row, hours, greedy))
                 m = run(policy, search_episode(setup, turn_rate_deg_s))
                 drain = m["removed_per_step"]
                 target = m.get("target") or {}
@@ -194,14 +238,15 @@ def sha256(path) -> str:
 
 
 def experiment(csv, noises, arrivals_h, searchers, particles: int,
-               greedy: dict | None = None, turn_rate_deg_s: float = TURN_RATE_DEG_S) -> dict:
+               greedy: dict | None = None, turn_rate_deg_s: float = TURN_RATE_DEG_S,
+               ppo: PPOSearcher | None = None) -> dict:
     """What makes two flights comparable. A folder holds flights from one of these only."""
     return {"commit": git_commit(), "table": Path(csv).name, "table_sha256": sha256(csv),
             "particles": int(particles), "noise": {n: NOISE_RECORD[n] for n in noises},
             "arrival_h": [float(a) for a in arrivals_h], "searchers": list(searchers),
             "greedy": dict(GREEDY if greedy is None else greedy),
             "turn_rate_deg_s": None if math.isinf(turn_rate_deg_s) else float(turn_rate_deg_s),
-            "steps": STEPS, "step_s": STEP_S}
+            "steps": STEPS, "step_s": STEP_S, "ppo": None if ppo is None else ppo.record}
 
 
 def claim(out: Path, settings: dict) -> dict:
@@ -355,7 +400,8 @@ def main(argv=None):
                         "pooled size, the comparison; rw: the old random walk")
     s.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0],
                    help="hours from the call to arrival, whole minutes; default 1 2 3")
-    s.add_argument("--searchers", nargs="+", choices=SEARCHERS, default=list(SEARCHERS))
+    s.add_argument("--searchers", nargs="+", choices=(*SEARCHERS, PPO), default=list(SEARCHERS))
+    s.add_argument("--ppo-model", help="the trained agent's best_model.zip, for --searchers ppo")
     s.add_argument("--particles", type=int, default=10_000)
     s.add_argument("--greedy-headings", type=int, default=GREEDY["headings"])
     s.add_argument("--greedy-decide-s", type=float, default=GREEDY["decide_s"],
@@ -388,18 +434,21 @@ def main(argv=None):
               f"-> {folder / 'summary.csv'}")
         return table
 
+    if (PPO in args.searchers) != bool(args.ppo_model):
+        parser.error("--searchers ppo and --ppo-model go together")
+    ppo = PPOSearcher(args.ppo_model) if args.ppo_model else None
     table = read_scenarios(args.csv)
     out = Path(args.out)
     greedy = {"headings": args.greedy_headings, "decide_s": args.greedy_decide_s}
     claim(out, experiment(args.csv, args.noise, args.arrival_h, args.searchers, args.particles,
-                          greedy, args.turn_rate))
+                          greedy, args.turn_rate, ppo))
     (out / "flights").mkdir(exist_ok=True)
     for name in row_names(args.rows, table):
         row = table[table["scenario"] == name].iloc[0]
         t0 = time.perf_counter()
         try:
             flights = score_row(row, args.forcing_dir, args.noise, args.arrival_h,
-                                args.searchers, args.particles, greedy, args.turn_rate)
+                                args.searchers, args.particles, greedy, args.turn_rate, ppo)
         except ForcingGapError as err:
             # D011: a scenario that crosses a gap in the forcing is excluded, and says why.
             (out / "flights" / f"{name}.skipped.json").write_text(
