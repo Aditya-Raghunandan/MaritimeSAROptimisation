@@ -23,6 +23,7 @@ N="${N:-10000}"
 SEED="${SEED:-20261008}"         # one seed for every run, by choice
 ARRIVALS="${ARRIVALS:-30 45 60}" # minutes from the call to arriving on scene
 OUT="${OUT:-$DATA/derived/rl}"
+WINDOWS="${WINDOWS:-$OUT/windows}"   # keep each set of arrival times in its own folder
 KEEP_CSV="${KEEP_CSV:-1}"        # 0 deletes each run's CSV once its windows file is written
 K="${SLURM_ARRAY_TASK_ID:?submit with --array}"
 
@@ -50,7 +51,7 @@ while [[ ! "$DAY" > "$LAST" ]]; do
     if [ -f "$RUN" ]; then
         # shellcheck disable=SC2086
         PYTHONPATH=src "$PY" -m sar.rl.windows --run "$RUN" --forcing-dir "$DATA" \
-            --arrival-min $ARRIVALS --out "$OUT/windows" \
+            --arrival-min $ARRIVALS --out "$WINDOWS" \
             && { [ "$KEEP_CSV" = 1 ] || rm -f "$RUN" "${RUN%.csv}.json"; } \
             || echo "$NAME $START: no windows written (already there, or the forcing has a gap)"
     fi

@@ -14,10 +14,18 @@ from sar.rl import fly, train
 from sar.rl.env import SearchEnv
 from sar.rl.windows import is_test, load
 
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "plot_training.py"
-spec = importlib.util.spec_from_file_location("plot_training", SCRIPT)
-plot_training = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(plot_training)
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+
+
+def script(name):
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+plot_training, produce_maps, compare_runs = (script(n) for n in ("plot_training", "produce_maps", "compare_runs"))
+BASELINE_PPO = ["--learning-rate", "0.0003", "--ent-coef", "0", "--clip-range", "0.2"]
 
 FIXTURE = Path(__file__).resolve().parents[2] / "frontend/tests/e2e/fixtures/scenarios/v1/S01"
 
@@ -28,7 +36,7 @@ def trained(windows_dir, tmp_path_factory):
     return train._cli(["--windows", str(windows_dir), "--validation-every", "3",
                        "--arrival-min", "30", "45", "60", "--headings", "8", "--timesteps", "128",
                        "--envs", "1", "--seed", "1", "--eval-every", "64", "--patience", "0",
-                       "--improve-threshold", "0", "--out", str(out)])
+                       "--improve-threshold", "0", *BASELINE_PPO, "--out", str(out)])
 
 
 class TestSplit:
@@ -58,8 +66,18 @@ class TestTrain:
         run = train._cli(["--windows", str(windows_dir), "--validation-every", "3",
                           "--arrival-min", "30", "--headings", "8", "--timesteps", "4096",
                           "--envs", "1", "--seed", "1", "--eval-every", "64", "--patience", "1",
-                          "--improve-threshold", "1", "--out", str(tmp_path)])
-        assert json.loads((run / "config.json").read_text())["trained_timesteps"] == 128
+                          "--improve-threshold", "1", "--learning-rate", "0.0001", "--ent-coef", "0.005",
+                          "--clip-range", "0.1", "--name", "run_entropy0.005", "--out", str(tmp_path)])
+        config = json.loads((run / "config.json").read_text())
+        assert run.name == "run_entropy0.005" and config["trained_timesteps"] == 128
+        assert config["ppo"]["learning_rate"] == 0.0001 and config["ppo"]["ent_coef"] == 0.005
+        model, _ = fly.load_policy(run / "model.zip")
+        assert model.ent_coef == 0.005 and model.clip_range(1.0) == 0.1 and model.learning_rate == 0.0001
+
+    def test_the_baseline_ppo_settings_are_recorded(self, trained):
+        ppo = json.loads((trained / "config.json").read_text())["ppo"]
+        assert (ppo["learning_rate"], ppo["ent_coef"], ppo["clip_range"]) == (0.0003, 0.0, 0.2)
+        assert (ppo["n_steps"], ppo["batch_size"], ppo["n_epochs"]) == (2048, 64, 10)
 
     def test_the_curves_mark_the_best_validation(self, trained):
         data = plot_training.draw(trained, patience=1, threshold=1.0)
@@ -139,3 +157,51 @@ class TestFly:
         assert set(record["flights"]) == {"ppo", "expanding-square"}
         name = load(min(windows_dir.glob("windows_*20190129*.npz"))).name
         assert record["scenario"] == name and record["arrival_s"] == 1800.0
+
+
+class TestMaps:
+    def test_a_map_lands_in_its_model_place_season_date_and_arrival_folder(self, trained, windows_dir, tmp_path):
+        model, headings = fly.load_policy(trained / "model.zip")
+        lat, lon = produce_maps.read_locations()["florida-current"]
+        window = produce_maps.find_window(windows_dir, lat, lon, "2019-01-29")
+        path = produce_maps.draw_map(trained, model, headings, window, 30, "florida-current", "2019-01-29",
+                                     ["expanding-square", "greedy"], True, tmp_path)
+        name = trained.name
+        assert path == (tmp_path / name / "florida-current" / "winter" / "2019-01-29" / "30min"
+                        / f"{name}_florida-current_2019-01-29_30min.png")
+        assert path.stat().st_size > 50_000
+
+    def test_the_model_rows_list_every_setting_once(self, trained):
+        model, _ = fly.load_policy(trained / "model.zip")
+        rows = dict(produce_maps.model_rows(trained, model))
+        assert rows["headings"] == "8" and rows["learning rate"] == "0.0003" and rows["clip range"] == "0.2"
+        assert rows["network"] == "64 × 64" and rows["arrival times"] == "30 45 60"
+
+    def test_an_arrival_time_the_windows_lack_is_refused(self, trained, windows_dir, tmp_path):
+        model, headings = fly.load_policy(trained / "model.zip")
+        window = min(windows_dir.glob("windows_*20190129*.npz"))
+        with pytest.raises(ValueError, match="arrival times"):
+            produce_maps.draw_map(trained, model, headings, window, 120, "florida-current", "2019-01-29",
+                                  ["expanding-square"], False, tmp_path)
+
+    def test_the_six_days_are_test_weeks(self, windows_dir):
+        name = min(windows_dir.glob("windows_*20190101*.npz")).name
+        assert all(is_test(name.replace("20190101", d.replace("-", ""))) for d in produce_maps.SEASON)
+
+
+class TestCompare:
+    def test_each_run_is_set_against_the_baseline(self, trained, tmp_path):
+        for name, ent in (("run_baseline", 0.0), ("run_entropy0.005", 0.005)):
+            run = tmp_path / name
+            shutil.copytree(trained, run)
+            config = json.loads((run / "config.json").read_text())
+            config["arguments"]["ent_coef"] = ent
+            (run / "config.json").write_text(json.dumps(config))
+            (run / "test").mkdir()
+            (run / "test" / "summary.csv").write_text(
+                "arrival_min,searcher,pos,time_weighted,ppo_minus_square,ppo_wins\n"
+                "30,expanding-square,0.40,0.3,0.05,0.6\n30,ppo,0.45,0.35,0.05,0.6\n")
+        table = compare_runs.compare(tmp_path)
+        assert list(table["run"]) == ["run_baseline", "run_entropy0.005"]
+        assert list(table["changed"]) == ["—", "ent_coef 0.005"]
+        assert table["lead_30"].tolist() == [0.05, 0.05] and (tmp_path / "comparison.csv").exists()
