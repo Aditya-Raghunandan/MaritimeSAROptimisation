@@ -12,7 +12,7 @@ MAP_CELLS, MAP_CELL_M = 32, 1000.0      # project choice: the plan's 32 x 32 map
 NEAR_CELLS, NEAR_CELL_M = 16, 250.0     # D007's 250 m episode cell, 4 km about the helicopter
 KM10 = 10_000.0                         # project choice: distances in tens of km keep the inputs near 1
 VECTOR = ("heli_east", "heli_north", "lkp_east", "lkp_north", "time_left", "remaining",
-          "transit_h", "drift_sin", "drift_cos")
+          "arrival_h", "drift_sin", "drift_cos")
 SIZE = MAP_CELLS ** 2 + NEAR_CELLS ** 2 + len(VECTOR)
 
 

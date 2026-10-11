@@ -12,7 +12,7 @@ WINDOWS="${WINDOWS:-/home/26p67/data/derived/rl/windows}"
 PARTITION="${PARTITION:-jaguarcluster}"
 # torch 2.13.0 is the newest CPU build on conda-forge on 9 Oct 2026; numpy matches the pipeline's.
 SPECS=(python=3.12 pytorch-cpu=2.13.0 stable-baselines3=2.9.0 gymnasium=1.3.0 numpy=2.5.3
-       pandas xarray cftime pyarrow scipy)
+       pandas xarray cftime pyarrow scipy matplotlib)
 
 fail() { echo; echo "FAILED: $*"; exit 1; }
 
@@ -38,7 +38,7 @@ else
 fi
 
 CHECK='import sys, torch, gymnasium, stable_baselines3 as sb3, numpy, pandas, xarray
-import sar.rl.train, sar.rl.env, sar.rl.fly
+import matplotlib, sar.rl.train, sar.rl.env, sar.rl.fly
 assert torch.version.cuda is None, "a CUDA build of torch was installed"
 print("python", sys.version.split()[0], "| torch", torch.__version__, "| gymnasium", gymnasium.__version__,
       "| stable-baselines3", sb3.__version__, "| numpy", numpy.__version__, "| pandas", pandas.__version__,
@@ -56,9 +56,10 @@ SMOKE="$(dirname "$WINDOWS")/smoke_$$"
 trap 'rm -rf "$SMOKE"' EXIT
 PYTHONPATH=src srun --partition="$PARTITION" --time=00:15:00 --mem=8G "$ENV/bin/python" -m sar.rl.train \
     --windows "$WINDOWS" --validation-every 8 --arrival-min 30 45 60 --headings 36 \
-    --timesteps 256 --envs 1 --seed 1 --eval-every 100000000 --patience 0 --improve-threshold 0 --out "$SMOKE" \
+    --timesteps 256 --envs 1 --seed 1 --eval-every 100000000 --patience 0 --improve-threshold 0 \
+    --learning-rate 0.0003 --ent-coef 0 --clip-range 0.2 --out "$SMOKE" \
     || fail "the training run did not start; the traceback above says why"
 
 echo
 echo "ALL GOOD. Submit training with:"
-echo "  sbatch scripts/train_ppo.sbatch --windows $WINDOWS --validation-every 8 --arrival-min 30 45 60 --headings 36 --timesteps 3000000 --envs 4 --seed 1 --eval-every 100000 --patience 5 --improve-threshold 0.001 --out $(dirname "$WINDOWS")/runs"
+echo "  sbatch scripts/train_ppo.sbatch --windows $WINDOWS --validation-every 8 --arrival-min 30 45 60 --headings 36 --timesteps 3000000 --envs 4 --seed 1 --eval-every 100000 --patience 10 --improve-threshold 0.001 --learning-rate 0.0003 --ent-coef 0 --clip-range 0.2 --out $(dirname "$WINDOWS")/runs"

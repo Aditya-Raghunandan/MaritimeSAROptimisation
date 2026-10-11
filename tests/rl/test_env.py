@@ -89,4 +89,4 @@ class TestSearchEnv:
         assert far.max() == pytest.approx(1.0) and far.min() >= 0.0
         vector = dict(zip(VECTOR, obs[-len(VECTOR):]))
         assert vector["time_left"] == 1.0 and vector["remaining"] == pytest.approx(1.0)
-        assert vector["transit_h"] == pytest.approx(0.5)
+        assert vector["arrival_h"] == pytest.approx(0.5)

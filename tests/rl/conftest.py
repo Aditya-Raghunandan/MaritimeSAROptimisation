@@ -11,7 +11,7 @@ from sar.rl.windows import build, save
 LAT, LON = 25.1629, -80.0647                   # the Florida Current location in scripts/rl_locations.txt
 START = "2019-01-01T17:00"
 FORCING = ConstantForcing(current=(0.3, 1.5), wind=(4.0, -2.0))   # a test choice: a northward jet
-ARRIVALS_S = (1800.0, 2700.0, 3600.0)          # the 30, 45 and 60 minute transits
+ARRIVALS_S = (1800.0, 2700.0, 3600.0)          # the 30, 45 and 60 minute arrival times
 
 
 def make_run(particles=600, seed=7, save_every=300.0, duration=6300.0, start=START):

@@ -1,4 +1,4 @@
-"""windows.py: one Monte Carlo run cut into the search windows PPO trains on, one per transit time."""
+"""windows.py: one Monte Carlo run cut into the search windows PPO trains on, one per arrival time."""
 
 from __future__ import annotations
 
@@ -74,13 +74,13 @@ def cloud_window(source, arrival_s: float) -> Ensemble:
 
 
 def windows_name(run: dict, arrivals_s) -> str:
-    """windows_<the run's name without 'ensemble_'>_arr<transit minutes, joined by ->m."""
+    """windows_<the run's name without 'ensemble_'>_arr<arrival minutes, joined by ->m."""
     minutes = "-".join(str(round(float(a) / 60.0)) for a in arrivals_s)
     return f"windows_{run_name(run).removeprefix('ensemble_')}_arr{minutes}m"
 
 
 def parse_windows_name(name) -> dict:
-    """The run parameters and transit times a windows file name encodes; the inverse of windows_name."""
+    """The run parameters and arrival times a windows file name encodes; the inverse of windows_name."""
     match = _NAME.fullmatch(Path(str(name)).name.removesuffix(".npz"))
     if not match:
         raise ValueError(f"{name!r} is not a windows file name")

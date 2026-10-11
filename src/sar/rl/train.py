@@ -79,7 +79,8 @@ def _cli(argv=None) -> Path:
                         help="hold out every k-th week outside the test weeks to pick the best "
                              "model; 0 for none")
     parser.add_argument("--arrival-min", type=int, nargs="+", required=True,
-                        help="transit times to train on, such as 30 45 60")
+                        help="arrival times to train on, minutes from the call to on scene, "
+                             "such as 30 60 120 180")
     parser.add_argument("--headings", type=int, required=True,
                         help="compass headings to choose from each minute; greedy flies 36")
     parser.add_argument("--timesteps", type=int, required=True, help="environment steps to train")
@@ -92,7 +93,15 @@ def _cli(argv=None) -> Path:
                              "by --improve-threshold; 0 never stops early")
     parser.add_argument("--improve-threshold", type=float, required=True,
                         help="how much a validation must beat the best by to count, such as 0.001")
+    parser.add_argument("--learning-rate", type=float, required=True,
+                        help="PPO's step size; Stable-Baselines3's default is 0.0003")
+    parser.add_argument("--ent-coef", type=float, required=True,
+                        help="entropy bonus, which pays the policy to keep exploring; default 0")
+    parser.add_argument("--clip-range", type=float, required=True,
+                        help="largest change in a heading's probability per update; default 0.2")
     parser.add_argument("--out", required=True, help="directory the run's folder goes in")
+    parser.add_argument("--name", help="the run folder's name; ppo_h<headings>_seed<seed>_T<timesteps> "
+                                       "if not given")
     parser.add_argument("--force", action="store_true", help="replace an existing run folder")
     args = parser.parse_args(argv)
 
@@ -110,7 +119,7 @@ def _cli(argv=None) -> Path:
         parser.error(f"no training windows in {args.windows}")
     if args.patience and not groups["validation"]:
         parser.error("--patience needs validation windows; pass --patience 0 with --validation-every 0")
-    run = Path(args.out) / f"ppo_h{args.headings}_seed{args.seed}_T{args.timesteps}"
+    run = Path(args.out) / (args.name or f"ppo_h{args.headings}_seed{args.seed}_T{args.timesteps}")
     if run.exists() and not args.force:
         parser.error(f"{run} exists; pass --force to replace it")
     run.mkdir(parents=True, exist_ok=True)
@@ -121,7 +130,8 @@ def _cli(argv=None) -> Path:
     env = make_vec_env(SearchEnv, n_envs=args.envs, seed=args.seed, vec_env_cls=vec,
                        monitor_dir=str(run / "monitor"),
                        env_kwargs={"sources": [str(p) for p in groups["train"]], **kwargs})
-    model = PPO("MlpPolicy", env, seed=args.seed, device="cpu", verbose=1)
+    model = PPO("MlpPolicy", env, learning_rate=args.learning_rate, ent_coef=args.ent_coef,
+                clip_range=args.clip_range, seed=args.seed, device="cpu", verbose=1)
 
     callback = None
     if groups["validation"]:
@@ -133,8 +143,9 @@ def _cli(argv=None) -> Path:
                                 eval_freq=max(args.eval_every // args.envs, 1),
                                 n_eval_episodes=len(window_items(sources, args.arrival_min)),
                                 deterministic=True,
-                                callback_after_eval=(stop_on_plateau(args.patience, args.improve_threshold)
-                                                     if args.patience else None))
+                                callback_after_eval=(
+                                    stop_on_plateau(args.patience, args.improve_threshold)
+                                    if args.patience else None))
     else:
         print("no validation windows: best_model.zip will not be written", file=sys.stderr)
 
@@ -143,6 +154,11 @@ def _cli(argv=None) -> Path:
         "stable_baselines3": stable_baselines3.__version__,
         "observation": {"size": SIZE, "map": [MAP_CELLS, MAP_CELL_M],
                         "near": [NEAR_CELLS, NEAR_CELL_M], "vector": list(VECTOR)},
+        "ppo": {"learning_rate": args.learning_rate, "n_steps": model.n_steps,
+                "batch_size": model.batch_size, "n_epochs": model.n_epochs, "gamma": model.gamma,
+                "gae_lambda": model.gae_lambda, "clip_range": args.clip_range,
+                "ent_coef": args.ent_coef, "vf_coef": model.vf_coef,
+                "max_grad_norm": model.max_grad_norm, "net_arch": model.policy.net_arch},
         "reward": "removed x (steps - k) / steps: particles found x time remaining, / (N x window)",
         "train": [p.name for p in groups["train"]],
         "validation": [p.name for p in groups["validation"]],

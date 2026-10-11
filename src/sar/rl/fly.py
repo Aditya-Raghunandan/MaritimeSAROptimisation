@@ -115,7 +115,7 @@ def window_record(windows, setup: SearchSetup, flights: dict) -> dict:
 
 
 def summarise(flights: pd.DataFrame) -> pd.DataFrame:
-    """Mean POS and time-weighted return per searcher and transit, and PPO's paired difference."""
+    """Mean POS and time-weighted return per searcher and arrival time, and PPO's paired difference."""
     table = (flights.groupby(["arrival_min", "searcher"])[["pos", "time_weighted"]]
              .mean().reset_index())
     if PPO in set(flights["searcher"]) and BASELINE in set(flights["searcher"]):
