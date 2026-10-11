@@ -50,6 +50,14 @@ same water (D025), and a long-lived buoy gives many rows. So every number is ave
 each group first and then across groups, and its 95 % interval comes from resampling whole
 groups. `summary` writes flights.parquet and summary.csv beside the rows.
 
+THE CLOUD'S SIZE SETS POS, SO EVERY COMPARISON IS ON THE SAME CLOUD. Each window records
+`area90_km2`, the smallest area holding 90 % of the cloud when the helicopter arrives. Every
+searcher's POS falls with it (r = -0.99 against its log, 12 Oct), so a searcher is only ever
+compared with another on the same cloud: the difference in POS ("pos difference", in points)
+and the ratio ("pos ratio", a geometric mean of POS over the Square's). Points weigh small
+clouds most, where POS is large; the ratio weighs every cloud alike. Both are sliced by the
+cloud's size (AREA_BINS_KM2), so a searcher that only wins on big clouds shows it.
+
     python scripts/score_scenarios.py score --csv scenarios.csv --forcing-dir DATA \\
         --rows 1-55 --noise rv rw --arrival-h 1 2 3 --out DIR
     python scripts/score_scenarios.py summary DIR [--straight-at 0.90]
@@ -81,9 +89,19 @@ from sar.search.scenario import (
     search_episode,
     straightness,
 )
+from sar.search.sweep import relative_m
 from sar.utils.geo import to_display_longitude
 
 RESAMPLES = 1000
+# The cloud's size at arrival: the smallest area holding 90 % of it, on 250 m cells (D007's
+# episode cell). Every searcher's POS falls with it (r = -0.99 against log size over the 330
+# published v2 windows, 12 Oct), so the summary slices by it. The bins were set on the six
+# searchers' v2 windows (129 / 95 / 106 windows), before any trained agent was scored.
+AREA_SHARE, AREA_CELL_M = 0.9, 250.0
+AREA_BINS_KM2 = (30.0, 60.0)
+# A searcher's POS over the Expanding Square's on the same cloud is taken in logs, so a POS of
+# 0 (the random floor can clear nothing) is held at this before the ratio.
+RATIO_FLOOR = 1e-4
 # Straight against turning: 0.95 is a curve turning through about 60 degrees over the 4 h.
 # The dev median is 0.995, a straight line to half a percent, so it would split straight
 # buoys from straight buoys (7 Oct: 12 % of the 9,538 dev rows are below 0.95).
@@ -156,6 +174,22 @@ def _scenario_fields(row) -> dict:
             "straightness_4h": straightness(row) if "lat_4h" in row.index else None}
 
 
+def cloud_area_km2(setup, share: float = AREA_SHARE, cell_m: float = AREA_CELL_M) -> float:
+    """The cloud's size when the helicopter arrives: the smallest area holding `share` of its
+    probability, km², on `cell_m` cells about the marker. The likeliest cells first."""
+    mlat, mlon = setup.marker.at(np.array([0.0]))
+    east, north = relative_m(setup.window.lat[0], setup.window.lon[0], mlat[0], mlon[0])
+    weight = np.asarray(setup.window.weight, dtype=float)
+    ok = np.isfinite(east) & np.isfinite(north) & (weight > 0)
+    cells = np.floor(east[ok] / cell_m).astype(np.int64) * 1_000_003 \
+        + np.floor(north[ok] / cell_m).astype(np.int64)
+    _, inverse = np.unique(cells, return_inverse=True)
+    mass = np.sort(np.bincount(inverse, weights=weight[ok]))[::-1]
+    held = np.cumsum(mass)
+    k = int(np.searchsorted(held, share * held[-1] - 1e-12)) + 1
+    return k * cell_m * cell_m / 1e6
+
+
 def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
               greedy: dict | None = None,
               turn_rate_deg_s: float = TURN_RATE_DEG_S,
@@ -177,6 +211,7 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
             setup = scenario_search(row, forcing, round(hours * 3600.0), particles,
                                     **NOISE[noise])
             beached = float(np.mean(setup.window.beached[-1]))
+            area = cloud_area_km2(setup)
             for name in searchers:
                 policy, first, layout = (ppo(setup, row) if name == PPO
                                          else searcher(name, setup, row, hours, greedy))
@@ -202,7 +237,7 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
                     "found": target.get("found"), "found_s": target.get("found_s"),
                     "closest_m": target.get("closest_m"),
                     "closest_s": target.get("closest_s"), "gaps": target.get("gaps"),
-                    "beached_share": beached, "distance_m": m["distance_m"],
+                    "beached_share": beached, "area90_km2": area, "distance_m": m["distance_m"],
                     "particles": particles, "drain_rate": drain})
     return flights
 
@@ -342,6 +377,13 @@ def slices(f: pd.DataFrame, straight_at: float | None) -> list[tuple[str, pd.Dat
         s = f["straightness_4h"].astype(float)
         out += [(f"path: straight (>= {straight_at:.3f})", f[s >= straight_at]),
                 (f"path: turning (< {straight_at:.3f})", f[s < straight_at])]
+    # The cloud's size at arrival, which sets every searcher's POS (AREA_BINS_KM2).
+    if "area90_km2" in f and f["area90_km2"].notna().any():
+        a = f["area90_km2"].astype(float)
+        lo, hi = AREA_BINS_KM2
+        out += [(f"cloud: < {lo:g} km2", f[a < lo]),
+                (f"cloud: {lo:g}-{hi:g} km2", f[(a >= lo) & (a < hi)]),
+                (f"cloud: >= {hi:g} km2", f[a >= hi])]
     return [(name, part) for name, part in out if len(part)]
 
 
@@ -381,6 +423,18 @@ def summarise(flights: pd.DataFrame, straight_at: float | None = STRAIGHT_AT,
                 rows += [{**r, "slice": name} for r in _tabulate(
                     d.dropna(subset=["diff"]), "pos difference", "diff", keys, rng, resamples,
                     better=True)]
+                # The same pairs as a ratio: how many times the Square's POS on the same cloud.
+                # A difference in points is dominated by small clouds, where POS is large; a
+                # ratio counts a big cloud's 0.15 against 0.12 the same as a small one's 0.75
+                # against 0.60. Averaged in logs (a geometric mean), so 2x and 0.5x cancel.
+                logs = np.log(np.maximum(wide[other], RATIO_FLOOR)
+                              / np.maximum(wide[BASELINE], RATIO_FLOOR))
+                d = wide[["scenario", "group", "noise", "arrival_h"]].assign(
+                    searcher=f"{other} / {BASELINE}", logratio=logs)
+                for r in _tabulate(d.dropna(subset=["logratio"]), "pos ratio", "logratio", keys,
+                                   rng, resamples, better=True):
+                    rows.append({**r, "slice": name, "mean": float(np.exp(r["mean"])),
+                                 "lo": float(np.exp(r["lo"])), "hi": float(np.exp(r["hi"]))})
     cols = ["measure", "slice", "noise", "searcher", "arrival_h", "n_rows", "n_groups",
             "mean", "lo", "hi", "groups_better"]
     out = pd.DataFrame(rows)
