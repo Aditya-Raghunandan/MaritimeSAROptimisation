@@ -19,7 +19,7 @@
  * cloud. One constant, so it can be changed on the day.
  */
 
-// v2: points by cloud size (12 Oct), so v1's points, on another scale, stay out of the board.
+// v2: points by cloud size (12 Oct). The v1 board is brought over once, rescored (load).
 export const STORAGE_KEY = 'sar-open-day-leaderboard-v2';
 export const MAX_ENTRIES = 500;
 /** The Expanding Square's POS on a cloud of A km²: PAR.k * A^PAR.power. */
@@ -63,9 +63,43 @@ export function verdict(you, rivals) {
   return { won: beaten.length === rivals.length, beaten };
 }
 
+// The board before 12 Oct, scored 1,000 x POS + 500 if found. Its entries keep their POS and
+// their buoy, so they are rescored by the new rule rather than dropped.
+export const OLD_STORAGE_KEY = 'sar-open-day-leaderboard-v1';
+/**
+ * Each buoy's cloud size where the game flies it (rvc, 2 h), km²: measured on the published v2
+ * windows on 12 Oct (scratch `window_sizes.py`). Only for rescoring the old board.
+ */
+export const GAME_AREA_KM2 = {
+  S01: 111.4, S02: 67.3, S03: 139.5, S04: 42.6, S05: 68.3, S06: 42.1, S07: 37.0, S08: 91.8,
+  S09: 97.9, S10: 32.9, S11: 148.8, S12: 36.3, S13: 90.4, S14: 23.6, S15: 34.9, S16: 26.8,
+  S17: 28.5, S18: 30.4, S19: 27.6, S20: 35.0, S21: 28.1, S22: 30.4, S23: 38.4, S24: 42.0,
+  S25: 23.9, S26: 24.3, S27: 44.8, S28: 88.1, S29: 28.5, S30: 74.9, S31: 27.7, S32: 23.4,
+  S33: 29.1, S34: 32.6, S35: 35.9, S36: 24.1, S37: 26.9, S38: 24.1, S39: 23.3, S40: 23.6,
+  S41: 63.7, S42: 60.7, S43: 91.8, S44: 41.8, S45: 29.6, S46: 22.4, S47: 60.9, S48: 26.2,
+  S49: 24.1, S50: 45.6, S51: 111.7, S52: 36.1, S53: 27.8, S54: 22.9, S55: 25.1,
+};
+
+/** Old entries on the new scale: same POS, same buoy, points by its cloud's size. */
+export function rescore(entries) {
+  return entries
+    .filter((e) => Number.isFinite(e?.pos) && GAME_AREA_KM2[e.scenario])
+    .map((e) => ({ ...e, area_km2: GAME_AREA_KM2[e.scenario], score: score(e.pos, GAME_AREA_KM2[e.scenario]),
+      old_score: e.score, rescored: true }))
+    .sort((a, b) => b.score - a.score || String(a.when).localeCompare(String(b.when)));
+}
+
 export function load(storage = globalThis.localStorage) {
   try {
-    const list = JSON.parse(storage?.getItem(STORAGE_KEY) ?? '[]');
+    const held = storage?.getItem(STORAGE_KEY);
+    if (held == null) {
+      // First load on the new scale: bring the old board over, rescored, once.
+      const old = JSON.parse(storage?.getItem(OLD_STORAGE_KEY) ?? '[]');
+      const list = Array.isArray(old) ? rescore(old) : [];
+      if (list.length) storage.setItem(STORAGE_KEY, JSON.stringify(list));
+      return list;
+    }
+    const list = JSON.parse(held);
     return Array.isArray(list) ? list : [];
   } catch {
     return [];

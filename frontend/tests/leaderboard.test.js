@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { add, cloudAreaKm2, load, nickname, par, score, top, verdict } from '../src/leaderboard.js';
+import {
+  GAME_AREA_KM2, OLD_STORAGE_KEY, STORAGE_KEY, add, cloudAreaKm2, load, nickname, par, rescore, score, top, verdict,
+} from '../src/leaderboard.js';
 
 function memory() {
   const store = new Map();
@@ -41,6 +43,32 @@ describe('the score', () => {
     const rivals = [{ name: 'Coast Guard', pos: 0.53 }, { name: 'AI', pos: 0.49 }];
     expect(verdict({ pos: 0.6 }, rivals)).toEqual({ won: true, beaten: ['Coast Guard', 'AI'] });
     expect(verdict({ pos: 0.5 }, rivals)).toEqual({ won: false, beaten: ['AI'] });
+  });
+});
+
+describe('the board from before 12 Oct', () => {
+  it('comes over once, rescored by cloud size from its own POS and buoy', () => {
+    const s = memory();
+    // A small-cloud buoy used to score more for less: S32 is 23.4 km², S11 148.8 km².
+    s.setItem(OLD_STORAGE_KEY, JSON.stringify([
+      { name: 'Aditya', mode: 'map', scenario: 'S32', pos: 0.30, score: 300, when: '1' },
+      { name: 'Her', mode: 'map', scenario: 'S11', pos: 0.12, score: 620, when: '2' },
+      { name: 'Lost', mode: 'map', scenario: 'S99', pos: 0.5, score: 500, when: '3' },
+    ]));
+    const list = load(s);
+    expect(list.map((e) => e.name)).toEqual(['Her', 'Aditya']);
+    expect(list[0].score).toBe(score(0.12, 148.8));
+    expect(list[0].old_score).toBe(620);
+    expect(list.every((e) => e.rescored)).toBe(true);
+    // Saved on the new board, so it is not rescored again.
+    expect(JSON.parse(s.getItem(STORAGE_KEY)).length).toBe(2);
+    add({ name: 'new', mode: 'map', score: 1, when: '4' }, s);
+    expect(load(s).length).toBe(3);
+  });
+
+  it('knows every one of the 55 buoys', () => {
+    expect(Object.keys(GAME_AREA_KM2)).toHaveLength(55);
+    expect(rescore([{ scenario: 'S01', pos: 0.2, when: '1' }])[0].area_km2).toBe(111.4);
   });
 });
 
