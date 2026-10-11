@@ -16,6 +16,7 @@
 
 set -euo pipefail
 
+PY="${SAR_PYTHON:-/home/26p67/envs/sar-rl/bin/python}"
 DATA="${SAR_DATA:-/home/26p67/data}"
 RUNS="${RUNS:-$DATA/derived/rl/runs}"
 ARRIVALS="${ARRIVALS:-30 60 120 180}"
@@ -45,12 +46,13 @@ EXPERIMENTS=(
 )
 
 [ -f src/sar/rl/train.py ] || { echo "run this from the repository root"; exit 1; }
-/home/26p67/envs/sar-rl/bin/python -c "import stable_baselines3, matplotlib" 2>/dev/null \
+"$PY" -c "import stable_baselines3, matplotlib" 2>/dev/null \
     || { echo "the sar-rl environment needs stable_baselines3 and matplotlib: bash scripts/setup_rl_env.sh"; exit 1; }
 mkdir -p logs "$RUNS"
 
 echo "== 1/4 windows with arrival times $ARRIVALS in $WINDOWS"
-HAVE=$(find "$WINDOWS" -maxdepth 1 -name 'windows_*.npz' 2>/dev/null | wc -l)
+HAVE=0
+[ -d "$WINDOWS" ] && HAVE=$(find "$WINDOWS" -maxdepth 1 -name 'windows_*.npz' | wc -l)
 AFTER_WINDOWS=""
 if [ "$HAVE" -lt "$EXPECTED_WINDOWS" ]; then
     JOB=$(sbatch --parsable --export=ALL,ARRIVALS="$ARRIVALS",WINDOWS="$WINDOWS",KEEP_CSV=0 scripts/training_montes.sh)
@@ -104,7 +106,7 @@ AFTER=""
 JOB=$(sbatch --parsable --job-name=compare --partition=jaguarcluster --time=00:30:00 --mem=2G \
     --kill-on-invalid-dep=yes $AFTER \
     --output=logs/compare_%j.out \
-    --wrap="PYTHONPATH=src /home/26p67/envs/sar-rl/bin/python scripts/compare_runs.py --runs-dir $RUNS")
+    --wrap="PYTHONPATH=src $PY scripts/compare_runs.py --runs-dir $RUNS")
 echo "   job $JOB writes $RUNS/comparison.csv"
 
 echo
