@@ -72,7 +72,7 @@ function heliSvg(colour, size) {
 </svg>`;
 }
 
-const HELI = (colour, size = 64) => L.divIcon({
+const HELI = (colour, size = 52) => L.divIcon({
   className: 'scene-heli',
   html: heliSvg(colour, size),
   iconSize: [size, size],
@@ -94,7 +94,7 @@ function metresPerPixel(map, lat) {
 }
 
 export class Scene {
-  constructor(map, { colour = '#3987e5', showCloud = true, heliSize = 64 } = {}) {
+  constructor(map, { colour = '#3987e5', showCloud = true, heliSize = 52 } = {}) {
     this.map = map;
     this.colour = colour;
     this.probability = new ProbabilityLayer();

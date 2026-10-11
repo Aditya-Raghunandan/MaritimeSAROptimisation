@@ -278,7 +278,7 @@ async function fly() {
   flyMap.invalidateSize();
   if (flyScene) flyScene.destroy();
   const showCloud = game.mode === 'map';
-  flyScene = new Scene(flyMap, { colour: '#ffffff', showCloud, heliSize: 88 });
+  flyScene = new Scene(flyMap, { colour: '#ffffff', showCloud, heliSize: 60 });
   // The cloud where the search starts, one zoom level out: room round it for the helicopter to
   // turn in. In fast water the cloud then drifts several km, and the camera follows.
   flyScene.setWindow(game.window, { startOnly: true, zoomOut: 1 });
@@ -371,7 +371,7 @@ function reveal() {
   ];
   const colours = ['#ffffff', SEARCHER_INFO[RIVALS.cg].colour, SEARCHER_INFO[RIVALS.ai].colour];
   game.scenes = panels.map((m, i) => {
-    const s = new Scene(m, { colour: colours[i], heliSize: 60 });
+    const s = new Scene(m, { colour: colours[i], heliSize: 46 });
     s.setWindow(game.window, { fit: i === 0 });
     return s;
   });
