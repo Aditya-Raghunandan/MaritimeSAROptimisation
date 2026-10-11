@@ -79,10 +79,20 @@ which reads the CSV and its JSON sidecar, drifts the three markers on the real f
 **2. Training.**
 
 ```
-sbatch scripts/train_ppo.sbatch --windows /home/26p67/data/derived/rl/windows --validation-every 8 --arrival-min 30 45 60 --headings 36 --timesteps 3000000 --envs 4 --seed 1 --eval-every 100000 --out /home/26p67/data/derived/rl/runs
+sbatch scripts/train_ppo.sbatch --windows /home/26p67/data/derived/rl/windows --validation-every 8 --arrival-min 30 45 60 --headings 36 --timesteps 3000000 --envs 4 --seed 1 --eval-every 100000 --patience 5 --improve-threshold 0.001 --out /home/26p67/data/derived/rl/runs
 ```
 
 Every argument is required, because each one says what the run is. `--envs` should match the job's `--cpus-per-task`. PPO's own settings are Stable-Baselines3 2.9's defaults.
+
+`--patience 5 --improve-threshold 0.001` ends training once 5 validations in a row have not beaten the best by more than 0.001, so a run that has stopped learning does not use up the rest of `--timesteps`. With `--eval-every 100000` that is 500,000 steps without progress. `--patience 0` always runs the full budget. `config.json` records `trained_timesteps`, the steps actually flown. The rule is `sar.rl.train.plateau`.
+
+To see the learning curves, where validation stopped improving, and when a given patience would have stopped a run already finished:
+
+```
+PYTHONPATH=src /home/26p67/envs/sar/bin/python scripts/plot_training.py --run /home/26p67/data/derived/rl/runs/ppo_h36_seed1_T3000000 --patience 5 --improve-threshold 0.001
+```
+
+It writes `training_curves.png` and `training_curves.json` into the run folder and prints the validation table. It runs on the pipeline's environment, which has matplotlib.
 
 **3. The test weeks, and the site.**
 
@@ -99,7 +109,7 @@ The first flies every searcher over every test window and prints the summary. Th
 |---|---|---|
 | 1 | `$OUT/montes/derived/ensemble_2516N08006W_20190101T1700_N10000_dt60s_T4h_seed20261008.csv` and `.json` | the run, as `sar.pipeline.ensemble` always writes it; about 40 MB a run, 52 GB for all 1,305 |
 | 1 | `$OUT/windows/windows_2516N08006W_20190101T1700_N10000_dt60s_T4h_seed20261008_arr30-45-60m.npz` | the saved frames from the first arrival to the last window's end, the LKP, the seed, and per transit the marker every minute and the drift bearing; 2.8 MB, 3.7 GB for all |
-| 2 | `<out>/ppo_h36_seed1_T3000000/` | `config.json` (every argument, the commit, the observation, the reward, the training and validation file names), `model.zip`, `best_model.zip`, `monitor/`, `eval/evaluations.npz` |
+| 2 | `<out>/ppo_h36_seed1_T3000000/` | `config.json` (every argument, the commit, the observation, the reward, the training and validation file names), `model.zip`, `best_model.zip`, `monitor/`, `eval/evaluations.npz`, and `training_curves.png` once `scripts/plot_training.py` has run |
 | 3 | `<out>/flights.csv`, `summary.csv` | one row per flight (window, place, start, transit, searcher, POS, time-weighted return, expected time to detection), and the means per transit and searcher with PPO's paired difference from the Expanding Square and its win rate |
 | 3 | `<out>/flights/<windows name>_<transit>m.json` | one window: marker, LKP, datum, drift bearing and every searcher's flight |
 | 3 | `flights.ppo` inside a scenario bundle's `<S01>/rv_2h.json` | the PPO flight beside the others |
