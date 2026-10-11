@@ -15,22 +15,43 @@ import { expect, test } from '@playwright/test';
   flown by the D032 helicopter that turns at 7 deg/s. scenarios/v1 beside it is the older
   format, flown by the helicopter that turned at once; one test hides v2 to check the site
   still plays from a data root that only has v1.
+
+  v3 (the trained agent's flight beside the six) is not a fixture on disk: `agent: true` serves
+  it as v2 with the Sector's flight renamed "ppo". It checks the wiring for a seventh searcher,
+  so its flight only has to differ from greedy's, which plays the AI where there is no agent.
 */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, 'fixtures');
 const LAPTOP = { width: 1366, height: 768 };
 
-async function serveFixture(page, { hide = null } = {}) {
+/** v2's file as v3 would hold it: the Sector's flight and rows renamed as the agent's. */
+function asV3(rel, body) {
+  if (!rel.endsWith('.json')) return body;
+  const j = JSON.parse(body);
+  if (j.scenarios) j.searchers = [...j.searchers, 'ppo'];
+  if (j.flights) j.flights.ppo = { ...j.flights.sector, layout: 'e2e: the Sector, as the agent' };
+  for (const key of ['scenarios55', 'dev']) {
+    if (Array.isArray(j[key])) {
+      j[key] = [...j[key], ...j[key].filter((r) => r.searcher === 'sector').map((r) => ({ ...r, searcher: 'ppo' }))];
+    }
+  }
+  return Buffer.from(JSON.stringify(j));
+}
+
+async function serveFixture(page, { hide = null, agent = false } = {}) {
   await page.route('**/e2e.invalid/**', async (route) => {
     const url = new URL(route.request().url());
-    const rel = normalize(url.pathname.replace(/^\/archive\/?/, '')).replace(/^(\.\.[/\\])+/, '');
+    let rel = normalize(url.pathname.replace(/^\/archive\/?/, '')).replace(/^(\.\.[/\\])+/, '');
     if (hide && url.pathname.includes(hide)) {
       await route.fulfill({ status: 404, body: '' });
       return;
     }
+    const v3 = /^scenarios[/\\]v3[/\\]/.test(rel);
+    if (v3 && agent) rel = rel.replace(/^scenarios([/\\])v3/, 'scenarios$1v2');
     try {
-      const body = await readFile(join(FIXTURES, rel));
+      let body = await readFile(join(FIXTURES, rel));
+      if (v3 && agent) body = asV3(rel, body);
       await route.fulfill({
         status: 200,
         contentType: rel.endsWith('.json') ? 'application/json' : 'application/octet-stream',
@@ -127,6 +148,36 @@ test.describe('the scenario page', () => {
     expect(errors).toEqual([]);
   });
 
+  test('lists the trained AI only when the files carry it, and replays its flight', async ({ page }) => {
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('bench.html');
+    await expect(page.locator('#paper')).not.toHaveText('–');
+    await expect(page.locator('#searchers input')).toHaveCount(7);   // six and "fly it yourself"
+    await expect(page.locator('input[value=ppo]')).toHaveCount(0);
+    await expect(page.locator('#searchers')).not.toContainText('coming');
+    expect(errors).toEqual([]);
+  });
+
+  test('replays the trained AI\'s flight to the paper\'s number', async ({ page }) => {
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    await page.goto('bench.html');
+    await expect(page.locator('#paper')).not.toHaveText('–');
+    await expect(page.locator('#searchers input')).toHaveCount(8);
+    await expect(page.locator('#searchers')).toContainText('Trained AI');
+    await page.locator('input[value=ppo]').check();
+    const want = await fixtureFlight('rvc', 'sector');
+    await expect(page.locator('#paper')).toHaveText(`${(100 * want.pos).toFixed(1)} %`);
+    await page.locator('#time').evaluate((el) => {
+      el.value = '2700';
+      el.dispatchEvent(new Event('input'));
+    });
+    await expect(page.locator('#pos')).toHaveText(`${(100 * want.pos).toFixed(1)} %`);
+    await expectFits(page);
+    expect(errors).toEqual([]);
+  });
+
   test('flies by hand', async ({ page }) => {
     const errors = collectErrors(page);
     await serveFixture(page);
@@ -178,6 +229,29 @@ test.describe('the open-day game', () => {
     // Points are scored against the cloud's size, and the page says so in numbers.
     await expect(page.locator('#pointsWhy')).toContainText(/covered \d+ km²/);
     await expect(page.locator('#pointsWhy')).not.toContainText(/1\d\d %/);
+    await expect(page.locator('#aiWords')).toContainText('greedy');
+    expect(errors).toEqual([]);
+  });
+
+  test('the AI is the trained agent where the files carry its flight', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    await page.goto('game.html?speed=20');
+    await page.click('#startBtn');
+    await page.click('#surprise');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowRight');
+    await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
+    await page.keyboard.up('ArrowRight');
+    await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
+    const agent = await fixtureFlight('rvc', 'sector');
+    await expect(page.locator('#scoreTable tr').last()).toContainText(`${(100 * agent.pos).toFixed(1)} %`);
+    await expect(page.locator('#aiWords')).toContainText('trained agent');
+    await expect(page.locator('#benchTable')).toContainText('Trained AI');
+    await expect(page.locator('#benchTable tr')).toHaveCount(8);
+    await expectFits(page);
     expect(errors).toEqual([]);
   });
 
