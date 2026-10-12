@@ -84,6 +84,42 @@ class TestSearchEnv:
         assert steps == STEPS and done
         assert total == pytest.approx(info["pos"], rel=1e-12)
 
+    def test_two_headings_a_minute_fly_each_half_and_the_referee_scores_the_minute(self, windows):
+        from sar.rl.features import halves_of, two_halves
+        env = SearchEnv([windows], headings=36, decay=0.0, halves=12)
+        assert env.action_space.n == 144
+        assert halves_of(12 * 3 + 6, 12) == (90.0, 180.0)
+        env.reset(seed=0, options={"item": 0})
+        wp = two_halves(env.episode, 90.0, 180.0)
+        assert wp.t_s[-1] == pytest.approx(60.0) and np.any(np.isclose(wp.t_s, 30.0))
+        assert wp.heading_deg[-1] == pytest.approx(180.0)
+        _, r, done, truncated, info = env.step(12 * 3 + 6)          # east for 30 s, then south
+        assert env.episode.heading_deg == pytest.approx(180.0)
+        assert r == pytest.approx(info["pos"]) and not done and not truncated
+        steps = 1
+        while not done:
+            _, _, done, _, _ = env.step(int(env.action_space.sample()))
+            steps += 1
+        assert steps == STEPS
+
+    def test_two_halves_can_turn_further_than_one_heading_command_can(self, windows):
+        """Two right turns of 150 deg in one minute: 300 deg, a loop or a teardrop. One heading a
+        minute turns the short way, never more than 180 deg, so it can never hook back tightly."""
+        from sar.rl.features import two_halves
+        env = SearchEnv([windows], headings=36, halves=12)
+        env.reset(seed=0, options={"item": 0})
+        ep = env.episode
+        h0 = ep.heading_deg
+        wp = two_halves(ep, (h0 + 150.0) % 360, (h0 + 300.0) % 360)
+        turned = np.sum(np.diff(np.unwrap(np.radians(np.concatenate(([h0], wp.heading_deg))))))
+        assert np.degrees(turned) == pytest.approx(300.0, abs=1e-6)
+        ep.fly(wp)                                   # the referee accepts it at 7 deg/s
+        assert ep.heading_deg == pytest.approx((h0 + 300.0) % 360)
+
+    def test_halves_must_be_zero_or_at_least_two(self, windows):
+        with pytest.raises(ValueError, match="halves"):
+            SearchEnv([windows], headings=8, halves=1)
+
     def test_a_decay_outside_0_to_1_is_refused(self, windows):
         with pytest.raises(ValueError, match="decay"):
             SearchEnv([windows], headings=8, decay=1.5)

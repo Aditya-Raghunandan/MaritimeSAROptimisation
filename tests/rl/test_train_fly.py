@@ -115,6 +115,29 @@ class TestTelemachus2:
         flights = fly.score_windows([path], [fly.PPO], model, headings, [45])
         assert 0.0 <= flights.iloc[0]["pos"] <= 1.0
 
+    def test_a_two_headings_a_minute_run_trains_and_the_benchmark_flies_it(self, windows_dir, tmp_path):
+        run = train._cli(["--windows", str(windows_dir), "--validation-every", "3",
+                          "--arrival-min", "45", "--headings", "36", "--timesteps", "64",
+                          "--envs", "1", "--seed", "1", "--eval-every", "64", "--patience", "0",
+                          "--improve-threshold", "0", *BASELINE_PPO, "--reward-decay", "0",
+                          "--gamma", "1", "--halves", "12", "--net-arch", "256", "256",
+                          "--name", "tele2x_test", "--out", str(tmp_path)])
+        model, headings = fly.load_policy(run / "best_model.zip")
+        assert fly.load_halves(run / "best_model.zip") == 12 and model.action_space.n == 144
+        assert model.policy.net_arch == {"pi": [256, 256], "vf": [256, 256]}
+        from sar.rl.features import Context
+        from sar.search.episode import Waypoints, run as fly_run
+        path = min(windows_dir.glob("windows_*20190129*.npz"))
+        windows = load(path)
+        setup = windows.setup(1)
+        policy = fly.ppo_policy(model, headings, Context(windows.lkp, setup.arrival_s,
+                                                         setup.drift_bearing_deg), 12)
+        from sar.search.scenario import search_episode
+        ep = search_episode(setup)
+        assert isinstance(policy(ep), Waypoints)
+        m = fly_run(policy, search_episode(setup))
+        assert 0.0 <= m["pos"] <= 1.0
+
     def test_the_validation_score_is_pos_when_eval_decay_is_zero(self, windows_dir, tmp_path):
         run = train._cli(["--windows", str(windows_dir), "--validation-every", "3",
                           "--arrival-min", "30", "--headings", "8", "--timesteps", "64",

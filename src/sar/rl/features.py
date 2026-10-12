@@ -6,6 +6,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from sar.search.episode import Waypoints
+from sar.search.kinematics import steer_to
+from sar.search.platform import STEP_S
 from sar.search.sweep import relative_m
 
 MAP_CELLS, MAP_CELL_M = 32, 1000.0      # project choice: the plan's 32 x 32 map (R5a), 32 km about the marker
@@ -28,6 +31,38 @@ class Context:
 def heading_of(action: int, headings: int) -> float:
     """Action a of `headings` evenly spaced compass headings, north first, clockwise."""
     return float(int(action) * 360.0 / headings)
+
+
+def halves_of(action: int, halves: int) -> tuple[float, float]:
+    """Action a of halves x halves: the heading for the first 30 s and for the second."""
+    first, second = divmod(int(action), halves)
+    return first * 360.0 / halves, second * 360.0 / halves
+
+
+def two_halves(episode, first_deg: float, second_deg: float) -> Waypoints:
+    """One minute flown as two heading commands, 30 s each (Aditya, 12 Oct).
+
+    With one heading a minute the narrowest lane change is a U-turn, two turning circles
+    (760 m) wide. Two commands a minute let the helicopter swing out and hook back, as a pilot
+    (or a player) does, so lanes can lie side by side. Each half turns the short way at the
+    turn rate, as a heading command does (D032), and the referee scores the minute as one step.
+    """
+    half = STEP_S / 2.0
+    east, north = episode.offset
+    a = steer_to(east, north, episode.heading_deg, first_deg, half, episode.speed_ms,
+                 episode.turn_rate_deg_s)
+    b = steer_to(float(a.east_m[-1]), float(a.north_m[-1]), float(a.heading_deg[-1]), second_deg,
+                 half, episode.speed_ms, episode.turn_rate_deg_s)
+    return Waypoints(np.concatenate((a.t_s, half + b.t_s)), np.concatenate((a.east_m, b.east_m)),
+                     np.concatenate((a.north_m, b.north_m)),
+                     np.concatenate((a.heading_deg, b.heading_deg)))
+
+
+def command(episode, action: int, headings: int, halves: int = 0):
+    """What an action asks the referee to fly: a heading, or with `halves`, two 30 s headings."""
+    if halves:
+        return two_halves(episode, *halves_of(action, halves))
+    return heading_of(action, headings)
 
 
 def time_left_weight(k: int, steps: int, decay: float = 1.0) -> float:

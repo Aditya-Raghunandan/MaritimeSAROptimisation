@@ -8,7 +8,7 @@ from typing import ClassVar
 import gymnasium as gym
 import numpy as np
 
-from sar.rl.features import SIZE, Context, heading_of, observe, reward
+from sar.rl.features import SIZE, Context, command, observe, reward
 from sar.rl.windows import SearchWindows, load, parse_windows_name
 from sar.search.episode import SearchEpisode
 from sar.search.scenario import search_episode
@@ -36,7 +36,7 @@ class SearchEnv(gym.Env):
     metadata: ClassVar[dict] = {"render_modes": []}
 
     def __init__(self, sources, headings: int, arrivals_min=None, cycle: bool = False,
-                 decay: float = 1.0):
+                 decay: float = 1.0, halves: int = 0):
         self.items = window_items(sources, arrivals_min)
         if not self.items:
             raise ValueError("SearchEnv needs at least one window")
@@ -44,8 +44,12 @@ class SearchEnv(gym.Env):
             raise ValueError(f"headings must be an integer of at least 2, got {headings!r}")
         if not 0.0 <= float(decay) <= 1.0:
             raise ValueError(f"decay must be between 0 and 1, got {decay!r}")
+        if isinstance(halves, bool) or not isinstance(halves, (int, np.integer)) or halves < 0 \
+                or halves == 1:
+            raise ValueError(f"halves must be 0 (one heading a minute) or at least 2, got {halves!r}")
         self.headings, self.cycle, self.decay = int(headings), bool(cycle), float(decay)
-        self.action_space = gym.spaces.Discrete(self.headings)
+        self.halves = int(halves)
+        self.action_space = gym.spaces.Discrete(self.halves ** 2 if self.halves else self.headings)
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, (SIZE,), np.float32)
         self._next, self._cached = 0, (None, None)
         self.episode: SearchEpisode | None = None
@@ -75,7 +79,8 @@ class SearchEnv(gym.Env):
 
     def step(self, action):
         k = self.episode.k
-        removed = self.episode.step(heading_of(int(action), self.headings))
+        order = command(self.episode, int(action), self.headings, self.halves)
+        removed = self.episode.fly(order) if self.halves else self.episode.step(order)
         self.pos += removed
         done = self.episode.done
         return (observe(self.episode, self.context),

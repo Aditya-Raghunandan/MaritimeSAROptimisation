@@ -123,7 +123,7 @@ class PPOSearcher:
 
     def __init__(self, path):
         from sar.rl.features import SIZE
-        from sar.rl.fly import load_policy
+        from sar.rl.fly import load_halves, load_policy
 
         self.path = Path(path).resolve()
         config = json.loads((self.path.parent / "config.json").read_text())
@@ -132,8 +132,9 @@ class PPOSearcher:
             raise ValueError(f"{self.path} was trained on a {size}-number observation; "
                              f"sar.rl.features builds {SIZE}, so it would be flown blind")
         self.model, self.headings = load_policy(self.path)
+        self.halves = load_halves(self.path)
         self.record = {"run": self.path.parent.name, "file": self.path.name,
-                       "sha256": sha256(self.path), "headings": self.headings,
+                       "sha256": sha256(self.path), "headings": self.headings, "halves": self.halves,
                        "trained_commit": config.get("git_commit"),
                        "trained_arrival_min": config.get("arguments", {}).get("arrival_min")}
 
@@ -143,8 +144,10 @@ class PPOSearcher:
 
         context = Context((float(row["lat"]), float(row["lon"])), float(setup.arrival_s),
                           setup.drift_bearing_deg)
-        return (ppo_policy(self.model, self.headings, context), None,
-                f"trained agent ({self.record['run']}), {self.headings} headings every 60 s")
+        every = (f"two of {self.halves} headings a minute, 30 s each" if self.halves
+                 else f"{self.headings} headings every 60 s")
+        return (ppo_policy(self.model, self.headings, context, self.halves), None,
+                f"trained agent ({self.record['run']}), {every}")
 
 
 def row_names(spec, table: pd.DataFrame) -> list[str]:

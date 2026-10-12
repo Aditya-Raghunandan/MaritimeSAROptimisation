@@ -117,6 +117,12 @@ def _cli(argv=None) -> Path:
     parser.add_argument("--target-kl", type=float,
                         help="stop a batch's passes early once the policy has moved this far (KL); "
                              "none by default")
+    parser.add_argument("--halves", type=int, default=0,
+                        help="0: one heading a minute (the first agent); N: two headings a minute, "
+                             "30 s each, each from N, so N x N actions")
+    parser.add_argument("--net-arch", type=int, nargs="+",
+                        help="hidden layers of the policy and value heads, such as 256 256; SB3's "
+                             "64 64 if not given")
     parser.add_argument("--torch-threads", type=int, default=1,
                         help="threads for the network's update; a CNN wants the node's cores")
     parser.add_argument("--out", required=True, help="directory the run's folder goes in")
@@ -149,19 +155,22 @@ def _cli(argv=None) -> Path:
         if not 0.0 <= value <= 1.0:
             parser.error(f"{name} must be between 0 and 1")
 
-    kwargs = {"headings": args.headings, "arrivals_min": args.arrival_min}
+    kwargs = {"headings": args.headings, "arrivals_min": args.arrival_min, "halves": args.halves}
     vec = SubprocVecEnv if args.envs > 1 else DummyVecEnv
     env = make_vec_env(SearchEnv, n_envs=args.envs, seed=args.seed, vec_env_cls=vec,
                        monitor_dir=str(run / "monitor"),
                        env_kwargs={"sources": [str(p) for p in groups["train"]],
                                    "decay": args.reward_decay, **kwargs})
     policy_kwargs = None
+    if args.net_arch:
+        policy_kwargs = {"net_arch": {"pi": list(args.net_arch), "vf": list(args.net_arch)}}
     if args.policy == "cnn":
         from sar.rl.cnn import SearchCNN
 
         policy_kwargs = {"features_extractor_class": SearchCNN,
                          "features_extractor_kwargs": {"features_dim": 256},
-                         "net_arch": {"pi": [128], "vf": [128]}}
+                         "net_arch": {"pi": list(args.net_arch or [128]),
+                                      "vf": list(args.net_arch or [128])}}
     model = PPO("MlpPolicy", env, learning_rate=args.learning_rate, ent_coef=args.ent_coef,
                 clip_range=args.clip_range, gamma=args.gamma, batch_size=args.batch_size,
                 n_epochs=args.n_epochs, target_kl=args.target_kl, policy_kwargs=policy_kwargs,

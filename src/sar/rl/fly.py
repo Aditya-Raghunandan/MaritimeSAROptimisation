@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from sar.pipeline.ensemble import Ensemble
-from sar.rl.features import Context, heading_of, observe, time_weighted_return
+from sar.rl.features import Context, command, observe, time_weighted_return
 from sar.rl.windows import is_test, load, parse_windows_name
 from sar.search.benchmark import BASELINE, GREEDY, SEARCHERS, recorded, searcher
 from sar.search.episode import run
@@ -30,11 +30,18 @@ def load_policy(model_path):
     return SB3PPO.load(model_path, device="cpu"), int(config["headings"])
 
 
-def ppo_policy(model, headings: int, context: Context):
-    """The trained policy as a searcher: the most likely heading from the same observation it trained on."""
-    def policy(episode) -> float:
+def load_halves(model_path) -> int:
+    """0 for an agent that picks one heading a minute; else how many headings each 30 s half picks from."""
+    config = json.loads((Path(model_path).parent / "config.json").read_text())["arguments"]
+    return int(config.get("halves") or 0)
+
+
+def ppo_policy(model, headings: int, context: Context, halves: int = 0):
+    """The trained policy as a searcher: its most likely action from the same observation it
+    trained on, as a heading, or (halves) as the minute's two 30 s legs."""
+    def policy(episode):
         action, _ = model.predict(observe(episode, context), deterministic=True)
-        return heading_of(int(action), headings)
+        return command(episode, int(action), headings, halves)
 
     return policy
 
