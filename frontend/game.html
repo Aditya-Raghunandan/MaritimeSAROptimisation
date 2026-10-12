@@ -42,18 +42,14 @@
       .muted { color: var(--ink-3); }
       .card { background: var(--surface-1); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
 
-      body.kiosk header { display: none; }
-
-      /* demo: the open-day video, full screen, until someone moves */
-      #demo { position: relative; background: #000; cursor: none; }
-      #demo video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-      .demo-cta {
-        position: absolute; left: 50%; bottom: 4vh; transform: translateX(-50%); z-index: 2;
-        background: #000b; border: 1px solid #ff5a1f88; border-radius: 999px; padding: 12px 28px;
-        font-size: 22px; font-weight: 700; white-space: nowrap; animation: pulse 2.4s ease-in-out infinite;
-      }
-      .demo-cta b { color: #ff6fb5; }
-      @keyframes pulse { 50% { opacity: 0.55; } }
+      /* demo: the open-day video in a frame, until someone presses a button (not on a mouse move) */
+      #demo { place-items: center; background: #02060c; padding: 16px; }
+      .demo-frame { width: min(1280px, 100%); display: grid; gap: 10px; }
+      .demo-bar { display: flex; align-items: center; gap: 12px; }
+      .demo-bar b { font-size: 18px; }
+      .demo-bar .big { margin-left: auto; background: #ff5a1f; box-shadow: 0 0 20px #ff5a1f55; animation: pulse 2.4s ease-in-out infinite; }
+      #demoVideo { width: 100%; max-height: calc(100vh - 150px); border-radius: 12px; background: #000; }
+      @keyframes pulse { 50% { box-shadow: 0 0 4px #ff5a1f22; } }
 
       /* attract: the start screen */
       #attract {
@@ -181,8 +177,14 @@
     </header>
 
     <section class="screen" id="demo">
-      <video id="demoVideo" muted playsinline></video>
-      <div class="demo-cta">Move the mouse or touch the screen to play <b>Humans vs AI</b></div>
+      <div class="demo-frame">
+        <div class="demo-bar">
+          <b>Humans vs AI</b><span class="muted">our project in five minutes</span>
+          <button class="big" id="demoPlay">Play the game</button>
+          <button class="ghost" id="demoClose" aria-label="Close the video">✕ Close</button>
+        </div>
+        <video id="demoVideo" muted playsinline controls></video>
+      </div>
     </section>
 
     <section class="screen on" id="attract">

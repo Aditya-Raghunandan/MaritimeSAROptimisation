@@ -189,7 +189,6 @@ function show(id) {
   if (game.screen === 'demo' && id !== 'demo') $('demoVideo').pause();
   game.screen = id;
   for (const s of document.querySelectorAll('.screen')) s.classList.toggle('on', s.id === id);
-  document.body.classList.toggle('kiosk', id === 'demo');
 }
 
 function clock(s) {
@@ -243,10 +242,11 @@ function demo() {
   video.play().catch(() => {});
 }
 
+// Any input keeps the stand awake; only the video's own buttons (or Esc) close it, so it can
+// be watched, paused and photographed without a stray mouse move ending it.
 let lastInput = performance.now();
 function touched() {
   lastInput = performance.now();
-  if (game.screen === 'demo') attract();
 }
 
 function watchIdle() {
@@ -662,7 +662,10 @@ async function main() {
   }
   $('startBtn').addEventListener('click', missions);
   $('searchBtn').addEventListener('click', pick);
-  $('demoBtn').addEventListener('click', (e) => { e.stopPropagation(); demo(); lastInput = performance.now(); });
+  $('demoBtn').addEventListener('click', () => demo());
+  $('demoPlay').addEventListener('click', attract);
+  $('demoClose').addEventListener('click', attract);
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && game.screen === 'demo') attract(); });
   $('tutSkip').addEventListener('click', () => tutorial?.skip());
   $('tutSkipAll').addEventListener('click', () => pick());
   $('surprise').addEventListener('click', () => {

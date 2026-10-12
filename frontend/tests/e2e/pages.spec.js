@@ -263,15 +263,20 @@ test.describe('the open-day game', () => {
     expect(errors).toEqual([]);
   });
 
-  test('the video plays on demand and a touch brings the start screen back', async ({ page }) => {
+  test('the video plays on demand, stays put when the mouse moves, and its button closes it', async ({ page }) => {
     const errors = collectErrors(page);
     await serveFixture(page);
     await page.goto('game.html?speed=20');
     await page.click('#demoBtn');
     await expect(page.locator('#demo')).toHaveClass(/on/);
-    await expect(page.locator('header')).toBeHidden();
     await page.mouse.move(300, 300);
     await page.mouse.move(320, 330);
+    await expect(page.locator('#demo')).toHaveClass(/on/);
+    await expectFits(page);
+    await page.click('#demoClose');
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    await page.click('#demoBtn');
+    await page.keyboard.press('Escape');
     await expect(page.locator('#attract')).toHaveClass(/on/);
     expect(errors.filter((e) => !/media|video|webm|mp4/i.test(e))).toEqual([]);
   });
