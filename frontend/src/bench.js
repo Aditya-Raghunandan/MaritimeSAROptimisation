@@ -20,7 +20,7 @@ import { PlayerFlight, RecordedFlight } from './playback.js';
 import { ProbabilityLegend } from './probabilityLayer.js';
 import { Scene } from './scene.js';
 import {
-  NOISE_INFO, SEARCHER_INFO, bestNoise, loadIndex, loadWindow, noisesOf,
+  NOISE_INFO, SEARCHER_INFO, bestNoise, loadIndex, loadWindow, noisesOf, searchersOf,
 } from './scenarioData.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 import { esriTiles } from './tiles.js';
@@ -100,13 +100,12 @@ function drawControls() {
     (v) => { state.hours = v; load(); });
   const box = $('searchers');
   box.innerHTML = '';
-  const options = [...Object.entries(SEARCHER_INFO), ['ml', { label: 'ML agent (coming)', colour: '#555' }],
+  const options = [...searchersOf(state.index).map((k) => [k, SEARCHER_INFO[k]]),
     [SELF, { label: 'Fly it yourself', colour: '#fff' }]];
   for (const [key, info] of options) {
     const label = document.createElement('label');
-    if (key === 'ml') label.className = 'off';
-    label.innerHTML = `<input type="radio" name="searcher" value="${key}" ${key === state.searcher ? 'checked' : ''}`
-      + `${key === 'ml' ? ' disabled' : ''}><span class="swatch" style="background:${info.colour}"></span>${info.label}`;
+    label.innerHTML = `<input type="radio" name="searcher" value="${key}" ${key === state.searcher ? 'checked' : ''}>`
+      + `<span class="swatch" style="background:${info.colour}"></span>${info.label}`;
     label.querySelector('input').addEventListener('change', () => { state.searcher = key; start(); });
     box.append(label);
   }
@@ -125,8 +124,10 @@ function drawChart() {
   const minutes = Array.from({ length: 46 }, (_, i) => i);
   const series = [{}];
   const data = [minutes];
-  for (const [key, info] of Object.entries(SEARCHER_INFO)) {
+  for (const key of searchersOf(state.index)) {
+    const info = SEARCHER_INFO[key];
     const f = state.window.flights[key];
+    if (!f) continue;
     data.push(cumulative(f.python.drain_rate).map((v) => 100 * v));
     series.push({ label: info.label, stroke: info.colour, width: key === state.searcher ? 2 : 1, alpha: 0.5 });
   }

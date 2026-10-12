@@ -14,17 +14,18 @@
  * site, ./data/scenarios/<version> under public/ when developing, or a local copy for the
  * offline open-day build).
  *
- * TWO VERSIONS. v2 (format 2) was flown by the D032 helicopter, which turns at most 7.0 deg/s
+ * VERSIONS. v2 (format 2) was flown by the D032 helicopter, which turns at most 7.0 deg/s
  * and carries the heading at every waypoint; v1 (format 1) by the old one that turned at
- * once. The newest version that is published is used, so publishing v2 switches the site
- * over without a deploy; each window says which helicopter flew it (`turnRateDegS`).
+ * once. v3 is v2 with a seventh flight, the trained agent ("ppo"), and index.json says which
+ * model flew it. The newest version that is published is used, so publishing one switches
+ * the site over without a deploy; each window says which helicopter flew it (`turnRateDegS`).
  */
 
 import { cloudFromOffsets } from './referee.js';
 
 export const DATA_BASE = String(import.meta.env.VITE_DATA_BASE ?? './data').replace(/\/$/, '');
 /** Newest first. */
-export const SCENARIO_VERSIONS = ['v2', 'v1'];
+export const SCENARIO_VERSIONS = ['v3', 'v2', 'v1'];
 export const SCENARIO_ROOT = `${DATA_BASE}/scenarios/${SCENARIO_VERSIONS[SCENARIO_VERSIONS.length - 1]}`;
 /** The 3D loops, which do not change with the helicopter. */
 export const SHOWCASE_ROOT = `${DATA_BASE}/scenarios/showcase`;
@@ -35,9 +36,21 @@ export const SEARCHER_INFO = {
   sector: { label: 'Sector', kind: 'Coast Guard pattern', colour: '#a77bf2' },
   parallel: { label: 'Parallel Track', kind: 'Coast Guard pattern', colour: '#e8b23d' },
   trackline: { label: 'Trackline', kind: 'Coast Guard pattern', colour: '#e8735a' },
-  greedy: { label: 'Greedy (AI for now)', kind: 'reads the map', colour: '#04c951' },
+  greedy: { label: 'Greedy', kind: 'reads the map', colour: '#04c951' },
+  ppo: { label: 'Telemachus (trained AI)', kind: 'learned from five years of drift', colour: '#ff6fb5' },
   random: { label: 'Random', kind: 'the floor', colour: '#8a8a80' },
 };
+
+/** The searchers a version's files carry, in SEARCHER_INFO's order. Before v3 there is no agent. */
+export function searchersOf(index) {
+  const have = index?.searchers ?? Object.keys(SEARCHER_INFO).filter((k) => k !== 'ppo');
+  return Object.keys(SEARCHER_INFO).filter((k) => have.includes(k));
+}
+
+/** Who plays "the AI": the trained agent where a window has its flight, else greedy. */
+export function aiOf(window) {
+  return window?.flights?.ppo ? 'ppo' : 'greedy';
+}
 
 /**
  * The drift model's random term, newest first. rvc (D033) sizes the error by the current

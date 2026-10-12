@@ -4,8 +4,9 @@
  * A visitor picks a real buoy (one of the 55 scenarios), chooses to see the probability map
  * or only the currents, and flies one helicopter for the 45-minute window, the clock
  * compressed so the search takes about 90 seconds. Then the same sea is searched again,
- * side by side, by the Coast Guard's Expanding Square and by the AI (the greedy search until
- * the trained agent exists, and labelled so), and the real buoy is revealed.
+ * side by side, by the Coast Guard's Expanding Square and by the AI, and the real buoy is
+ * revealed. The AI is Telemachus, Suné's trained agent, where the published files carry its
+ * flight (v3), and the greedy search where they do not; the results say which one it was.
  *
  * FLYING IT. The helicopter turns as the real one does, at most 7 degrees a second (D032),
  * so it swings round on a 379 m curve instead of snapping to a new heading. Three ways to
@@ -32,9 +33,10 @@ import { densityGrid } from './probabilityMap.js';
 import { trackAt } from './referee.js';
 import { PlayerFlight, RecordedFlight, SAMPLE_S } from './playback.js';
 import { ProbabilityLegend } from './probabilityLayer.js';
+import { drawResultCard } from './resultCard.js';
 import { Scene } from './scene.js';
 import {
-  SEARCHER_INFO, SHOWCASE_ROOT, bestNoise, display, loadBenchmark, loadField, loadIndex,
+  SEARCHER_INFO, SHOWCASE_ROOT, aiOf, bestNoise, display, loadBenchmark, loadField, loadIndex,
   loadWindow,
 } from './scenarioData.js';
 import { bearing } from './kinematics.js';
@@ -42,6 +44,7 @@ import { M_PER_DEG_LAT } from './geo.js';
 import { SEARCH_SPEED_MS, TURN_RADIUS_M, TURN_RATE_DEG_S } from './platform.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 import { esriTiles } from './tiles.js';
+import { Tutorial } from './tutorial.js';
 
 // The drift model the game flies over: the newest a scenario has (rvc, sized by the current,
 // D033, once published; rv until then). Chosen per scenario in fly().
@@ -51,7 +54,25 @@ const WINDOW_S = 45 * 60;
 const SPEED_UP = Math.max(1, Number(new URLSearchParams(window.location.search).get('speed')) || 1);
 const FLY_SPEED = 30 * SPEED_UP;          // 45 minutes in 90 seconds
 const REVEAL_SPEED = 90 * SPEED_UP;       // the side-by-side replay in 30 seconds
-const RIVALS = { cg: 'expanding-square', ai: 'greedy' };
+const CG = 'expanding-square';
+// What the results say the AI was, by who flew it (aiOf).
+const AI_WORDS = {
+  ppo: '<b>Telemachus</b> is our trained agent: a neural network that learned where to fly by '
+    + 'searching five years of simulated drift, minute by minute, and being paid for every '
+    + 'possible position it found, more for finding it sooner.',
+  greedy: '<b>The AI</b> here is a greedy search that always flies to where the most probability '
+    + 'is left; the trained agent takes its place once its flights are published.',
+};
+/** What the AI is called, by who flew it: Telemachus is the trained agent (named 12 Oct). */
+const AI_NAME = { ppo: 'Telemachus', greedy: 'the AI' };
+const AI_LABEL = { ppo: 'Telemachus (AI)', greedy: 'The AI (greedy)' };
+// The mailer (mailer/ in this repo): a Vercel function for the public site, or a laptop at the
+// stand. Unset, the game offers no email.
+const MAILER_URL = String(import.meta.env.VITE_MAILER_URL ?? '');
+// The open-day video plays when nobody has touched the stand for a while (Aditya, 12 Oct):
+// on these screens, after this long. Never in the middle of a flight or a replay.
+const IDLE_MS = { attract: 30_000, pick: 45_000, results: 45_000, tut: 60_000 };
+const DEMO_VIDEO = String(import.meta.env.VITE_DEMO_VIDEO ?? `${SHOWCASE_ROOT}/openday.mp4`);
 const MODES = { map: 'with the probability map', currents: 'with currents only' };
 const $ = (id) => document.getElementById(id);
 
@@ -164,7 +185,11 @@ function newMap(id, options = {}) {
 }
 
 function show(id) {
+  if (game.screen === 'tut' && id !== 'tut') stopTutorial();
+  if (game.screen === 'demo' && id !== 'demo') $('demoVideo').pause();
+  game.screen = id;
   for (const s of document.querySelectorAll('.screen')) s.classList.toggle('on', s.id === id);
+  document.body.classList.toggle('kiosk', id === 'demo');
 }
 
 function clock(s) {
@@ -188,15 +213,66 @@ function drawBoards() {
 
 function attract() {
   drawBoards();
-  // The two 3D loops (scripts/render_showcase.py), one after the other.
-  const video = $('showcase');
-  const loops = ['mountain', 'cube'].map((n) => `${SHOWCASE_ROOT}/${n}.webm`);
-  let i = 0;
-  video.loop = false;
-  video.onended = () => { i = (i + 1) % loops.length; video.src = loops[i]; video.play().catch(() => {}); };
-  video.onerror = () => { video.style.visibility = 'hidden'; };
-  video.src = loops[0];
+  $('attract').style.backgroundImage = `url(${import.meta.env.BASE_URL}img/hero.jpg)`;
   show('attract');
+}
+
+/* ---------------------------------------------------------------- the video, when idle */
+
+/**
+ * The open-day video on a loop, full screen. If it cannot be loaded (offline, or not
+ * published yet) the two 3D loops (scripts/render_showcase.py) play instead.
+ */
+function demo() {
+  show('demo');
+  const video = $('demoVideo');
+  if (!video.dataset.ready) {
+    video.dataset.ready = '1';
+    const loops = ['mountain', 'cube'].map((n) => `${SHOWCASE_ROOT}/${n}.webm`);
+    let i = 0;
+    video.loop = true;
+    video.onerror = () => {
+      video.loop = false;
+      video.onerror = null;
+      video.onended = () => { i = (i + 1) % loops.length; video.src = loops[i]; video.play().catch(() => {}); };
+      video.src = loops[0];
+      video.play().catch(() => {});
+    };
+    video.src = DEMO_VIDEO;
+  }
+  video.play().catch(() => {});
+}
+
+let lastInput = performance.now();
+function touched() {
+  lastInput = performance.now();
+  if (game.screen === 'demo') attract();
+}
+
+function watchIdle() {
+  for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']) {
+    window.addEventListener(ev, touched, { passive: true });
+  }
+  setInterval(() => {
+    const limit = IDLE_MS[game.screen];
+    if (limit && performance.now() - lastInput > limit) demo();
+  }, 1000);
+}
+
+/* ---------------------------------------------------------------- the three missions */
+
+let tutorial = null;
+
+function stopTutorial() {
+  tutorial?.stop();
+  tutorial = null;
+}
+
+function missions() {
+  show('tut');
+  stopTutorial();
+  tutorial = new Tutorial({ speedUp: SPEED_UP, onDone: () => pick() });
+  tutorial.start();
 }
 
 /* ---------------------------------------------------------------- pick */
@@ -364,12 +440,14 @@ function reveal() {
   }
   for (const m of panels) m.invalidateSize();
   if (game.scenes) for (const s of game.scenes) s.destroy();
+  const ai = aiOf(game.window);
+  $('aiTag').textContent = AI_LABEL[ai];
   const flights = [
     rewind(game.player),
-    new RecordedFlight(game.window, RIVALS.cg),
-    new RecordedFlight(game.window, RIVALS.ai),
+    new RecordedFlight(game.window, CG),
+    new RecordedFlight(game.window, ai),
   ];
-  const colours = ['#ffffff', SEARCHER_INFO[RIVALS.cg].colour, SEARCHER_INFO[RIVALS.ai].colour];
+  const colours = ['#ffffff', SEARCHER_INFO[CG].colour, SEARCHER_INFO[ai].colour];
   game.scenes = panels.map((m, i) => {
     const s = new Scene(m, { colour: colours[i], heliSize: 46 });
     s.setWindow(game.window, { fit: i === 0 });
@@ -443,26 +521,29 @@ async function results() {
   game.revealing = false;
   for (const f of game.flights) advance(f, WINDOW_S);
   const [you, cg, ai] = game.flights.map((f) => f.metrics());
-  const v = verdict({ pos: you.pos }, [{ name: 'the Coast Guard', pos: cg.pos }, { name: 'the AI', pos: ai.pos }]);
+  const aiName = AI_NAME[aiOf(game.window)];
+  const v = verdict({ pos: you.pos }, [{ name: 'the Coast Guard', pos: cg.pos }, { name: aiName, pos: ai.pos }]);
   const area = arrivalAreaKm2(game.window);
   const points = score(you.pos, area);
+  game.result = { points, area };
   $('verdict').textContent = v.won ? 'You win! Claim your prize.' : 'The search goes on…';
   $('verdict').className = `verdict${v.won ? ' win' : ''}`;
   $('verdictWhy').textContent = v.won
-    ? `You searched more of the likely sea than both the Coast Guard and the AI. ${points} points.`
+    ? `You searched more of the likely sea than both the Coast Guard and ${aiName}. ${points} points.`
     : `${v.beaten.length ? `You beat ${v.beaten.join(' and ')}, but not` : 'You did not beat'} `
-      + `${['the Coast Guard', 'the AI'].filter((n) => !v.beaten.includes(n)).join(' or ')}. ${points} points.`;
+      + `${['the Coast Guard', aiName].filter((n) => !v.beaten.includes(n)).join(' or ')}. ${points} points.`;
   const row = (name, m) => {
     const t = m.target;
     const buoy = t?.found ? `found at ${clock(t.foundS)}` : `missed by ${(t.closestM / 1000).toFixed(1)} km`;
     return `<tr><td>${name}</td><td class="n">${pct(m.pos)}</td><td>${buoy}</td></tr>`;
   };
   $('scoreTable').innerHTML = '<tr><th></th><th>Searched</th><th>The real person</th></tr>'
-    + row(`You (${game.name})`, you) + row('Coast Guard', cg) + row('The AI', ai);
+    + row(`You (${game.name})`, you) + row('Coast Guard', cg) + row(AI_LABEL[aiOf(game.window)], ai);
   $('pointsWhy').textContent = `This cloud covered ${Math.round(area)} km² when the helicopter arrived. `
     + `On a cloud that big the Coast Guard's pattern searches about ${Math.round(100 * par(area))} % of it on average, `
     + 'and that is worth 1,000 points; you score the same share of 1,000 for what you searched. A bigger '
     + 'cloud is harder, so the same share is worth more on it.';
+  $('aiWords').innerHTML = AI_WORDS[aiOf(game.window)];
 
   if (!game.saved) {
     const entry = {
@@ -481,6 +562,69 @@ async function results() {
     .map((e) => `<li><span>${e.name}</span><span>${e.score}</span></li>`).join('');
   show('results');
   benchmark();
+  offerEmail();
+}
+
+/* ---------------------------------------------------------------- email */
+
+function offerEmail() {
+  const form = $('mailForm');
+  form.hidden = !MAILER_URL;
+  $('mailBtn').disabled = false;
+  $('mailNote').textContent = 'We use your address once, to send this, and keep nothing.';
+  $('mailNote').className = 'muted note';
+}
+
+/** One searcher's numbers for the email. */
+function forEmail(m) {
+  const t = m.target ?? {};
+  return { pos: m.pos, found: Boolean(t.found), foundS: t.foundS ?? 0, missedKm: (t.closestM ?? NaN) / 1000 };
+}
+
+/** The picture of the three flights over the cloud, as a JPEG data URL. */
+function flightPicture() {
+  const ai = aiOf(game.window);
+  const flights = [
+    { label: `You (${game.name})`, colour: '#ffffff', trail: game.flights[0].trail(WINDOW_S) },
+    { label: 'Coast Guard', colour: SEARCHER_INFO[CG].colour, trail: game.flights[1].trail(WINDOW_S) },
+    { label: AI_LABEL[ai], colour: SEARCHER_INFO[ai].colour, trail: game.flights[2].trail(WINDOW_S) },
+  ];
+  return drawResultCard(document.createElement('canvas'), game.window, flights, WINDOW_S)
+    .toDataURL('image/jpeg', 0.88);
+}
+
+async function sendEmail(e) {
+  e.preventDefault();
+  const note = $('mailNote');
+  $('mailBtn').disabled = true;
+  note.className = 'muted note';
+  note.textContent = 'Sending…';
+  const [you, cg, ai] = game.flights.map((f) => f.metrics());
+  const body = {
+    email: $('mailTo').value.trim(),
+    name: game.name,
+    points: game.result.points,
+    areaKm2: game.result.area,
+    you: forEmail(you),
+    cg: forEmail(cg),
+    ai: { ...forEmail(ai), name: AI_NAME[aiOf(game.window)] === 'Telemachus' ? 'Telemachus' : 'the AI' },
+    bench: (game.benchRows ?? []).slice(0, 4).map((r) => ({ label: SEARCHER_INFO[r.searcher]?.label ?? r.searcher, pos: r.pos })),
+  };
+  try {
+    body.image = flightPicture();
+  } catch { /* the email goes without the picture */ }
+  try {
+    const res = await fetch(MAILER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || !out.ok) throw new Error(out.error ?? `the mail server answered ${res.status}`);
+    note.className = 'note ok';
+    note.textContent = 'Sent! Check your inbox, and your spam folder just in case.';
+    $('mailTo').value = '';
+  } catch (err) {
+    note.className = 'note bad';
+    note.textContent = `Not sent: ${err.message}. Try again in a moment.`;
+    $('mailBtn').disabled = false;
+  }
 }
 
 async function benchmark() {
@@ -488,6 +632,7 @@ async function benchmark() {
     const b = await loadBenchmark();
     const rows = (b.scenarios55 ?? b).filter((r) => r.noise === game.noise && r.arrival_h === ARRIVAL_H)
       .sort((x, y) => y.pos - x.pos);
+    game.benchRows = rows;
     $('benchNote').textContent = `Over all ${rows[0]?.n_groups ?? 55} buoys, the helicopter arriving 2 hours after the call:`;
     $('benchTable').innerHTML = '<tr><th>Searcher</th><th>Searched, on average</th><th>Found the person</th></tr>'
       + rows.map((r) => `<tr><td>${SEARCHER_INFO[r.searcher]?.label ?? r.searcher}</td>`
@@ -515,7 +660,11 @@ async function main() {
     $('status').textContent = `the scenario files are not reachable: ${err.message}`;
     return;
   }
-  $('startBtn').addEventListener('click', pick);
+  $('startBtn').addEventListener('click', missions);
+  $('searchBtn').addEventListener('click', pick);
+  $('demoBtn').addEventListener('click', (e) => { e.stopPropagation(); demo(); lastInput = performance.now(); });
+  $('tutSkip').addEventListener('click', () => tutorial?.skip());
+  $('tutSkipAll').addEventListener('click', () => pick());
   $('surprise').addEventListener('click', () => {
     const all = game.index.scenarios;
     choose(all[Math.floor(Math.random() * all.length)]);
@@ -534,6 +683,9 @@ async function main() {
   });
   $('againBtn').addEventListener('click', attract);
   $('exportBtn').addEventListener('click', exportBoard);
+  $('mailForm').addEventListener('submit', sendEmail);
+  // A free server sleeps when idle: wake it while the player flies, not when they press Send.
+  if (MAILER_URL) fetch(MAILER_URL, { method: 'GET' }).catch(() => {});
   window.addEventListener('keydown', (e) => {
     const d = keyDirection(e.code);
     if (!d || !$('fly').classList.contains('on')) return;
@@ -546,6 +698,7 @@ async function main() {
     const d = keyDirection(e.code);
     if (d) game.held.delete(d);
   });
+  watchIdle();
   attract();
 }
 

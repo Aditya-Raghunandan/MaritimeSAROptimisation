@@ -15,22 +15,43 @@ import { expect, test } from '@playwright/test';
   flown by the D032 helicopter that turns at 7 deg/s. scenarios/v1 beside it is the older
   format, flown by the helicopter that turned at once; one test hides v2 to check the site
   still plays from a data root that only has v1.
+
+  v3 (the trained agent's flight beside the six) is not a fixture on disk: `agent: true` serves
+  it as v2 with the Sector's flight renamed "ppo". It checks the wiring for a seventh searcher,
+  so its flight only has to differ from greedy's, which plays the AI where there is no agent.
 */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, 'fixtures');
 const LAPTOP = { width: 1366, height: 768 };
 
-async function serveFixture(page, { hide = null } = {}) {
+/** v2's file as v3 would hold it: the Sector's flight and rows renamed as the agent's. */
+function asV3(rel, body) {
+  if (!rel.endsWith('.json')) return body;
+  const j = JSON.parse(body);
+  if (j.scenarios) j.searchers = [...j.searchers, 'ppo'];
+  if (j.flights) j.flights.ppo = { ...j.flights.sector, layout: 'e2e: the Sector, as the agent' };
+  for (const key of ['scenarios55', 'dev']) {
+    if (Array.isArray(j[key])) {
+      j[key] = [...j[key], ...j[key].filter((r) => r.searcher === 'sector').map((r) => ({ ...r, searcher: 'ppo' }))];
+    }
+  }
+  return Buffer.from(JSON.stringify(j));
+}
+
+async function serveFixture(page, { hide = null, agent = false } = {}) {
   await page.route('**/e2e.invalid/**', async (route) => {
     const url = new URL(route.request().url());
-    const rel = normalize(url.pathname.replace(/^\/archive\/?/, '')).replace(/^(\.\.[/\\])+/, '');
+    let rel = normalize(url.pathname.replace(/^\/archive\/?/, '')).replace(/^(\.\.[/\\])+/, '');
     if (hide && url.pathname.includes(hide)) {
       await route.fulfill({ status: 404, body: '' });
       return;
     }
+    const v3 = /^scenarios[/\\]v3[/\\]/.test(rel);
+    if (v3 && agent) rel = rel.replace(/^scenarios([/\\])v3/, 'scenarios$1v2');
     try {
-      const body = await readFile(join(FIXTURES, rel));
+      let body = await readFile(join(FIXTURES, rel));
+      if (v3 && agent) body = asV3(rel, body);
       await route.fulfill({
         status: 200,
         contentType: rel.endsWith('.json') ? 'application/json' : 'application/octet-stream',
@@ -127,6 +148,36 @@ test.describe('the scenario page', () => {
     expect(errors).toEqual([]);
   });
 
+  test('lists the trained AI only when the files carry it, and replays its flight', async ({ page }) => {
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('bench.html');
+    await expect(page.locator('#paper')).not.toHaveText('–');
+    await expect(page.locator('#searchers input')).toHaveCount(7);   // six and "fly it yourself"
+    await expect(page.locator('input[value=ppo]')).toHaveCount(0);
+    await expect(page.locator('#searchers')).not.toContainText('coming');
+    expect(errors).toEqual([]);
+  });
+
+  test('replays the trained AI\'s flight to the paper\'s number', async ({ page }) => {
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    await page.goto('bench.html');
+    await expect(page.locator('#paper')).not.toHaveText('–');
+    await expect(page.locator('#searchers input')).toHaveCount(8);
+    await expect(page.locator('#searchers')).toContainText('Telemachus');
+    await page.locator('input[value=ppo]').check();
+    const want = await fixtureFlight('rvc', 'sector');
+    await expect(page.locator('#paper')).toHaveText(`${(100 * want.pos).toFixed(1)} %`);
+    await page.locator('#time').evaluate((el) => {
+      el.value = '2700';
+      el.dispatchEvent(new Event('input'));
+    });
+    await expect(page.locator('#pos')).toHaveText(`${(100 * want.pos).toFixed(1)} %`);
+    await expectFits(page);
+    expect(errors).toEqual([]);
+  });
+
   test('flies by hand', async ({ page }) => {
     const errors = collectErrors(page);
     await serveFixture(page);
@@ -152,7 +203,7 @@ test.describe('the open-day game', () => {
     await expect(page.locator('#attract')).toHaveClass(/on/);
     await expectFits(page);
 
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.fill('#name', 'E2E');
     await expectFits(page);
@@ -178,6 +229,108 @@ test.describe('the open-day game', () => {
     // Points are scored against the cloud's size, and the page says so in numbers.
     await expect(page.locator('#pointsWhy')).toContainText(/covered \d+ km²/);
     await expect(page.locator('#pointsWhy')).not.toContainText(/1\d\d %/);
+    await expect(page.locator('#aiWords')).toContainText('greedy');
+    expect(errors).toEqual([]);
+  });
+
+  test('three missions, then the real search: each one plays, and each fits the laptop', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=20');
+    await page.click('#startBtn');
+    await expect(page.locator('#tut')).toHaveClass(/on/);
+    await expect(page.locator('#tutTitle')).toHaveText('Go with the flow');
+    await expect(page.locator('#tutResult')).toContainText('2 hours', { timeout: 15_000 });
+    await expectFits(page);
+    await page.click('text=Fly the helicopter');
+    await expect(page.locator('#tutTitle')).toHaveText('Catch the drifting buoy');
+    await expect(page.locator('#tutMap .scene-heli')).toBeVisible();
+    await page.click('#tutSkip');
+    await expect(page.locator('#tutTitle')).toHaveText('Read the sea between the dots');
+    await expect(page.locator('#tutText')).toContainText('Click on the map', { timeout: 15_000 });
+    await page.mouse.click(700, 420);
+    await expect(page.locator('#tutResult')).toContainText('off', { timeout: 15_000 });
+    await expectFits(page);
+    await page.click('text=Mission 3');
+    await expect(page.locator('#tutTitle')).toHaveText('10,000 guesses');
+    await page.locator('#tutSigma').fill('66');
+    await page.click('text=Release the drifters');
+    await expect(page.locator('#tutResult')).toContainText('Just right', { timeout: 15_000 });
+    await expectFits(page);
+    await page.click('text=Now the real search');
+    await expect(page.locator('#pick')).toHaveClass(/on/);
+    expect(errors).toEqual([]);
+  });
+
+  test('the video plays on demand and a touch brings the start screen back', async ({ page }) => {
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=20');
+    await page.click('#demoBtn');
+    await expect(page.locator('#demo')).toHaveClass(/on/);
+    await expect(page.locator('header')).toBeHidden();
+    await page.mouse.move(300, 300);
+    await page.mouse.move(320, 330);
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    expect(errors.filter((e) => !/media|video|webm|mp4/i.test(e))).toEqual([]);
+  });
+
+  test('emails the result: the numbers, Telemachus by name and a picture of the flights', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    let posted = null;
+    await page.route('**/mailer.e2e.invalid/**', async (route) => {
+      if (route.request().method() === 'POST') posted = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+    });
+    await page.goto('game.html?speed=20');
+    await page.click('#searchBtn');
+    await page.click('#surprise');
+    await page.fill('#name', 'Mail');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowRight');
+    await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
+    await page.keyboard.up('ArrowRight');
+    await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
+    await expect(page.locator('#mailForm')).toBeVisible();
+    await expectFits(page);
+    await page.fill('#mailTo', 'player@example.com');
+    await page.click('#mailBtn');
+    await expect(page.locator('#mailNote')).toContainText('Sent!');
+    expect(posted.email).toBe('player@example.com');
+    expect(posted.name).toBe('Mail');
+    expect(posted.ai.name).toBe('Telemachus');
+    const agent = await fixtureFlight('rvc', 'sector');
+    expect(posted.ai.pos).toBeCloseTo(agent.pos, 9);
+    expect(posted.points).toBeGreaterThanOrEqual(0);
+    expect(posted.areaKm2).toBeGreaterThan(0);
+    expect(posted.image).toMatch(/^data:image\/jpeg;base64,/);
+    expect(posted.image.length).toBeLessThan(900_000);
+    expect(errors).toEqual([]);
+  });
+
+  test('the AI is the trained agent where the files carry its flight', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    await page.goto('game.html?speed=20');
+    await page.click('#searchBtn');
+    await page.click('#surprise');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowRight');
+    await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
+    await page.keyboard.up('ArrowRight');
+    await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
+    const agent = await fixtureFlight('rvc', 'sector');
+    await expect(page.locator('#scoreTable tr').last()).toContainText(`${(100 * agent.pos).toFixed(1)} %`);
+    await expect(page.locator('#aiWords')).toContainText('trained agent');
+    await expect(page.locator('#benchTable')).toContainText('Telemachus');
+    await expect(page.locator('#benchTable tr')).toHaveCount(8);
+    await expectFits(page);
     expect(errors).toEqual([]);
   });
 
@@ -186,7 +339,7 @@ test.describe('the open-day game', () => {
     const errors = collectErrors(page);
     await serveFixture(page);
     await page.goto('game.html?speed=4');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.click('#goBtn');
     await expect(page.locator('#fly')).toHaveClass(/on/);
@@ -214,7 +367,7 @@ test.describe('the open-day game', () => {
     const errors = collectErrors(page);
     await serveFixture(page, { hide: '/scenarios/v2/' });
     await page.goto('game.html?speed=20');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.click('#goBtn');
     await expect(page.locator('#fly')).toHaveClass(/on/);
@@ -231,7 +384,7 @@ test.describe('the open-day game', () => {
     const errors = collectErrors(page);
     await serveFixture(page);
     await page.goto('game.html');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.click('[data-mode=currents]');
     await page.click('#goBtn');

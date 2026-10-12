@@ -79,6 +79,9 @@ const HELI = (colour, size = 52) => L.divIcon({
   iconAnchor: [size / 2, size / 2],
 });
 
+/** The same helicopter for other pages (the tutorial's missions). */
+export const heliIcon = HELI;
+
 const DOT = (colour, size = 12, label = '') => L.divIcon({
   className: 'scene-dot',
   html: `<span style="display:block;width:${size}px;height:${size}px;border-radius:50%;`
