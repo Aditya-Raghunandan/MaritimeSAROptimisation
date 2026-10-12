@@ -99,6 +99,13 @@
       th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
       td.n { text-align: right; font-variant-numeric: tabular-nums; }
       .explain { color: var(--ink-2); font-size: 13px; }
+      .mail { margin-top: 10px; padding: 10px 14px; }
+      .mail .mailrow { display: flex; gap: 8px; margin-top: 6px; }
+      .mail input[type=email] { flex: 1; font: inherit; color: var(--ink); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+      .mail .big { padding: 8px 20px; font-size: 16px; }
+      .mail .note { font-size: 12px; }
+      .mail .note.ok { color: var(--win); }
+      .mail .note.bad { color: var(--warm); }
       .scene-label { position: absolute; left: 16px; top: -3px; white-space: nowrap; font-size: 11px; color: #fff; text-shadow: 0 0 3px #000; }
     </style>
   </head>
@@ -111,14 +118,14 @@
 
     <section class="screen on" id="attract">
       <div>
-        <h2>Someone has fallen into the sea.<br />Can you find them before the AI does?</h2>
+        <h2>Someone is lost in the Bermuda Triangle.<br />Can you find them before Telemachus, our AI?</h2>
         <p>
           The ocean carries a person kilometres in a few hours, and nobody knows exactly where.
           Our drift model turns one splash into 10,000 places they could be. You get one
           helicopter, a 185 m strip of sea it can see, and 45 minutes. Then the Coast Guard's
-          pattern and the AI search the same sea, and we reveal where the person really was.
+          pattern and Telemachus search the same sea, and we reveal where the person really was.
         </p>
-        <p class="muted">Beat both the Coast Guard and the AI and you win a prize.</p>
+        <p class="muted">Beat both the Coast Guard and Telemachus and you win a prize.</p>
         <button class="big" id="startBtn">Start</button>
         <div class="boards">
           <div class="card board"><h3>Best with the probability map</h3><ol id="boardMap"></ol></div>
@@ -159,7 +166,7 @@
       <div class="panels">
         <div class="panel"><div class="map" id="mapYou"></div><div class="tag"><span>You</span><b id="posYou">0 %</b></div></div>
         <div class="panel"><div class="map" id="mapCg"></div><div class="tag"><span>Coast Guard (Expanding Square)</span><b id="posCg">0 %</b></div></div>
-        <div class="panel"><div class="map" id="mapAi"></div><div class="tag"><span>The AI</span><b id="posAi">0 %</b></div></div>
+        <div class="panel"><div class="map" id="mapAi"></div><div class="tag"><span id="aiTag">Telemachus (AI)</span><b id="posAi">0 %</b></div></div>
       </div>
     </section>
 
@@ -179,6 +186,15 @@
           <button class="big" id="againBtn">Play again</button>
           <button class="ghost" id="exportBtn">Save the board as a file</button>
         </div>
+        <form class="card mail" id="mailForm" hidden>
+          <label for="mailTo"><b>Email me my result</b> <span class="muted">· the path you flew, how you did against
+            Telemachus and the Coast Guard, and a link to vote for us</span></label>
+          <div class="mailrow">
+            <input type="email" id="mailTo" placeholder="you@example.com" autocomplete="email" required />
+            <button class="big" id="mailBtn" type="submit">Send</button>
+          </div>
+          <span class="muted note" id="mailNote">We use your address once, to send this, and keep nothing.</span>
+        </form>
       </div>
       <div>
         <div class="card board"><h3 id="boardTitle">The board</h3><ol id="boardNow"></ol></div>

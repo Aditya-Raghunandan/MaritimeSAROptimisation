@@ -5,8 +5,8 @@
  * or only the currents, and flies one helicopter for the 45-minute window, the clock
  * compressed so the search takes about 90 seconds. Then the same sea is searched again,
  * side by side, by the Coast Guard's Expanding Square and by the AI, and the real buoy is
- * revealed. The AI is the trained agent where the published files carry its flight (v3), and
- * the greedy search where they do not; the results say which one it was.
+ * revealed. The AI is Telemachus, Suné's trained agent, where the published files carry its
+ * flight (v3), and the greedy search where they do not; the results say which one it was.
  *
  * FLYING IT. The helicopter turns as the real one does, at most 7 degrees a second (D032),
  * so it swings round on a 379 m curve instead of snapping to a new heading. Three ways to
@@ -33,6 +33,7 @@ import { densityGrid } from './probabilityMap.js';
 import { trackAt } from './referee.js';
 import { PlayerFlight, RecordedFlight, SAMPLE_S } from './playback.js';
 import { ProbabilityLegend } from './probabilityLayer.js';
+import { drawResultCard } from './resultCard.js';
 import { Scene } from './scene.js';
 import {
   SEARCHER_INFO, SHOWCASE_ROOT, aiOf, bestNoise, display, loadBenchmark, loadField, loadIndex,
@@ -55,12 +56,18 @@ const REVEAL_SPEED = 90 * SPEED_UP;       // the side-by-side replay in 30 secon
 const CG = 'expanding-square';
 // What the results say the AI was, by who flew it (aiOf).
 const AI_WORDS = {
-  ppo: '<b>The AI</b> here is a trained agent: a neural network that learned where to fly by '
+  ppo: '<b>Telemachus</b> is our trained agent: a neural network that learned where to fly by '
     + 'searching five years of simulated drift, minute by minute, and being paid for every '
     + 'possible position it found, more for finding it sooner.',
   greedy: '<b>The AI</b> here is a greedy search that always flies to where the most probability '
     + 'is left; the trained agent takes its place once its flights are published.',
 };
+/** What the AI is called, by who flew it: Telemachus is the trained agent (named 12 Oct). */
+const AI_NAME = { ppo: 'Telemachus', greedy: 'the AI' };
+const AI_LABEL = { ppo: 'Telemachus (AI)', greedy: 'The AI (greedy)' };
+// The mailer (mailer/ in this repo): a Vercel function for the public site, or a laptop at the
+// stand. Unset, the game offers no email.
+const MAILER_URL = String(import.meta.env.VITE_MAILER_URL ?? '');
 const MODES = { map: 'with the probability map', currents: 'with currents only' };
 const $ = (id) => document.getElementById(id);
 
@@ -374,6 +381,7 @@ function reveal() {
   for (const m of panels) m.invalidateSize();
   if (game.scenes) for (const s of game.scenes) s.destroy();
   const ai = aiOf(game.window);
+  $('aiTag').textContent = AI_LABEL[ai];
   const flights = [
     rewind(game.player),
     new RecordedFlight(game.window, CG),
@@ -453,22 +461,24 @@ async function results() {
   game.revealing = false;
   for (const f of game.flights) advance(f, WINDOW_S);
   const [you, cg, ai] = game.flights.map((f) => f.metrics());
-  const v = verdict({ pos: you.pos }, [{ name: 'the Coast Guard', pos: cg.pos }, { name: 'the AI', pos: ai.pos }]);
+  const aiName = AI_NAME[aiOf(game.window)];
+  const v = verdict({ pos: you.pos }, [{ name: 'the Coast Guard', pos: cg.pos }, { name: aiName, pos: ai.pos }]);
   const area = arrivalAreaKm2(game.window);
   const points = score(you.pos, area);
+  game.result = { points, area };
   $('verdict').textContent = v.won ? 'You win! Claim your prize.' : 'The search goes on…';
   $('verdict').className = `verdict${v.won ? ' win' : ''}`;
   $('verdictWhy').textContent = v.won
-    ? `You searched more of the likely sea than both the Coast Guard and the AI. ${points} points.`
+    ? `You searched more of the likely sea than both the Coast Guard and ${aiName}. ${points} points.`
     : `${v.beaten.length ? `You beat ${v.beaten.join(' and ')}, but not` : 'You did not beat'} `
-      + `${['the Coast Guard', 'the AI'].filter((n) => !v.beaten.includes(n)).join(' or ')}. ${points} points.`;
+      + `${['the Coast Guard', aiName].filter((n) => !v.beaten.includes(n)).join(' or ')}. ${points} points.`;
   const row = (name, m) => {
     const t = m.target;
     const buoy = t?.found ? `found at ${clock(t.foundS)}` : `missed by ${(t.closestM / 1000).toFixed(1)} km`;
     return `<tr><td>${name}</td><td class="n">${pct(m.pos)}</td><td>${buoy}</td></tr>`;
   };
   $('scoreTable').innerHTML = '<tr><th></th><th>Searched</th><th>The real person</th></tr>'
-    + row(`You (${game.name})`, you) + row('Coast Guard', cg) + row('The AI', ai);
+    + row(`You (${game.name})`, you) + row('Coast Guard', cg) + row(AI_LABEL[aiOf(game.window)], ai);
   $('pointsWhy').textContent = `This cloud covered ${Math.round(area)} km² when the helicopter arrived. `
     + `On a cloud that big the Coast Guard's pattern searches about ${Math.round(100 * par(area))} % of it on average, `
     + 'and that is worth 1,000 points; you score the same share of 1,000 for what you searched. A bigger '
@@ -492,6 +502,69 @@ async function results() {
     .map((e) => `<li><span>${e.name}</span><span>${e.score}</span></li>`).join('');
   show('results');
   benchmark();
+  offerEmail();
+}
+
+/* ---------------------------------------------------------------- email */
+
+function offerEmail() {
+  const form = $('mailForm');
+  form.hidden = !MAILER_URL;
+  $('mailBtn').disabled = false;
+  $('mailNote').textContent = 'We use your address once, to send this, and keep nothing.';
+  $('mailNote').className = 'muted note';
+}
+
+/** One searcher's numbers for the email. */
+function forEmail(m) {
+  const t = m.target ?? {};
+  return { pos: m.pos, found: Boolean(t.found), foundS: t.foundS ?? 0, missedKm: (t.closestM ?? NaN) / 1000 };
+}
+
+/** The picture of the three flights over the cloud, as a JPEG data URL. */
+function flightPicture() {
+  const ai = aiOf(game.window);
+  const flights = [
+    { label: `You (${game.name})`, colour: '#ffffff', trail: game.flights[0].trail(WINDOW_S) },
+    { label: 'Coast Guard', colour: SEARCHER_INFO[CG].colour, trail: game.flights[1].trail(WINDOW_S) },
+    { label: AI_LABEL[ai], colour: SEARCHER_INFO[ai].colour, trail: game.flights[2].trail(WINDOW_S) },
+  ];
+  return drawResultCard(document.createElement('canvas'), game.window, flights, WINDOW_S)
+    .toDataURL('image/jpeg', 0.88);
+}
+
+async function sendEmail(e) {
+  e.preventDefault();
+  const note = $('mailNote');
+  $('mailBtn').disabled = true;
+  note.className = 'muted note';
+  note.textContent = 'Sending…';
+  const [you, cg, ai] = game.flights.map((f) => f.metrics());
+  const body = {
+    email: $('mailTo').value.trim(),
+    name: game.name,
+    points: game.result.points,
+    areaKm2: game.result.area,
+    you: forEmail(you),
+    cg: forEmail(cg),
+    ai: { ...forEmail(ai), name: AI_NAME[aiOf(game.window)] === 'Telemachus' ? 'Telemachus' : 'the AI' },
+    bench: (game.benchRows ?? []).slice(0, 4).map((r) => ({ label: SEARCHER_INFO[r.searcher]?.label ?? r.searcher, pos: r.pos })),
+  };
+  try {
+    body.image = flightPicture();
+  } catch { /* the email goes without the picture */ }
+  try {
+    const res = await fetch(MAILER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || !out.ok) throw new Error(out.error ?? `the mail server answered ${res.status}`);
+    note.className = 'note ok';
+    note.textContent = 'Sent! Check your inbox, and your spam folder just in case.';
+    $('mailTo').value = '';
+  } catch (err) {
+    note.className = 'note bad';
+    note.textContent = `Not sent: ${err.message}. Try again in a moment.`;
+    $('mailBtn').disabled = false;
+  }
 }
 
 async function benchmark() {
@@ -499,6 +572,7 @@ async function benchmark() {
     const b = await loadBenchmark();
     const rows = (b.scenarios55 ?? b).filter((r) => r.noise === game.noise && r.arrival_h === ARRIVAL_H)
       .sort((x, y) => y.pos - x.pos);
+    game.benchRows = rows;
     $('benchNote').textContent = `Over all ${rows[0]?.n_groups ?? 55} buoys, the helicopter arriving 2 hours after the call:`;
     $('benchTable').innerHTML = '<tr><th>Searcher</th><th>Searched, on average</th><th>Found the person</th></tr>'
       + rows.map((r) => `<tr><td>${SEARCHER_INFO[r.searcher]?.label ?? r.searcher}</td>`
@@ -545,6 +619,9 @@ async function main() {
   });
   $('againBtn').addEventListener('click', attract);
   $('exportBtn').addEventListener('click', exportBoard);
+  $('mailForm').addEventListener('submit', sendEmail);
+  // A free server sleeps when idle: wake it while the player flies, not when they press Send.
+  if (MAILER_URL) fetch(MAILER_URL, { method: 'GET' }).catch(() => {});
   window.addEventListener('keydown', (e) => {
     const d = keyDirection(e.code);
     if (!d || !$('fly').classList.contains('on')) return;

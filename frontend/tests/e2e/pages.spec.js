@@ -165,7 +165,7 @@ test.describe('the scenario page', () => {
     await page.goto('bench.html');
     await expect(page.locator('#paper')).not.toHaveText('–');
     await expect(page.locator('#searchers input')).toHaveCount(8);
-    await expect(page.locator('#searchers')).toContainText('Trained AI');
+    await expect(page.locator('#searchers')).toContainText('Telemachus');
     await page.locator('input[value=ppo]').check();
     const want = await fixtureFlight('rvc', 'sector');
     await expect(page.locator('#paper')).toHaveText(`${(100 * want.pos).toFixed(1)} %`);
@@ -233,6 +233,42 @@ test.describe('the open-day game', () => {
     expect(errors).toEqual([]);
   });
 
+  test('emails the result: the numbers, Telemachus by name and a picture of the flights', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    let posted = null;
+    await page.route('**/mailer.e2e.invalid/**', async (route) => {
+      if (route.request().method() === 'POST') posted = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+    });
+    await page.goto('game.html?speed=20');
+    await page.click('#startBtn');
+    await page.click('#surprise');
+    await page.fill('#name', 'Mail');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowRight');
+    await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
+    await page.keyboard.up('ArrowRight');
+    await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
+    await expect(page.locator('#mailForm')).toBeVisible();
+    await expectFits(page);
+    await page.fill('#mailTo', 'player@example.com');
+    await page.click('#mailBtn');
+    await expect(page.locator('#mailNote')).toContainText('Sent!');
+    expect(posted.email).toBe('player@example.com');
+    expect(posted.name).toBe('Mail');
+    expect(posted.ai.name).toBe('Telemachus');
+    const agent = await fixtureFlight('rvc', 'sector');
+    expect(posted.ai.pos).toBeCloseTo(agent.pos, 9);
+    expect(posted.points).toBeGreaterThanOrEqual(0);
+    expect(posted.areaKm2).toBeGreaterThan(0);
+    expect(posted.image).toMatch(/^data:image\/jpeg;base64,/);
+    expect(posted.image.length).toBeLessThan(900_000);
+    expect(errors).toEqual([]);
+  });
+
   test('the AI is the trained agent where the files carry its flight', async ({ page }) => {
     test.setTimeout(60_000);
     const errors = collectErrors(page);
@@ -249,7 +285,7 @@ test.describe('the open-day game', () => {
     const agent = await fixtureFlight('rvc', 'sector');
     await expect(page.locator('#scoreTable tr').last()).toContainText(`${(100 * agent.pos).toFixed(1)} %`);
     await expect(page.locator('#aiWords')).toContainText('trained agent');
-    await expect(page.locator('#benchTable')).toContainText('Trained AI');
+    await expect(page.locator('#benchTable')).toContainText('Telemachus');
     await expect(page.locator('#benchTable tr')).toHaveCount(8);
     await expectFits(page);
     expect(errors).toEqual([]);

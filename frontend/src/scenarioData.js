@@ -37,7 +37,7 @@ export const SEARCHER_INFO = {
   parallel: { label: 'Parallel Track', kind: 'Coast Guard pattern', colour: '#e8b23d' },
   trackline: { label: 'Trackline', kind: 'Coast Guard pattern', colour: '#e8735a' },
   greedy: { label: 'Greedy', kind: 'reads the map', colour: '#04c951' },
-  ppo: { label: 'Trained AI', kind: 'learned from five years of drift', colour: '#ff6fb5' },
+  ppo: { label: 'Telemachus (trained AI)', kind: 'learned from five years of drift', colour: '#ff6fb5' },
   random: { label: 'Random', kind: 'the floor', colour: '#8a8a80' },
 };
 
