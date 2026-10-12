@@ -108,14 +108,16 @@ def field_grid(forcing, datum, start) -> np.ndarray:
     return out
 
 
-def flights(setup, row, hours: float, greedy: dict, ppo=None) -> dict:
+def flights(setup, row, hours: float, greedy: dict, ppo=None, telemachus=None) -> dict:
     """Every searcher flown and recorded: its steps, and the referee's numbers for it.
 
-    `ppo`, score_scenarios.PPOSearcher, adds the trained agent as "ppo".
+    `ppo`, score_scenarios.PPOSearcher, adds the trained agent as "ppo"; `telemachus` the
+    second agent as "telemachus".
     """
+    agents = {k: v for k, v in (("ppo", ppo), ("telemachus", telemachus)) if v is not None}
     out = {}
-    for name in SEARCHERS + (("ppo",) if ppo else ()):
-        policy, first, layout = (ppo(setup, row) if name == "ppo"
+    for name in SEARCHERS + tuple(agents):
+        policy, first, layout = (agents[name](setup, row) if name in agents
                                  else searcher(name, setup, row, hours, greedy))
         flying, steps = recorded(policy)
         m = run(flying, search_episode(setup))
@@ -135,7 +137,7 @@ def flights(setup, row, hours: float, greedy: dict, ppo=None) -> dict:
 
 
 def export_row(row, forcing, noises, arrivals_h, particles: int, out: Path,
-               greedy: dict, ppo=None) -> dict:
+               greedy: dict, ppo=None, telemachus=None) -> dict:
     """Every window of one row; returns its entry for index.json.
 
     `forcing` is a backend, or a data root, opened once for the latest arrival's window.
@@ -194,7 +196,7 @@ def export_row(row, forcing, noises, arrivals_h, particles: int, out: Path,
                     "lon": _floats(target.lon, 10)},
                 "field": f"field_{hours:g}h.f32",
                 "field_centre": {"lat": centre[0], "lon": centre[1]},
-                "flights": flights(setup, row, hours, greedy, ppo),
+                "flights": flights(setup, row, hours, greedy, ppo, telemachus),
             }
             (folder / f"{name}.json").write_text(json.dumps(record, separators=(",", ":")))
             windows.append(name)
@@ -286,6 +288,7 @@ def main(argv=None):
     e.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0])
     e.add_argument("--particles", type=int, default=10_000)
     e.add_argument("--ppo-model", help="the trained agent's best_model.zip: adds its flight")
+    e.add_argument("--telemachus-model", help="the second agent's best_model.zip: adds its flight")
     e.add_argument("--out", required=True)
     b = sub.add_parser("benchmark", help="benchmark.json for the site from summary.csv files")
     b.add_argument("--summary", nargs=2, action="append", metavar=("NAME", "CSV"), required=True)
@@ -319,6 +322,7 @@ def main(argv=None):
     spec.loader.exec_module(score)
 
     ppo = score.PPOSearcher(args.ppo_model) if args.ppo_model else None
+    telemachus = score.PPOSearcher(args.telemachus_model) if args.telemachus_model else None
     table = read_scenarios(args.csv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -327,14 +331,16 @@ def main(argv=None):
         row = table[table["scenario"] == name].iloc[0]
         t0 = time.perf_counter()
         entries.append(export_row(row, args.forcing_dir, args.noise, args.arrival_h,
-                                  args.particles, out, GREEDY, ppo))
+                                  args.particles, out, GREEDY, ppo, telemachus))
         print(f"{name}: {len(entries[-1]['windows'])} windows in "
               f"{time.perf_counter() - t0:.1f} s", flush=True)
     write_index(out, entries, {"particles": args.particles, "noise": NOISE_RECORD, "greedy": GREEDY,
                                "format": FORMAT, "turn_rate_deg_s": TURN_RATE_DEG_S,
                                "arrival_h": args.arrival_h,
-                               "searchers": list(SEARCHERS) + (["ppo"] if ppo else []),
+                               "searchers": list(SEARCHERS) + (["ppo"] if ppo else [])
+                               + (["telemachus"] if telemachus else []),
                                "ppo": None if ppo is None else ppo.record,
+                               "telemachus": None if telemachus is None else telemachus.record,
                                "commit": score.git_commit()})
 
 

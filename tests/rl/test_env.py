@@ -28,6 +28,11 @@ class TestReward:
         removed = [0.1] * STEPS
         assert time_weighted_return(removed) == pytest.approx(0.1 * (STEPS + 1) / 2)
 
+    def test_decay_zero_pays_every_minute_in_full_and_a_half_decay_halfway(self):
+        assert reward(0.2, STEPS - 1, STEPS, decay=0.0) == pytest.approx(0.2)
+        assert reward(0.2, 0, STEPS, decay=0.0) == pytest.approx(0.2)
+        assert reward(0.2, STEPS - 1, STEPS, decay=0.5) == pytest.approx(0.2 * (1 - 0.5 * (STEPS - 1) / STEPS))
+
     def test_headings_run_clockwise_from_north(self):
         assert [heading_of(a, 8) for a in (0, 2, 4, 6)] == [0.0, 90.0, 180.0, 270.0]
         assert heading_of(35, 36) == 350.0
@@ -66,6 +71,22 @@ class TestSearchEnv:
         again = run(lambda ep: heading_of(next(flown), 36), search_episode(setup))
         assert info["pos"] == pytest.approx(again["pos"], abs=1e-12)
         assert again["removed_per_step"] == pytest.approx(removed, abs=1e-15)
+
+    def test_with_decay_zero_the_return_is_the_pos_and_the_end_is_terminal(self, windows):
+        env = SearchEnv([windows], headings=36, decay=0.0)
+        env.reset(seed=0, options={"item": 1})
+        rng, total, done, steps = np.random.default_rng(5), 0.0, False, 0
+        while not done:
+            _, r, done, truncated, info = env.step(int(rng.integers(36)))
+            total += r
+            steps += 1
+            assert not truncated          # never bootstrapped past the window: gamma = 1 is safe
+        assert steps == STEPS and done
+        assert total == pytest.approx(info["pos"], rel=1e-12)
+
+    def test_a_decay_outside_0_to_1_is_refused(self, windows):
+        with pytest.raises(ValueError, match="decay"):
+            SearchEnv([windows], headings=8, decay=1.5)
 
     def test_flying_at_the_cloud_finds_something(self, windows):
         env = SearchEnv([windows], headings=8)

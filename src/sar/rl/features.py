@@ -30,14 +30,18 @@ def heading_of(action: int, headings: int) -> float:
     return float(int(action) * 360.0 / headings)
 
 
-def time_left_weight(k: int, steps: int) -> float:
-    """The reward's weight for step k: the share of the window still to come when it starts."""
-    return (steps - int(k)) / steps
+def time_left_weight(k: int, steps: int, decay: float = 1.0) -> float:
+    """The reward's weight for step k: 1 - decay x the share of the window already gone.
+
+    decay 1 is the share still to come (the first agent's reward); 0 pays every minute's finds
+    in full, so the return is the POS the benchmark judges on (L40).
+    """
+    return 1.0 - float(decay) * int(k) / steps
 
 
-def reward(removed: float, k: int, steps: int) -> float:
-    """Particles found x time remaining, scaled by N x window so a perfect first minute pays 1."""
-    return float(removed) * time_left_weight(k, steps)
+def reward(removed: float, k: int, steps: int, decay: float = 1.0) -> float:
+    """Particles found x the time-left weight, scaled by N x window so a perfect first minute pays 1."""
+    return float(removed) * time_left_weight(k, steps, decay)
 
 
 def time_weighted_return(removed_per_step) -> float:

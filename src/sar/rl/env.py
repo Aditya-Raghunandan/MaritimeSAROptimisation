@@ -26,17 +26,25 @@ def window_items(sources, arrivals_min=None) -> list[tuple[object, int]]:
 
 
 class SearchEnv(gym.Env):
-    """45 one-minute legs over one window's cloud; the reward is particles found x time left."""
+    """45 one-minute legs over one window's cloud; the reward is particles found x time left.
+
+    `decay` sets how much time left weighs (features.reward): 1 is the first agent's reward,
+    0 pays plain POS. The window's end is `terminated`, never `truncated`: the search really
+    stops at 45 minutes, so nothing is bootstrapped past it (safe with gamma = 1).
+    """
 
     metadata: ClassVar[dict] = {"render_modes": []}
 
-    def __init__(self, sources, headings: int, arrivals_min=None, cycle: bool = False):
+    def __init__(self, sources, headings: int, arrivals_min=None, cycle: bool = False,
+                 decay: float = 1.0):
         self.items = window_items(sources, arrivals_min)
         if not self.items:
             raise ValueError("SearchEnv needs at least one window")
         if isinstance(headings, bool) or not isinstance(headings, (int, np.integer)) or headings < 2:
             raise ValueError(f"headings must be an integer of at least 2, got {headings!r}")
-        self.headings, self.cycle = int(headings), bool(cycle)
+        if not 0.0 <= float(decay) <= 1.0:
+            raise ValueError(f"decay must be between 0 and 1, got {decay!r}")
+        self.headings, self.cycle, self.decay = int(headings), bool(cycle), float(decay)
         self.action_space = gym.spaces.Discrete(self.headings)
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, (SIZE,), np.float32)
         self._next, self._cached = 0, (None, None)
@@ -70,5 +78,6 @@ class SearchEnv(gym.Env):
         removed = self.episode.step(heading_of(int(action), self.headings))
         self.pos += removed
         done = self.episode.done
-        return (observe(self.episode, self.context), reward(removed, k, self.episode.steps), done,
+        return (observe(self.episode, self.context),
+                reward(removed, k, self.episode.steps, self.decay), done,
                 False, {"pos": self.pos, "removed": removed})

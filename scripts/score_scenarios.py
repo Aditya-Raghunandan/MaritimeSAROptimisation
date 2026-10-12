@@ -109,6 +109,9 @@ STRAIGHT_AT = 0.95
 BOOTSTRAP_SEED = 20261007
 REPO = Path(__file__).resolve().parents[1]
 PPO = "ppo"
+# The second agent (12 Oct, L40: plain POS, gamma 1, a CNN), flown beside the first so the two
+# are scored on the same clouds: --telemachus-model, searcher "telemachus".
+TELEMACHUS = "telemachus"
 
 
 class PPOSearcher:
@@ -193,11 +196,12 @@ def cloud_area_km2(setup, share: float = AREA_SHARE, cell_m: float = AREA_CELL_M
 def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
               greedy: dict | None = None,
               turn_rate_deg_s: float = TURN_RATE_DEG_S,
-              ppo: PPOSearcher | None = None) -> list[dict]:
+              ppo: PPOSearcher | None = None,
+              telemachus: PPOSearcher | None = None) -> list[dict]:
     """Every (noise, arrival, searcher) flight over one row, as flat dicts.
 
     `forcing` is a backend, or a data root, opened once for the latest arrival's window.
-    `ppo` flies the searcher named "ppo".
+    `ppo` flies the searcher named "ppo"; `telemachus` the one named "telemachus".
     """
     if isinstance(forcing, (str, Path)):
         start = np.datetime64(str(row["start"]), "us")
@@ -213,7 +217,8 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
             beached = float(np.mean(setup.window.beached[-1]))
             area = cloud_area_km2(setup)
             for name in searchers:
-                policy, first, layout = (ppo(setup, row) if name == PPO
+                agent = {PPO: ppo, TELEMACHUS: telemachus}.get(name)
+                policy, first, layout = (agent(setup, row) if agent is not None
                                          else searcher(name, setup, row, hours, greedy))
                 m = run(policy, search_episode(setup, turn_rate_deg_s))
                 drain = m["removed_per_step"]
@@ -274,14 +279,15 @@ def sha256(path) -> str:
 
 def experiment(csv, noises, arrivals_h, searchers, particles: int,
                greedy: dict | None = None, turn_rate_deg_s: float = TURN_RATE_DEG_S,
-               ppo: PPOSearcher | None = None) -> dict:
+               ppo: PPOSearcher | None = None, telemachus: PPOSearcher | None = None) -> dict:
     """What makes two flights comparable. A folder holds flights from one of these only."""
     return {"commit": git_commit(), "table": Path(csv).name, "table_sha256": sha256(csv),
             "particles": int(particles), "noise": {n: NOISE_RECORD[n] for n in noises},
             "arrival_h": [float(a) for a in arrivals_h], "searchers": list(searchers),
             "greedy": dict(GREEDY if greedy is None else greedy),
             "turn_rate_deg_s": None if math.isinf(turn_rate_deg_s) else float(turn_rate_deg_s),
-            "steps": STEPS, "step_s": STEP_S, "ppo": None if ppo is None else ppo.record}
+            "steps": STEPS, "step_s": STEP_S, "ppo": None if ppo is None else ppo.record,
+            **({} if telemachus is None else {TELEMACHUS: telemachus.record})}
 
 
 def claim(out: Path, settings: dict) -> dict:
@@ -454,8 +460,11 @@ def main(argv=None):
                         "pooled size, the comparison; rw: the old random walk")
     s.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0],
                    help="hours from the call to arrival, whole minutes; default 1 2 3")
-    s.add_argument("--searchers", nargs="+", choices=(*SEARCHERS, PPO), default=list(SEARCHERS))
+    s.add_argument("--searchers", nargs="+", choices=(*SEARCHERS, PPO, TELEMACHUS),
+                   default=list(SEARCHERS))
     s.add_argument("--ppo-model", help="the trained agent's best_model.zip, for --searchers ppo")
+    s.add_argument("--telemachus-model", help="the second agent's best_model.zip, for --searchers "
+                                              "telemachus")
     s.add_argument("--particles", type=int, default=10_000)
     s.add_argument("--greedy-headings", type=int, default=GREEDY["headings"])
     s.add_argument("--greedy-decide-s", type=float, default=GREEDY["decide_s"],
@@ -490,19 +499,23 @@ def main(argv=None):
 
     if (PPO in args.searchers) != bool(args.ppo_model):
         parser.error("--searchers ppo and --ppo-model go together")
+    if (TELEMACHUS in args.searchers) != bool(args.telemachus_model):
+        parser.error("--searchers telemachus and --telemachus-model go together")
     ppo = PPOSearcher(args.ppo_model) if args.ppo_model else None
+    telemachus = PPOSearcher(args.telemachus_model) if args.telemachus_model else None
     table = read_scenarios(args.csv)
     out = Path(args.out)
     greedy = {"headings": args.greedy_headings, "decide_s": args.greedy_decide_s}
     claim(out, experiment(args.csv, args.noise, args.arrival_h, args.searchers, args.particles,
-                          greedy, args.turn_rate, ppo))
+                          greedy, args.turn_rate, ppo, telemachus))
     (out / "flights").mkdir(exist_ok=True)
     for name in row_names(args.rows, table):
         row = table[table["scenario"] == name].iloc[0]
         t0 = time.perf_counter()
         try:
             flights = score_row(row, args.forcing_dir, args.noise, args.arrival_h,
-                                args.searchers, args.particles, greedy, args.turn_rate, ppo)
+                                args.searchers, args.particles, greedy, args.turn_rate, ppo,
+                                telemachus)
         except ForcingGapError as err:
             # D011: a scenario that crosses a gap in the forcing is excluded, and says why.
             (out / "flights" / f"{name}.skipped.json").write_text(

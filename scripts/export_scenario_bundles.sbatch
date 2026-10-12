@@ -28,6 +28,8 @@ LAST="${LAST:-$(( $(wc -l < "$CSV") - 1 ))}"
 PPO_MODEL="${PPO_MODEL:-}"   # the trained agent's best_model.zip: adds its flight
 PPO_ARGS=()
 [ -z "$PPO_MODEL" ] || PPO_ARGS=(--ppo-model "$PPO_MODEL")
+TELEMACHUS_MODEL="${TELEMACHUS_MODEL:-}"   # the second agent's best_model.zip
+[ -z "$TELEMACHUS_MODEL" ] || PPO_ARGS+=(--telemachus-model "$TELEMACHUS_MODEL")
 K="${SLURM_ARRAY_TASK_ID:?submit with --array}"
 
 for R in $(seq $((4 * K - 3)) $((4 * K))); do
