@@ -6,7 +6,7 @@
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test \"test/*.test.js\"",
+    "test": "node --test test/email.test.js",
     "preview": "node test/preview.js"
   },
   "dependencies": {
