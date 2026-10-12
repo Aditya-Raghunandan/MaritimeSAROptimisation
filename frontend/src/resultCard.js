@@ -139,7 +139,7 @@ export function drawResultCard(canvas, window, flights, windowS = 2700) {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = f.colour;
-    ctx.globalAlpha = 0.35;
+    ctx.globalAlpha = 0.22;
     ctx.lineWidth = Math.max(3, 185.2 / metresPerPx);
     ctx.beginPath();
     pts.forEach(([a, b], i) => (i ? ctx.lineTo(a, b) : ctx.moveTo(a, b)));

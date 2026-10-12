@@ -203,7 +203,7 @@ test.describe('the open-day game', () => {
     await expect(page.locator('#attract')).toHaveClass(/on/);
     await expectFits(page);
 
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.fill('#name', 'E2E');
     await expectFits(page);
@@ -233,6 +233,49 @@ test.describe('the open-day game', () => {
     expect(errors).toEqual([]);
   });
 
+  test('three missions, then the real search: each one plays, and each fits the laptop', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=20');
+    await page.click('#startBtn');
+    await expect(page.locator('#tut')).toHaveClass(/on/);
+    await expect(page.locator('#tutTitle')).toHaveText('Go with the flow');
+    await expect(page.locator('#tutResult')).toContainText('2 hours', { timeout: 15_000 });
+    await expectFits(page);
+    await page.click('text=Fly the helicopter');
+    await expect(page.locator('#tutTitle')).toHaveText('Catch the drifting buoy');
+    await expect(page.locator('#tutMap .scene-heli')).toBeVisible();
+    await page.click('#tutSkip');
+    await expect(page.locator('#tutTitle')).toHaveText('Read the sea between the dots');
+    await expect(page.locator('#tutText')).toContainText('Click on the map', { timeout: 15_000 });
+    await page.mouse.click(700, 420);
+    await expect(page.locator('#tutResult')).toContainText('off', { timeout: 15_000 });
+    await expectFits(page);
+    await page.click('text=Mission 3');
+    await expect(page.locator('#tutTitle')).toHaveText('10,000 guesses');
+    await page.locator('#tutSigma').fill('66');
+    await page.click('text=Release the drifters');
+    await expect(page.locator('#tutResult')).toContainText('Just right', { timeout: 15_000 });
+    await expectFits(page);
+    await page.click('text=Now the real search');
+    await expect(page.locator('#pick')).toHaveClass(/on/);
+    expect(errors).toEqual([]);
+  });
+
+  test('the video plays on demand and a touch brings the start screen back', async ({ page }) => {
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=20');
+    await page.click('#demoBtn');
+    await expect(page.locator('#demo')).toHaveClass(/on/);
+    await expect(page.locator('header')).toBeHidden();
+    await page.mouse.move(300, 300);
+    await page.mouse.move(320, 330);
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    expect(errors.filter((e) => !/media|video|webm|mp4/i.test(e))).toEqual([]);
+  });
+
   test('emails the result: the numbers, Telemachus by name and a picture of the flights', async ({ page }) => {
     test.setTimeout(60_000);
     const errors = collectErrors(page);
@@ -243,7 +286,7 @@ test.describe('the open-day game', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
     });
     await page.goto('game.html?speed=20');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.fill('#name', 'Mail');
     await page.click('#goBtn');
@@ -274,7 +317,7 @@ test.describe('the open-day game', () => {
     const errors = collectErrors(page);
     await serveFixture(page, { agent: true });
     await page.goto('game.html?speed=20');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.click('#goBtn');
     await expect(page.locator('#fly')).toHaveClass(/on/);
@@ -296,7 +339,7 @@ test.describe('the open-day game', () => {
     const errors = collectErrors(page);
     await serveFixture(page);
     await page.goto('game.html?speed=4');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.click('#goBtn');
     await expect(page.locator('#fly')).toHaveClass(/on/);
@@ -324,7 +367,7 @@ test.describe('the open-day game', () => {
     const errors = collectErrors(page);
     await serveFixture(page, { hide: '/scenarios/v2/' });
     await page.goto('game.html?speed=20');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.click('#goBtn');
     await expect(page.locator('#fly')).toHaveClass(/on/);
@@ -341,7 +384,7 @@ test.describe('the open-day game', () => {
     const errors = collectErrors(page);
     await serveFixture(page);
     await page.goto('game.html');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.click('[data-mode=currents]');
     await page.click('#goBtn');

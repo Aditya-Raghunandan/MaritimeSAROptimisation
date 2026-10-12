@@ -44,6 +44,7 @@ import { M_PER_DEG_LAT } from './geo.js';
 import { SEARCH_SPEED_MS, TURN_RADIUS_M, TURN_RATE_DEG_S } from './platform.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 import { esriTiles } from './tiles.js';
+import { Tutorial } from './tutorial.js';
 
 // The drift model the game flies over: the newest a scenario has (rvc, sized by the current,
 // D033, once published; rv until then). Chosen per scenario in fly().
@@ -68,6 +69,10 @@ const AI_LABEL = { ppo: 'Telemachus (AI)', greedy: 'The AI (greedy)' };
 // The mailer (mailer/ in this repo): a Vercel function for the public site, or a laptop at the
 // stand. Unset, the game offers no email.
 const MAILER_URL = String(import.meta.env.VITE_MAILER_URL ?? '');
+// The open-day video plays when nobody has touched the stand for a while (Aditya, 12 Oct):
+// on these screens, after this long. Never in the middle of a flight or a replay.
+const IDLE_MS = { attract: 30_000, pick: 45_000, results: 45_000, tut: 60_000 };
+const DEMO_VIDEO = String(import.meta.env.VITE_DEMO_VIDEO ?? `${SHOWCASE_ROOT}/openday.mp4`);
 const MODES = { map: 'with the probability map', currents: 'with currents only' };
 const $ = (id) => document.getElementById(id);
 
@@ -180,7 +185,11 @@ function newMap(id, options = {}) {
 }
 
 function show(id) {
+  if (game.screen === 'tut' && id !== 'tut') stopTutorial();
+  if (game.screen === 'demo' && id !== 'demo') $('demoVideo').pause();
+  game.screen = id;
   for (const s of document.querySelectorAll('.screen')) s.classList.toggle('on', s.id === id);
+  document.body.classList.toggle('kiosk', id === 'demo');
 }
 
 function clock(s) {
@@ -204,15 +213,66 @@ function drawBoards() {
 
 function attract() {
   drawBoards();
-  // The two 3D loops (scripts/render_showcase.py), one after the other.
-  const video = $('showcase');
-  const loops = ['mountain', 'cube'].map((n) => `${SHOWCASE_ROOT}/${n}.webm`);
-  let i = 0;
-  video.loop = false;
-  video.onended = () => { i = (i + 1) % loops.length; video.src = loops[i]; video.play().catch(() => {}); };
-  video.onerror = () => { video.style.visibility = 'hidden'; };
-  video.src = loops[0];
+  $('attract').style.backgroundImage = `url(${import.meta.env.BASE_URL}img/hero.jpg)`;
   show('attract');
+}
+
+/* ---------------------------------------------------------------- the video, when idle */
+
+/**
+ * The open-day video on a loop, full screen. If it cannot be loaded (offline, or not
+ * published yet) the two 3D loops (scripts/render_showcase.py) play instead.
+ */
+function demo() {
+  show('demo');
+  const video = $('demoVideo');
+  if (!video.dataset.ready) {
+    video.dataset.ready = '1';
+    const loops = ['mountain', 'cube'].map((n) => `${SHOWCASE_ROOT}/${n}.webm`);
+    let i = 0;
+    video.loop = true;
+    video.onerror = () => {
+      video.loop = false;
+      video.onerror = null;
+      video.onended = () => { i = (i + 1) % loops.length; video.src = loops[i]; video.play().catch(() => {}); };
+      video.src = loops[0];
+      video.play().catch(() => {});
+    };
+    video.src = DEMO_VIDEO;
+  }
+  video.play().catch(() => {});
+}
+
+let lastInput = performance.now();
+function touched() {
+  lastInput = performance.now();
+  if (game.screen === 'demo') attract();
+}
+
+function watchIdle() {
+  for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']) {
+    window.addEventListener(ev, touched, { passive: true });
+  }
+  setInterval(() => {
+    const limit = IDLE_MS[game.screen];
+    if (limit && performance.now() - lastInput > limit) demo();
+  }, 1000);
+}
+
+/* ---------------------------------------------------------------- the three missions */
+
+let tutorial = null;
+
+function stopTutorial() {
+  tutorial?.stop();
+  tutorial = null;
+}
+
+function missions() {
+  show('tut');
+  stopTutorial();
+  tutorial = new Tutorial({ speedUp: SPEED_UP, onDone: () => pick() });
+  tutorial.start();
 }
 
 /* ---------------------------------------------------------------- pick */
@@ -600,7 +660,11 @@ async function main() {
     $('status').textContent = `the scenario files are not reachable: ${err.message}`;
     return;
   }
-  $('startBtn').addEventListener('click', pick);
+  $('startBtn').addEventListener('click', missions);
+  $('searchBtn').addEventListener('click', pick);
+  $('demoBtn').addEventListener('click', (e) => { e.stopPropagation(); demo(); lastInput = performance.now(); });
+  $('tutSkip').addEventListener('click', () => tutorial?.skip());
+  $('tutSkipAll').addEventListener('click', () => pick());
   $('surprise').addEventListener('click', () => {
     const all = game.index.scenarios;
     choose(all[Math.floor(Math.random() * all.length)]);
@@ -634,6 +698,7 @@ async function main() {
     const d = keyDirection(e.code);
     if (d) game.held.delete(d);
   });
+  watchIdle();
   attract();
 }
 
