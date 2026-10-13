@@ -36,7 +36,7 @@ export SAR_DATA="$DATA"
 export SAR_COMMIT="$(git rev-parse HEAD)$(git -c core.checkStat=minimal diff --quiet HEAD -- || echo -dirty)"
 
 echo "== 1/3 rows and windows -> $WINDOWS"
-[ -f "$WINDOWS/rows_train.csv" ] || nice PYTHONPATH=src "$BENCH_PY" scripts/truth_windows.py select \
+[ -f "$WINDOWS/rows_train.csv" ] || PYTHONPATH=src nice "$BENCH_PY" scripts/truth_windows.py select \
     --csv "$DATA/derived/scenarios/bench_dev_48h.csv" --out "$WINDOWS"
 W=$(env OUT="$WINDOWS" TASKS=12 SAR_PYTHON="$BENCH_PY" sbatch --parsable --array=1-12 scripts/truth_windows.sbatch)
 echo "   windows $W"
