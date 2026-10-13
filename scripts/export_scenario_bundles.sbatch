@@ -30,12 +30,14 @@ PPO_ARGS=()
 [ -z "$PPO_MODEL" ] || PPO_ARGS=(--ppo-model "$PPO_MODEL")
 TELEMACHUS_MODEL="${TELEMACHUS_MODEL:-}"   # the second agent's best_model.zip
 [ -z "$TELEMACHUS_MODEL" ] || PPO_ARGS+=(--telemachus-model "$TELEMACHUS_MODEL")
+NOISE="${NOISE:-rvc rv}"     # the drift models' random terms to export
+ARRIVALS="${ARRIVALS:-1 2 3}"   # hours from the call to arriving on scene, such as 0.25 0.5 0.75 1 2 3
 K="${SLURM_ARRAY_TASK_ID:?submit with --array}"
 
 for R in $(seq $((4 * K - 3)) $((4 * K))); do
     [ "$R" -le "$LAST" ] || continue
     PYTHONPATH=src "$PY" scripts/export_scenario_bundles.py export --csv "$CSV" \
-        --forcing-dir "$DATA" --rows "$R" "${PPO_ARGS[@]}" --out "$OUT" &
+        --forcing-dir "$DATA" --rows "$R" --noise $NOISE --arrival-h $ARRIVALS "${PPO_ARGS[@]}" \n        --out "$OUT" &
 done
 wait
 echo "task $K done: $OUT"
