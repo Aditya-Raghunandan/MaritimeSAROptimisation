@@ -75,6 +75,23 @@ def test_a_few_particles_flatter_the_ceiling_and_the_split_does_not():
     assert ceiling.any_shape_split(east, north, w) < truth
 
 
+def test_a_teleporting_helicopter_on_a_still_cloud_reaches_the_frozen_ceiling():
+    east, north, w = _cloud(2000, 2000)
+    ok = np.ones(w.size, dtype=bool)
+    clouds = [(east, north, w, ok)] * (ceiling.STEPS + 1)
+    frozen = ceiling.any_shape(east, north, w)
+    assert ceiling.teleport(clouds) == pytest.approx(frozen, abs=0.005)
+    assert ceiling.teleport(clouds, split=True) == pytest.approx(frozen, abs=0.01)
+
+
+def test_a_teleporting_helicopter_loses_to_a_cloud_that_spreads():
+    rng = np.random.default_rng(2)
+    a, b = rng.normal(size=(2, 50_000))
+    w, ok = np.full(a.size, 1 / a.size), np.ones(a.size, dtype=bool)
+    clouds = [(a * s, b * s, w, ok) for s in np.linspace(1500, 3000, ceiling.STEPS + 1)]
+    assert ceiling.teleport(clouds) < ceiling.any_shape(*clouds[0][:3]) - 0.05
+
+
 def test_area90_matches_the_benchmarks_rule_on_one_cell():
     east, north, w = np.array([10.0, 20.0, 600.0]), np.array([10.0, 30.0, 600.0]), np.array([0.5, 0.45, 0.05])
     assert ceiling.area_km2(east, north, w) == pytest.approx(0.0625)

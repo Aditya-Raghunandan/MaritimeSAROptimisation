@@ -29,6 +29,13 @@ velocity) and spreads, so its fullest 23.15 km² changes. Any shape is taken at 
 `any_max` is the cloud at its most concentrated, the ceiling reported; `any_mid` is minute
 22. A searcher could in principle beat a frozen ceiling by catching particles that move
 into its strip, so this is an estimate, and the summary counts the flights that exceed it.
+On the 55 the cloud thins fast inside the window (at 1 h the fullest 23.15 km² holds 0.96
+at arrival, 0.79 at minute 45), and no helicopter paints everything at arrival, so
+`any_max` is generous. Hence a fourth number:
+
+  * TELEPORT. A helicopter that may jump anywhere: each minute it paints the fullest 1/45
+    of the budget of what is still unfound, on that minute's frame (`teleport`). No path,
+    no turns, but the clock is real. The fair ceiling to read a searcher against.
 
 LUCK IN THE CELLS. The fullest cells of 10^4 particles are partly full by chance, which
 flatters the ceiling. `any_max_split` chooses the cells with half the particles and counts
@@ -127,6 +134,38 @@ def square(east, north, weight, bearing_deg: float, side_m: float = float(np.sqr
     return float(np.sum(weight[inside]))
 
 
+def teleport(clouds, budget_m2: float = BUDGET_M2, cell_m: float = CELL_M,
+             split: bool = False) -> float:
+    """A helicopter that may jump anywhere: each minute it paints the fullest 1/STEPS of the
+    budget of what is still unfound, on that minute's frame. `clouds` is every frame's
+    (east, north, weight, ok) over all particles. With `split`, the cells are chosen on one
+    half of the particles and the find counted on the other, both ways round, averaged."""
+    # Whole cells only, the budget's fraction carried to the next minute: a cell taken in part
+    # and chosen again would be charged a whole cell's area for what is left of it.
+    n = budget_m2 / STEPS / (cell_m * cell_m)
+    weight = clouds[0][2]
+    halves = np.arange(weight.size) % 2 == 0
+    rounds = ((halves, ~halves), (~halves, halves)) if split else ((None, None),)
+    out = []
+    for choose, count in rounds:
+        left = weight.copy()
+        found = 0.0
+        for minute, (east, north, _, ok) in enumerate(clouds[:STEPS]):
+            k = int((minute + 1) * n) - int(minute * n)
+            inverse = np.full(weight.size, -1)
+            inverse[ok] = _cells(east[ok], north[ok], cell_m)
+            seen = inverse >= 0
+            pick = seen if choose is None else seen & choose
+            mass = np.bincount(inverse[pick], weights=left[pick], minlength=inverse.max() + 1)
+            chosen = np.zeros(mass.size, dtype=bool)
+            chosen[np.argsort(-mass, kind="stable")[:k]] = True
+            taken = np.where(seen & chosen[np.maximum(inverse, 0)], left, 0.0)
+            found += np.sum(taken if count is None else taken[count])
+            left -= taken
+        out.append(found if count is None else found * np.sum(weight) / np.sum(weight[count]))
+    return float(np.mean(out))
+
+
 def best_rectangle(east, north, weight, budget_m2: float = BUDGET_M2) -> dict:
     """The `budget_m2` rectangle, any centre, angle and length over width, holding the most."""
     best = {"mass": -1.0}
@@ -163,18 +202,19 @@ def best_rectangle(east, north, weight, budget_m2: float = BUDGET_M2) -> dict:
 # -- one window ---------------------------------------------------------------------------
 
 def frames(setup):
-    """Every frame's particles as (east, north) metres from the marker, and their weights."""
+    """Every frame's particles as (east, north) metres from the marker, their weights, and
+    which are usable (finite, with weight)."""
     marker_lat, marker_lon = setup.marker.at(np.arange(STEPS + 1) * STEP_S)
     weight = np.asarray(setup.window.weight, dtype=float)
     for k in range(STEPS + 1):
         east, north = relative_m(setup.window.lat[k], setup.window.lon[k],
                                  marker_lat[k], marker_lon[k])
-        ok = np.isfinite(east) & np.isfinite(north) & (weight > 0)
-        yield east[ok], north[ok], weight[ok]
+        yield east, north, weight, np.isfinite(east) & np.isfinite(north) & (weight > 0)
 
 
 def window_ceiling(setup, parallel_bearing_deg: float) -> dict:
-    clouds = list(frames(setup))
+    full = list(frames(setup))
+    clouds = [(e[ok], n[ok], w[ok]) for e, n, w, ok in full]
     by_frame = [any_shape(*f) for f in clouds]
     k = int(np.argmax(by_frame))
     rect_max, rect_mid = best_rectangle(*clouds[k]), best_rectangle(*clouds[MID])
@@ -184,11 +224,13 @@ def window_ceiling(setup, parallel_bearing_deg: float) -> dict:
             "any_mid": by_frame[MID], "any_end": by_frame[-1],
             "any_max_split": any_shape_split(*clouds[k]),
             "any_mid_split": any_shape_split(*clouds[MID]),
+            "teleport": teleport(full), "teleport_split": teleport(full, split=True),
             "rect_max": rect_max["mass"], "rect_mid": rect_mid["mass"],
             "rect_max_shape": rect_max, "rect_mid_shape": rect_mid,
             "parallel_bearing_deg": parallel_bearing_deg,
             "square_start": square(*clouds[0], parallel_bearing_deg),
             "square_mid": square(*clouds[MID], parallel_bearing_deg),
+            "square_end": square(*clouds[-1], parallel_bearing_deg),
             "square_max": square(*clouds[k], parallel_bearing_deg)}
 
 
@@ -248,11 +290,16 @@ def summary(folder: Path, flights_path: Path) -> pd.DataFrame:
                 "ceiling_split": _group_mean(d, "any_max_split"),
                 "rect_share": _group_mean(d.assign(r=d["rect_max"] / d["any_max"]), "r"),
                 "square_share": _group_mean(d.assign(r=d["square_max"] / d["any_max"]), "r")}
+        line["teleport"] = _group_mean(d, "teleport")
+        line["teleport_split"] = _group_mean(d, "teleport_split")
         for s in searchers:
             line[f"{s}_pos"] = _group_mean(d, s)
             line[f"{s}_share"] = _group_mean(d.assign(r=d[s] / d["any_max"]), "r")
             line[f"{s}_share_split"] = _group_mean(d.assign(r=d[s] / d["any_max_split"]), "r")
+            line[f"{s}_of_teleport"] = _group_mean(d.assign(r=d[s] / d["teleport"]), "r")
+            line[f"{s}_of_teleport_split"] = _group_mean(d.assign(r=d[s] / d["teleport_split"]), "r")
             line[f"{s}_over_ceiling"] = int(np.sum(d[s] > d["any_max"] + 1e-12))
+            line[f"{s}_over_teleport"] = int(np.sum(d[s] > d["teleport"] + 1e-12))
         table.append(line)
     out = pd.DataFrame(table)
     df.drop(columns=["any_by_frame"]).to_csv(folder / "windows.csv", index=False)
