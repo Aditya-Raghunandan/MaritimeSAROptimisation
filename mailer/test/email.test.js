@@ -13,7 +13,7 @@ export const sample = (over = {}) => ({
   you: { pos: 0.52, found: true, foundS: 1390 },
   cg: { pos: 0.49, found: false, missedKm: 1.2 },
   ai: { pos: 0.44, found: false, missedKm: 0.6, name: 'Telemachus' },
-  bench: [{ label: 'Parallel Track', pos: 0.493 }, { label: 'Telemachus (trained AI)', pos: 0.438 }],
+  bench: [{ label: 'Parallel Track', pos: 0.493 }, { label: 'Telemachus (ML model)', pos: 0.438 }],
   image: PNG,
   ...over,
 });
@@ -31,7 +31,7 @@ test('validate: beat flags come from the numbers, not from the client', () => {
   assert.equal(r.beatAi, true);
   assert.equal(r.beatCg, true);
   assert.equal(r.ai.name, 'Telemachus');
-  assert.equal(validate(sample({ ai: { pos: 0.6, name: 'Skynet' } })).ai.name, 'the AI');
+  assert.equal(validate(sample({ ai: { pos: 0.6, name: 'Skynet' } })).ai.name, 'the greedy search');
 });
 
 test('validate refuses a bad address, a share over 1, and a non-image', () => {

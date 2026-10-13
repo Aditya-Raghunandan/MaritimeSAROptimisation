@@ -4,8 +4,8 @@
  * A visitor picks a real buoy (one of the 55 scenarios), chooses to see the probability map
  * or only the currents, and flies one helicopter for the 45-minute window, the clock
  * compressed so the search takes about 90 seconds. Then the same sea is searched again,
- * side by side, by the Coast Guard's Expanding Square and by the AI, and the real buoy is
- * revealed. The AI is Telemachus, Suné's trained agent, where the published files carry its
+ * side by side, by the Coast Guard's Expanding Square and by our ML model, and the real buoy is
+ * revealed. The model is Telemachus, Suné's trained agent, where the published files carry its
  * flight (v3), and the greedy search where they do not; the results say which one it was.
  *
  * FLYING IT. The helicopter turns as the real one does, at most 7 degrees a second (D032),
@@ -55,17 +55,18 @@ const SPEED_UP = Math.max(1, Number(new URLSearchParams(window.location.search).
 const FLY_SPEED = 30 * SPEED_UP;          // 45 minutes in 90 seconds
 const REVEAL_SPEED = 90 * SPEED_UP;       // the side-by-side replay in 30 seconds
 const CG = 'expanding-square';
-// What the results say the AI was, by who flew it (aiOf).
+// What the results say the computer's searcher was, by who flew it (aiOf).
 const AI_WORDS = {
-  ppo: '<b>Telemachus</b> is our trained agent: a neural network that learned where to fly by '
-    + 'searching five years of simulated drift, minute by minute, and being paid for every '
-    + 'possible position it found, more for finding it sooner.',
-  greedy: '<b>The AI</b> here is a greedy search that always flies to where the most probability '
-    + 'is left; the trained agent takes its place once its flights are published.',
+  ppo: '<b>Telemachus</b> is our machine-learning model: a small neural network trained by '
+    + 'reinforcement learning (PPO). It learned where to fly by searching five years of simulated '
+    + 'drift, minute by minute, rewarded for every possible position it found, more for finding it sooner.',
+  greedy: '<b>The computer</b> here flies a greedy search, with no learning: always to where the most '
+    + 'probability is left. The trained model takes its place once its flights are published.',
 };
-/** What the AI is called, by who flew it: Telemachus is the trained agent (named 12 Oct). */
-const AI_NAME = { ppo: 'Telemachus', greedy: 'the AI' };
-const AI_LABEL = { ppo: 'Telemachus (AI)', greedy: 'The AI (greedy)' };
+/** What the computer's searcher is called, by who flew it: Telemachus is the trained model (named
+ * 12 Oct). Machine learning, not "AI" (Suné, 13 Oct); greedy does not learn, so it is not called ML. */
+const AI_NAME = { ppo: 'Telemachus', greedy: 'the greedy search' };
+const AI_LABEL = { ppo: 'Telemachus (ML model)', greedy: 'Greedy search (no learning)' };
 // The mailer (mailer/ in this repo): a Vercel function for the public site, or a laptop at the
 // stand. Unset, the game offers no email.
 const MAILER_URL = String(import.meta.env.VITE_MAILER_URL ?? '');
@@ -607,7 +608,7 @@ async function sendEmail(e) {
     areaKm2: game.result.area,
     you: forEmail(you),
     cg: forEmail(cg),
-    ai: { ...forEmail(ai), name: AI_NAME[aiOf(game.window)] === 'Telemachus' ? 'Telemachus' : 'the AI' },
+    ai: { ...forEmail(ai), name: AI_NAME[aiOf(game.window)] === 'Telemachus' ? 'Telemachus' : 'the greedy search' },
     bench: (game.benchRows ?? []).slice(0, 4).map((r) => ({ label: SEARCHER_INFO[r.searcher]?.label ?? r.searcher, pos: r.pos })),
   };
   try {

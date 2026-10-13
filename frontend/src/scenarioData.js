@@ -37,7 +37,7 @@ export const SEARCHER_INFO = {
   parallel: { label: 'Parallel Track', kind: 'Coast Guard pattern', colour: '#e8b23d' },
   trackline: { label: 'Trackline', kind: 'Coast Guard pattern', colour: '#e8735a' },
   greedy: { label: 'Greedy', kind: 'reads the map', colour: '#04c951' },
-  ppo: { label: 'Telemachus (trained AI)', kind: 'learned from five years of drift', colour: '#ff6fb5' },
+  ppo: { label: 'Telemachus (ML model)', kind: 'reinforcement learning on five years of drift', colour: '#ff6fb5' },
   random: { label: 'Random', kind: 'the floor', colour: '#8a8a80' },
 };
 
@@ -47,7 +47,7 @@ export function searchersOf(index) {
   return Object.keys(SEARCHER_INFO).filter((k) => have.includes(k));
 }
 
-/** Who plays "the AI": the trained agent where a window has its flight, else greedy. */
+/** Who plays the computer's side: the trained model where a window has its flight, else greedy. */
 export function aiOf(window) {
   return window?.flights?.ppo ? 'ppo' : 'greedy';
 }

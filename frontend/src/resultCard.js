@@ -1,6 +1,6 @@
 /**
  * resultCard.js -- the picture a player takes home: the cloud the search started on, and the
- * three flights over it (you, the Coast Guard's pattern, the AI), with the real person's drift
+ * three flights over it (you, the Coast Guard's pattern, the ML model), with the real person's drift
  * drawn where it really went. North up, on true metres about where the search started.
  *
  * The email (mailer/) carries it inline; nothing here sends anything. The geometry is kept

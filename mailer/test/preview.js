@@ -1,5 +1,5 @@
 /**
- * preview.js -- writes the four versions of the email (beat both, beat the AI only, beat the
+ * preview.js -- writes the four versions of the email (beat both, beat the ML model only, beat the
  * Coast Guard only, beat neither) as HTML files to look at in a browser, with an optional
  * picture: node test/preview.js [out-dir] [image.png|jpg]
  */
@@ -26,7 +26,7 @@ for (const [name, p] of Object.entries(cases)) {
     cg: { pos: p.cg, found: false, missedKm: 1.2 },
     ai: { pos: p.ai, found: true, foundS: 605, name: 'Telemachus' },
     bench: [{ label: 'Parallel Track', pos: 0.493 }, { label: 'Expanding Square', pos: 0.486 },
-      { label: 'Telemachus (trained AI)', pos: 0.438 }],
+      { label: 'Telemachus (ML model)', pos: 0.438 }],
   });
   const { subject, html } = buildResultEmail(r, {
     gameUrl: 'https://aditya-raghunandan.github.io/MaritimeSAROptimisation/game.html',

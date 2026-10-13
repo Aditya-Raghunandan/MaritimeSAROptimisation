@@ -317,7 +317,7 @@ test.describe('the open-day game', () => {
     expect(errors).toEqual([]);
   });
 
-  test('the AI is the trained agent where the files carry its flight', async ({ page }) => {
+  test('the ML model is the trained agent where the files carry its flight', async ({ page }) => {
     test.setTimeout(60_000);
     const errors = collectErrors(page);
     await serveFixture(page, { agent: true });
@@ -332,7 +332,7 @@ test.describe('the open-day game', () => {
     await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
     const agent = await fixtureFlight('rvc', 'sector');
     await expect(page.locator('#scoreTable tr').last()).toContainText(`${(100 * agent.pos).toFixed(1)} %`);
-    await expect(page.locator('#aiWords')).toContainText('trained agent');
+    await expect(page.locator('#aiWords')).toContainText('machine-learning model');
     await expect(page.locator('#benchTable')).toContainText('Telemachus');
     await expect(page.locator('#benchTable tr')).toHaveCount(8);
     await expectFits(page);

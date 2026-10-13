@@ -54,7 +54,7 @@ export function validate(body) {
   if (!num(body.points, 0, 100_000) || !num(body.areaKm2, 0.01, 100_000)) throw new Error('points and areaKm2 are required');
   const you = searcher(body.you, 'you');
   const cg = searcher(body.cg, 'cg');
-  const ai = { ...searcher(body.ai, 'ai'), name: body.ai?.name === 'Telemachus' ? 'Telemachus' : 'the AI' };
+  const ai = { ...searcher(body.ai, 'ai'), name: body.ai?.name === 'Telemachus' ? 'Telemachus' : 'the greedy search' };
   let image = null;
   if (body.image != null) {
     const m = typeof body.image === 'string' && body.image.length <= MAX_IMAGE_CHARS && IMAGE_RE.exec(body.image);

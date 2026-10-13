@@ -15,7 +15,7 @@
  * and on them the Square scores 871-1,066 on every buoy (the raw POS score ran 139-678).
  * Finding the real buoy is shown, not scored: one buoy is one coin toss.
  *
- * WINNING (sweets). Beat both the Coast Guard pattern and the AI on POS, over the same
+ * WINNING (sweets). Beat both the Coast Guard pattern and the ML model on POS, over the same
  * cloud. One constant, so it can be changed on the day.
  */
 
