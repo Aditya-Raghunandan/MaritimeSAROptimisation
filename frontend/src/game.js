@@ -37,7 +37,10 @@ import { drawResultCard } from './resultCard.js';
 import { Scene } from './scene.js';
 import {
   SEARCHER_INFO, SHOWCASE_ROOT, aiOf, bestNoise, display, loadBenchmark, loadField, loadIndex,
+  arrivalLabel,
+  arrivalsOf,
   loadWindow,
+  ML_UNTIL_H,
 } from './scenarioData.js';
 import { bearing } from './kinematics.js';
 import { M_PER_DEG_LAT } from './geo.js';
@@ -48,7 +51,9 @@ import { Tutorial } from './tutorial.js';
 
 // The drift model the game flies over: the newest a scenario has (rvc, sized by the current,
 // D033, once published; rv until then). Chosen per scenario in fly().
-const ARRIVAL_H = 2;
+// How long after the call the helicopter arrives, chosen on the pick screen from what the
+// scenario's files carry. 30 min unless the player picks another (v4 has 15 min to 3 h).
+const DEFAULT_ARRIVAL_H = 0.5;
 const WINDOW_S = 45 * 60;
 // ?speed=10 plays everything ten times faster: for rehearsing the stand and for the tests.
 const SPEED_UP = Math.max(1, Number(new URLSearchParams(window.location.search).get('speed')) || 1);
@@ -62,7 +67,17 @@ const AI_WORDS = {
     + 'drift, minute by minute, rewarded for every possible position it found, more for finding it sooner.',
   greedy: '<b>The computer</b> here flies a greedy search, with no learning: always to where the most '
     + 'probability is left. The trained model takes its place once its flights are published.',
+  // The trained model's flight is there, but the helicopter arrives too late for it (aiOf).
+  late: '<b>The computer</b> here flies a greedy search, with no learning: always to where the most '
+    + 'probability is left. When the helicopter arrives within 45 minutes, our machine-learning '
+    + 'model, Telemachus, flies instead; from an hour on, greedy finds more on our test buoys.',
 };
+
+/** The words under the results for whoever flew the computer's side of this window. */
+function aiWords(window, hours) {
+  const ai = aiOf(window, hours);
+  return AI_WORDS[ai === 'greedy' && window?.flights?.ppo ? 'late' : ai];
+}
 /** What the computer's searcher is called, by who flew it: Telemachus is the trained model (named
  * 12 Oct). Machine learning, not "AI" (Suné, 13 Oct); greedy does not learn, so it is not called ML. */
 const AI_NAME = { ppo: 'Telemachus', greedy: 'the greedy search' };
@@ -80,7 +95,7 @@ const $ = (id) => document.getElementById(id);
 const game = {
   index: null, scenario: null, mode: 'map', name: 'Player', window: null, field: null,
   player: null, held: new Set(), t: 0, last: 0, running: false, result: null,
-  input: 'keys', pointer: null, pad: null,
+  input: 'keys', pointer: null, pad: null, hours: DEFAULT_ARRIVAL_H,
 };
 
 // The real helicopter's numbers (D032), in words for a visitor: why it will not simply go
@@ -304,9 +319,30 @@ function pick() {
 function choose(s) {
   game.scenario = s;
   const words = { jet: 'in the Gulf Stream, the fastest water', moderate: 'in moderate current', quiet: 'in quiet water' };
-  $('pickInfo').textContent = `${s.start_utc.replace('T', ' ')} UTC, ${words[s.water] ?? ''}. `
-    + 'The helicopter gets there 2 hours after the call.';
+  $('pickInfo').textContent = `${s.start_utc.replace('T', ' ')} UTC, ${words[s.water] ?? ''}.`;
+  drawArrivals();
   $('goBtn').disabled = false;
+}
+
+/** The arrival buttons for the chosen buoy: only the times its files carry. */
+function drawArrivals() {
+  const have = arrivalsOf(game.scenario, bestNoise(game.scenario));
+  if (!have.includes(game.hours)) {
+    game.hours = have.includes(DEFAULT_ARRIVAL_H) ? DEFAULT_ARRIVAL_H
+      : have.reduce((a, h) => (Math.abs(h - DEFAULT_ARRIVAL_H) < Math.abs(a - DEFAULT_ARRIVAL_H) ? h : a), have[0] ?? 2);
+  }
+  const box = $('arrivalSeg');
+  box.innerHTML = '';
+  for (const h of have) {
+    const b = document.createElement('button');
+    b.textContent = arrivalLabel(h);
+    b.setAttribute('aria-pressed', String(h === game.hours));
+    b.addEventListener('click', () => { game.hours = h; drawArrivals(); });
+    box.append(b);
+  }
+  $('arrivalNote').textContent = game.hours <= ML_UNTIL_H
+    ? `Arriving ${arrivalLabel(game.hours)} after the call: the cloud is still small, and you are up against Telemachus, our machine-learning model.`
+    : `Arriving ${arrivalLabel(game.hours)} after the call: the cloud has spread, and you are up against the greedy search.`;
 }
 
 /* ---------------------------------------------------------------- fly */
@@ -322,8 +358,8 @@ async function fly() {
   $('goBtn').disabled = true;            // one flight per click, however slow the download
   try {
     game.noise = bestNoise(game.scenario);
-    game.window = await loadWindow(game.scenario.scenario, game.noise, ARRIVAL_H);
-    game.field = await loadField(game.scenario.scenario, ARRIVAL_H, game.index);
+    game.window = await loadWindow(game.scenario.scenario, game.noise, game.hours);
+    game.field = await loadField(game.scenario.scenario, game.hours, game.index);
   } catch (err) {
     $('status').textContent = `could not load this buoy: ${err.message}`;
     $('goBtn').disabled = false;
@@ -441,7 +477,7 @@ function reveal() {
   }
   for (const m of panels) m.invalidateSize();
   if (game.scenes) for (const s of game.scenes) s.destroy();
-  const ai = aiOf(game.window);
+  const ai = aiOf(game.window, game.hours);
   $('aiTag').textContent = AI_LABEL[ai];
   const flights = [
     rewind(game.player),
@@ -455,7 +491,7 @@ function reveal() {
     return s;
   });
   game.flights = flights;
-  $('revealNote').textContent = `${game.scenario.water} water, the helicopter arriving 2 hours after the call.`;
+  $('revealNote').textContent = `${game.scenario.water} water, the helicopter arriving ${arrivalLabel(game.hours)} after the call.`;
   game.t = 0;
   game.last = performance.now();
   game.revealing = true;
@@ -522,7 +558,7 @@ async function results() {
   game.revealing = false;
   for (const f of game.flights) advance(f, WINDOW_S);
   const [you, cg, ai] = game.flights.map((f) => f.metrics());
-  const aiName = AI_NAME[aiOf(game.window)];
+  const aiName = AI_NAME[aiOf(game.window, game.hours)];
   const v = verdict({ pos: you.pos }, [{ name: 'the Coast Guard', pos: cg.pos }, { name: aiName, pos: ai.pos }]);
   const area = arrivalAreaKm2(game.window);
   const points = score(you.pos, area);
@@ -539,12 +575,12 @@ async function results() {
     return `<tr><td>${name}</td><td class="n">${pct(m.pos)}</td><td>${buoy}</td></tr>`;
   };
   $('scoreTable').innerHTML = '<tr><th></th><th>Searched</th><th>The real person</th></tr>'
-    + row(`You (${game.name})`, you) + row('Coast Guard', cg) + row(AI_LABEL[aiOf(game.window)], ai);
+    + row(`You (${game.name})`, you) + row('Coast Guard', cg) + row(AI_LABEL[aiOf(game.window, game.hours)], ai);
   $('pointsWhy').textContent = `This cloud covered ${Math.round(area)} km² when the helicopter arrived. `
     + `On a cloud that big the Coast Guard's pattern searches about ${Math.round(100 * par(area))} % of it on average, `
     + 'and that is worth 1,000 points; you score the same share of 1,000 for what you searched. A bigger '
     + 'cloud is harder, so the same share is worth more on it.';
-  $('aiWords').innerHTML = AI_WORDS[aiOf(game.window)];
+  $('aiWords').innerHTML = aiWords(game.window, game.hours);
 
   if (!game.saved) {
     const entry = {
@@ -584,7 +620,7 @@ function forEmail(m) {
 
 /** The picture of the three flights over the cloud, as a JPEG data URL. */
 function flightPicture() {
-  const ai = aiOf(game.window);
+  const ai = aiOf(game.window, game.hours);
   const flights = [
     { label: `You (${game.name})`, colour: '#ffffff', trail: game.flights[0].trail(WINDOW_S) },
     { label: 'Coast Guard', colour: SEARCHER_INFO[CG].colour, trail: game.flights[1].trail(WINDOW_S) },
@@ -608,7 +644,7 @@ async function sendEmail(e) {
     areaKm2: game.result.area,
     you: forEmail(you),
     cg: forEmail(cg),
-    ai: { ...forEmail(ai), name: AI_NAME[aiOf(game.window)] === 'Telemachus' ? 'Telemachus' : 'the greedy search' },
+    ai: { ...forEmail(ai), name: AI_NAME[aiOf(game.window, game.hours)] === 'Telemachus' ? 'Telemachus' : 'the greedy search' },
     bench: (game.benchRows ?? []).slice(0, 4).map((r) => ({ label: SEARCHER_INFO[r.searcher]?.label ?? r.searcher, pos: r.pos })),
   };
   try {
@@ -631,10 +667,10 @@ async function sendEmail(e) {
 async function benchmark() {
   try {
     const b = await loadBenchmark();
-    const rows = (b.scenarios55 ?? b).filter((r) => r.noise === game.noise && r.arrival_h === ARRIVAL_H)
+    const rows = (b.scenarios55 ?? b).filter((r) => r.noise === game.noise && r.arrival_h === game.hours)
       .sort((x, y) => y.pos - x.pos);
     game.benchRows = rows;
-    $('benchNote').textContent = `Over all ${rows[0]?.n_groups ?? 55} buoys, the helicopter arriving 2 hours after the call:`;
+    $('benchNote').textContent = `Over all ${rows[0]?.n_groups ?? 55} buoys, the helicopter arriving ${arrivalLabel(game.hours)} after the call:`;
     $('benchTable').innerHTML = '<tr><th>Searcher</th><th>Searched, on average</th><th>Found the person</th></tr>'
       + rows.map((r) => `<tr><td>${SEARCHER_INFO[r.searcher]?.label ?? r.searcher}</td>`
         + `<td class="n">${pct(r.pos)}</td><td class="n">${pct(r.found)}</td></tr>`).join('');

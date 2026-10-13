@@ -121,6 +121,9 @@
       .modes button { text-align: left; background: var(--surface-2); border: 2px solid var(--line); border-radius: 10px; padding: 10px 12px; }
       .modes button[aria-pressed=true] { border-color: var(--accent); }
       .modes b { display: block; }
+      .seg { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+      .seg button { background: var(--surface-2); border: 2px solid var(--line); border-radius: 8px; padding: 4px 8px; font-size: 13px; }
+      .seg button[aria-pressed=true] { border-color: var(--accent); }
       input[type=text] { font: inherit; color: var(--ink); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
 
       /* fly */
@@ -239,7 +242,11 @@
             <button data-mode="currents" aria-pressed="false"><b>Currents only (hard)</b><span class="muted">See only how the water flows, like a real pilot.</span></button>
           </div>
         </div>
-        <div><b>3. Your name for the board</b><input type="text" id="name" maxlength="16" placeholder="Player" /></div>
+        <div><b>3. When does the helicopter get there?</b>
+          <div class="seg" id="arrivalSeg"></div>
+          <div class="muted" id="arrivalNote">Sooner is easier: the cloud has had less time to spread.</div>
+        </div>
+        <div><b>4. Your name for the board</b><input type="text" id="name" maxlength="16" placeholder="Player" /></div>
         <button class="big" id="goBtn" disabled>Fly</button>
       </aside>
     </section>

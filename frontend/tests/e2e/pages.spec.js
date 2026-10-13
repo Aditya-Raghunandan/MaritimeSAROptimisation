@@ -25,15 +25,23 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, 'fixtures');
 const LAPTOP = { width: 1366, height: 768 };
 
-/** v2's file as v3 would hold it: the Sector's flight and rows renamed as the agent's. */
+/** v2's file as v3 would hold it: the Sector's flight and rows renamed as the agent's. The 2 h
+ * window is also listed as a 30 min one (served from the same files), so the game's default
+ * arrival, which the trained model flies, has a window (v4 has 15 min to 3 h). */
 function asV3(rel, body) {
   if (!rel.endsWith('.json')) return body;
   const j = JSON.parse(body);
   if (j.scenarios) j.searchers = [...j.searchers, 'ppo'];
+  if (j.scenarios) {
+    j.scenarios = j.scenarios.map((s) => ({
+      ...s, windows: [...s.windows, ...s.windows.filter((w) => w.endsWith('_2h')).map((w) => w.replace('_2h', '_0.5h'))],
+    }));
+  }
   if (j.flights) j.flights.ppo = { ...j.flights.sector, layout: 'e2e: the Sector, as the agent' };
   for (const key of ['scenarios55', 'dev']) {
     if (Array.isArray(j[key])) {
       j[key] = [...j[key], ...j[key].filter((r) => r.searcher === 'sector').map((r) => ({ ...r, searcher: 'ppo' }))];
+      j[key] = [...j[key], ...j[key].filter((r) => r.arrival_h === 2).map((r) => ({ ...r, arrival_h: 0.5 }))];
     }
   }
   return Buffer.from(JSON.stringify(j));
@@ -48,7 +56,7 @@ async function serveFixture(page, { hide = null, agent = false } = {}) {
       return;
     }
     const v3 = /^scenarios[/\\]v3[/\\]/.test(rel);
-    if (v3 && agent) rel = rel.replace(/^scenarios([/\\])v3/, 'scenarios$1v2');
+    if (v3 && agent) rel = rel.replace(/^scenarios([/\\])v3/, 'scenarios$1v2').replace(/_0\.5h\.(json|f32)$/, '_2h.$1');
     try {
       let body = await readFile(join(FIXTURES, rel));
       if (v3 && agent) body = asV3(rel, body);
@@ -279,6 +287,30 @@ test.describe('the open-day game', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#attract')).toHaveClass(/on/);
     expect(errors.filter((e) => !/media|video|webm|mp4/i.test(e))).toEqual([]);
+  });
+
+  test('from an hour on the computer flies greedy, even where the files carry the model\'s flight', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    await page.goto('game.html?speed=20');
+    await page.click('#searchBtn');
+    await page.click('#surprise');
+    await expect(page.locator('#arrivalSeg button[aria-pressed=true]')).toHaveText('30 min');
+    await page.locator('#arrivalSeg button', { hasText: '2 h' }).click();
+    await expect(page.locator('#arrivalNote')).toContainText('greedy');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowRight');
+    await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
+    await page.keyboard.up('ArrowRight');
+    await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
+    const greedy = await fixtureFlight('rvc', 'greedy');
+    await expect(page.locator('#scoreTable tr').last()).toContainText(`${(100 * greedy.pos).toFixed(1)} %`);
+    await expect(page.locator('#aiWords')).toContainText('within 45 minutes');
+    await expect(page.locator('#benchNote')).toContainText('2 h after the call');
+    await expectFits(page);
+    expect(errors).toEqual([]);
   });
 
   test('emails the result: the numbers, Telemachus by name and a picture of the flights', async ({ page }) => {
