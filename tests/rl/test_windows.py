@@ -76,3 +76,21 @@ class TestBuild:
         assert np.array_equal(back.lat, windows.lat)
         assert np.array_equal(back.marker_lon, windows.marker_lon)
         assert back.setup(2).window.times[0] == windows.setup(2).window.times[0]
+
+
+def test_a_real_buoys_start_carries_its_track_through_save_and_load(tmp_path):
+    import pandas as pd
+
+    from sar.rl.windows import build_truth, load, save
+
+    from conftest import LAT, LON, START
+
+    row = pd.Series({"start": START, "lat": LAT, "lon": LON, "seed": 7,
+                     **{f"lat_{h}h": LAT + 0.01 * h for h in range(1, 7)},
+                     **{f"lon_{h}h": LON + 0.01 * h for h in range(1, 7)}})
+    row["lat_3h"] = np.nan                       # a missing fix is left out
+    back = load(save(build_truth(row, FORCING, ARRIVALS_S, 300), tmp_path))
+    target = back.setup(2).target                # the 60 min window
+    assert list(target.t_s) == [-3600.0, 0.0, 3600.0, 10800.0, 14400.0, 18000.0]
+    assert target.lat[1] == pytest.approx(LAT + 0.01)
+    assert back.setup(0).window.lat.shape[0] == 46

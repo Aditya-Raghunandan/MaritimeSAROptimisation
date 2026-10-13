@@ -31,12 +31,18 @@ class SearchEnv(gym.Env):
     `decay` sets how much time left weighs (features.reward): 1 is the first agent's reward,
     0 pays plain POS. The window's end is `terminated`, never `truncated`: the search really
     stops at 45 minutes, so nothing is bootstrapped past it (safe with gamma = 1).
+
+    FINDING THE REAL BUOY (13 Oct, Telemachus 3). `find` > 0 pays that much the minute the
+    helicopter first comes within W/2 of the windows' real buoy (the referee's closest approach),
+    and the search ends there, terminated, as a real one would. `pos_scale` multiplies the
+    probability reward above, so find = 1 with pos_scale = 0 pays only for finding the buoy and
+    an episode's return is 1 or 0. Needs windows that carry a buoy (`windows.build_truth`).
     """
 
     metadata: ClassVar[dict] = {"render_modes": []}
 
     def __init__(self, sources, headings: int, arrivals_min=None, cycle: bool = False,
-                 decay: float = 1.0, halves: int = 0):
+                 decay: float = 1.0, halves: int = 0, find: float = 0.0, pos_scale: float = 1.0):
         self.items = window_items(sources, arrivals_min)
         if not self.items:
             raise ValueError("SearchEnv needs at least one window")
@@ -47,8 +53,11 @@ class SearchEnv(gym.Env):
         if isinstance(halves, bool) or not isinstance(halves, (int, np.integer)) or halves < 0 \
                 or halves == 1:
             raise ValueError(f"halves must be 0 (one heading a minute) or at least 2, got {halves!r}")
+        if float(find) < 0.0 or float(pos_scale) < 0.0:
+            raise ValueError(f"find and pos_scale must not be negative, got {find!r} and {pos_scale!r}")
         self.headings, self.cycle, self.decay = int(headings), bool(cycle), float(decay)
         self.halves = int(halves)
+        self.find, self.pos_scale = float(find), float(pos_scale)
         self.action_space = gym.spaces.Discrete(self.halves ** 2 if self.halves else self.headings)
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, (SIZE,), np.float32)
         self._next, self._cached = 0, (None, None)
@@ -71,6 +80,8 @@ class SearchEnv(gym.Env):
         source, k = self.items[pick]
         windows = self._windows(source)
         setup = windows.setup(k)
+        if self.find and setup.target is None:
+            raise ValueError(f"{windows.name} has no real buoy to find; build it with build_truth")
         self.context = Context(windows.lkp, setup.arrival_s, setup.drift_bearing_deg)
         self.episode = search_episode(setup)
         self.pos = 0.0
@@ -80,9 +91,13 @@ class SearchEnv(gym.Env):
     def step(self, action):
         k = self.episode.k
         order = command(self.episode, int(action), self.headings, self.halves)
+        seen = self.episode.found_s is not None
         removed = self.episode.fly(order) if self.halves else self.episode.step(order)
         self.pos += removed
         done = self.episode.done
-        return (observe(self.episode, self.context),
-                reward(removed, k, self.episode.steps, self.decay), done,
-                False, {"pos": self.pos, "removed": removed})
+        paid = self.pos_scale * reward(removed, k, self.episode.steps, self.decay)
+        found = self.find > 0.0 and not seen and self.episode.found_s is not None
+        if found:
+            paid, done = paid + self.find, True
+        return (observe(self.episode, self.context), paid, done, False,
+                {"pos": self.pos, "removed": removed, "found": found})

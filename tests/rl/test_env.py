@@ -160,3 +160,42 @@ class TestSearchEnv:
         vector = dict(zip(VECTOR, obs[-len(VECTOR):]))
         assert env.episode.heading_deg == pytest.approx(90.0, abs=1e-6)
         assert (vector["heading_sin"], vector["heading_cos"]) == pytest.approx((1.0, 0.0), abs=1e-6)
+
+
+class TestFindTheRealBuoy:
+    """Telemachus 3's reward (13 Oct): paid for coming within W/2 of the real buoy, then it ends."""
+
+    @staticmethod
+    def with_buoy(windows, k, off_deg=0.0):
+        from dataclasses import replace
+        a = float(windows.arrivals_s[k])
+        return replace(windows, truth_t_s=np.array([a, a + STEPS * 60.0]),
+                       truth_lat=windows.marker_lat[k][[0, -1]] + off_deg,
+                       truth_lon=windows.marker_lon[k][[0, -1]])
+
+    def test_a_buoy_at_the_marker_is_found_in_the_first_minute_and_the_search_ends(self, windows):
+        env = SearchEnv([self.with_buoy(windows, 0)], headings=36, find=1.0, pos_scale=0.0)
+        env.reset(seed=0, options={"item": 0})
+        _, paid, done, truncated, info = env.step(0)
+        assert paid == 1.0 and done and not truncated and info["found"]
+
+    def test_a_buoy_out_of_reach_pays_only_the_scaled_probability(self, windows):
+        env = SearchEnv([self.with_buoy(windows, 0, off_deg=1.0)], headings=36, find=1.0,
+                        pos_scale=0.5)
+        env.reset(seed=0, options={"item": 0})
+        steps, done = 0, False
+        while not done:
+            _, paid, done, _, info = env.step(env.action_space.sample())
+            assert not info["found"]
+            assert paid == pytest.approx(0.5 * reward(info["removed"], steps, STEPS))
+            steps += 1
+        assert steps == STEPS
+
+    def test_paying_for_finds_needs_windows_with_a_buoy(self, windows):
+        env = SearchEnv([windows], headings=36, find=1.0)
+        with pytest.raises(ValueError, match="no real buoy"):
+            env.reset(seed=0)
+
+    def test_negative_weights_are_refused(self, windows):
+        with pytest.raises(ValueError):
+            SearchEnv([windows], headings=36, find=-1.0)

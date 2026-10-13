@@ -254,6 +254,12 @@ class SearchEpisode:
     def remaining(self) -> float:
         return float(np.sum(self._weight))
 
+    @property
+    def found_s(self) -> float | None:
+        """When the real target first came within W/2, seconds since arrival; None if it has not
+        yet, or there is no target."""
+        return self._found_s
+
     # -- flying ------------------------------------------------------------------------
 
     def waypoints_for(self, heading_deg=None, *, turn_deg=None) -> Waypoints:

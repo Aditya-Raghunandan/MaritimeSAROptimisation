@@ -123,6 +123,24 @@ def _cli(argv=None) -> Path:
     parser.add_argument("--net-arch", type=int, nargs="+",
                         help="hidden layers of the policy and value heads, such as 256 256; SB3's "
                              "64 64 if not given")
+    # Telemachus 3 (13 Oct): paid for finding the real buoy, on real buoys' starts. Optional.
+    parser.add_argument("--validation-windows",
+                        help="a directory of validation windows (such as other buoys' starts); then "
+                             "every file in --windows trains and none is set aside by date")
+    parser.add_argument("--find-reward", type=float, default=0.0,
+                        help="paid the minute the real buoy is first within W/2; the search ends "
+                             "there (windows must carry a buoy, sar.rl.windows.build_truth)")
+    parser.add_argument("--pos-scale", type=float, default=1.0,
+                        help="multiplies the probability reward; 0 with --find-reward 1 pays finds only")
+    parser.add_argument("--eval-find", type=float,
+                        help="--find-reward for the validation score; defaults to --find-reward")
+    parser.add_argument("--eval-pos-scale", type=float,
+                        help="--pos-scale for the validation score; defaults to --pos-scale. With "
+                             "--eval-find 1 and 0 here, validation is the share of buoys found")
+    parser.add_argument("--init-from",
+                        help="a trained model.zip to start from (same observation and actions); "
+                             "its network and PPO settings, with this run's rate, entropy, clip, "
+                             "KL brake, gamma, batch and epochs")
     parser.add_argument("--torch-threads", type=int, default=1,
                         help="threads for the network's update; a CNN wants the node's cores")
     parser.add_argument("--out", required=True, help="directory the run's folder goes in")
@@ -140,7 +158,12 @@ def _cli(argv=None) -> Path:
 
     from sar.rl.env import SearchEnv, window_items
 
-    groups = split(args.windows, args.validation_every)
+    if args.validation_windows:
+        groups = {"train": sorted(Path(args.windows).glob("windows_*.npz")),
+                  "validation": sorted(Path(args.validation_windows).glob("windows_*.npz")),
+                  "test": []}
+    else:
+        groups = split(args.windows, args.validation_every)
     if not groups["train"]:
         parser.error(f"no training windows in {args.windows}")
     if args.patience and not groups["validation"]:
@@ -154,13 +177,16 @@ def _cli(argv=None) -> Path:
     for name, value in (("--reward-decay", args.reward_decay), ("--eval-decay", eval_decay)):
         if not 0.0 <= value <= 1.0:
             parser.error(f"{name} must be between 0 and 1")
+    eval_find = args.find_reward if args.eval_find is None else args.eval_find
+    eval_pos_scale = args.pos_scale if args.eval_pos_scale is None else args.eval_pos_scale
 
     kwargs = {"headings": args.headings, "arrivals_min": args.arrival_min, "halves": args.halves}
     vec = SubprocVecEnv if args.envs > 1 else DummyVecEnv
     env = make_vec_env(SearchEnv, n_envs=args.envs, seed=args.seed, vec_env_cls=vec,
                        monitor_dir=str(run / "monitor"),
                        env_kwargs={"sources": [str(p) for p in groups["train"]],
-                                   "decay": args.reward_decay, **kwargs})
+                                   "decay": args.reward_decay, "find": args.find_reward,
+                                   "pos_scale": args.pos_scale, **kwargs})
     policy_kwargs = None
     if args.net_arch:
         policy_kwargs = {"net_arch": {"pi": list(args.net_arch), "vf": list(args.net_arch)}}
@@ -171,17 +197,28 @@ def _cli(argv=None) -> Path:
                          "features_extractor_kwargs": {"features_dim": 256},
                          "net_arch": {"pi": list(args.net_arch or [128]),
                                       "vf": list(args.net_arch or [128])}}
-    model = PPO("MlpPolicy", env, learning_rate=args.learning_rate, ent_coef=args.ent_coef,
-                clip_range=args.clip_range, gamma=args.gamma, batch_size=args.batch_size,
-                n_epochs=args.n_epochs, target_kl=args.target_kl, policy_kwargs=policy_kwargs,
-                seed=args.seed, device="cpu", verbose=1)
+    if args.init_from:
+        # Loaded with this run's settings in place of the saved ones; the network, its size and
+        # n_steps come from the file (custom_objects are applied before the model is set up).
+        model = PPO.load(args.init_from, env=env, device="cpu", custom_objects={
+            "learning_rate": args.learning_rate, "ent_coef": args.ent_coef,
+            "clip_range": args.clip_range, "target_kl": args.target_kl, "gamma": args.gamma,
+            "batch_size": args.batch_size, "n_epochs": args.n_epochs})
+        model.set_random_seed(args.seed)
+        model.verbose = 1
+    else:
+        model = PPO("MlpPolicy", env, learning_rate=args.learning_rate, ent_coef=args.ent_coef,
+                    clip_range=args.clip_range, gamma=args.gamma, batch_size=args.batch_size,
+                    n_epochs=args.n_epochs, target_kl=args.target_kl, policy_kwargs=policy_kwargs,
+                    seed=args.seed, device="cpu", verbose=1)
 
     callback = None
     if groups["validation"]:
         sources = [str(p) for p in groups["validation"]]
         evaluator = make_vec_env(SearchEnv, n_envs=1, seed=args.seed,
                                  env_kwargs={"sources": sources, "cycle": True,
-                                             "decay": eval_decay, **kwargs})
+                                             "decay": eval_decay, "find": eval_find,
+                                             "pos_scale": eval_pos_scale, **kwargs})
         callback = EvalCallback(evaluator, best_model_save_path=str(run),
                                 log_path=str(run / "eval"),
                                 eval_freq=max(args.eval_every // args.envs, 1),
@@ -208,6 +245,9 @@ def _cli(argv=None) -> Path:
                    f"weight, / (N x window); decay 1 = time remaining, 0 = plain POS"),
         "reward_decay": args.reward_decay,
         "eval_decay": eval_decay,
+        "find_reward": args.find_reward, "pos_scale": args.pos_scale,
+        "eval_find": eval_find, "eval_pos_scale": eval_pos_scale,
+        "init_from": args.init_from,
         "train": [p.name for p in groups["train"]],
         "validation": [p.name for p in groups["validation"]],
         "test_files": len(groups["test"]),
