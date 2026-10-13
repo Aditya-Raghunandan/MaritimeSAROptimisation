@@ -73,7 +73,7 @@ RECT_CELL_M, MAX_CELLS = 100.0, 600
 ANGLES_DEG = np.arange(0.0, 180.0, 5.0)
 ASPECTS = (1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0)
 MID = STEPS // 2
-SEARCHERS = ("expanding-square", "sector", "parallel", "trackline", "greedy", "random", "ppo",
+SEARCHERS = ("expanding-square", "sector", "parallel", "parallel-skip", "trackline", "greedy", "random", "ppo",
              "telemachus")
 
 
