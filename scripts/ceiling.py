@@ -292,6 +292,15 @@ def summary(folder: Path, flights_path: Path) -> pd.DataFrame:
                 "square_share": _group_mean(d.assign(r=d["square_max"] / d["any_max"]), "r")}
         line["teleport"] = _group_mean(d, "teleport")
         line["teleport_split"] = _group_mean(d, "teleport_split")
+        # The best rectangle's shape, and what choosing the pattern case by case, in hindsight,
+        # would have been worth: the most a searcher that picks or fits a pattern could add.
+        shapes = d["rect_max_shape"]
+        line["rect_aspect_median"] = float(np.median([s["aspect"] for s in shapes]))
+        line["rect_offset_median_m"] = float(np.median(
+            [np.hypot(s["centre_east_m"], s["centre_north_m"]) for s in shapes]))
+        patterns = [s for s in ("expanding-square", "sector", "parallel", "trackline") if s in d]
+        line["best_pattern_pos"] = _group_mean(d.assign(r=d[patterns].max(axis=1)), "r")
+        line["best_searcher_pos"] = _group_mean(d.assign(r=d[searchers].max(axis=1)), "r")
         for s in searchers:
             line[f"{s}_pos"] = _group_mean(d, s)
             line[f"{s}_share"] = _group_mean(d.assign(r=d[s] / d["any_max"]), "r")
