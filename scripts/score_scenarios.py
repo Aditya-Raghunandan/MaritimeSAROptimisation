@@ -16,8 +16,10 @@ what the referee measured, one JSON line per flight:
 
 THE SEARCHERS. The four Coast Guard patterns, laid out by `sar.search.scenario.
 doctrinal_searcher` exactly as the site lays them; greedy and the random floor
-(`sar.search.greedy`, #49). The random floor's seed is the row's seed and the arrival, so
-both noise models are searched with the same random headings.
+(`sar.search.greedy`, #49). On request, `parallel-skip`: the Parallel Track's own legs flown
+middle first with turns a helicopter can make (`sar.search.patterns.parallel_skip`, 13 Oct).
+The random floor's seed is the row's seed and the arrival, so both noise models are searched
+with the same random headings.
 
 THE TRAINED AGENT. `--searchers ... ppo --ppo-model RUN/best_model.zip` adds the PPO policy
 (`sar.rl`, D005) as a seventh searcher: one of its compass headings a minute, chosen from the
@@ -79,7 +81,8 @@ import numpy as np
 import pandas as pd
 
 from sar.pipeline.gridded import ForcingGapError, GriddedForcing
-from sar.search.benchmark import BASELINE, GREEDY, NOISE, NOISE_RECORD, SEARCHERS, searcher
+from sar.search.benchmark import (BASELINE, EXTRA_SEARCHERS, GREEDY, NOISE, NOISE_RECORD,
+                                   SEARCHERS, searcher)
 from sar.search.episode import STEPS, run
 from sar.search.platform import STEP_S, TURN_RATE_DEG_S
 from sar.search.scenario import (
@@ -463,7 +466,7 @@ def main(argv=None):
                         "pooled size, the comparison; rw: the old random walk")
     s.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0],
                    help="hours from the call to arrival, whole minutes; default 1 2 3")
-    s.add_argument("--searchers", nargs="+", choices=(*SEARCHERS, PPO, TELEMACHUS),
+    s.add_argument("--searchers", nargs="+", choices=(*SEARCHERS, *EXTRA_SEARCHERS, PPO, TELEMACHUS),
                    default=list(SEARCHERS))
     s.add_argument("--ppo-model", help="the trained agent's best_model.zip, for --searchers ppo")
     s.add_argument("--telemachus-model", help="the second agent's best_model.zip, for --searchers "

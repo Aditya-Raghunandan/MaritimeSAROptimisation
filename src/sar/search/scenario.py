@@ -51,6 +51,7 @@ from sar.search.patterns import (
     MarkerTrack,
     Pattern,
     expanding_square,
+    parallel_skip,
     parallel_track,
     sector_search,
     trackline_return,
@@ -60,6 +61,7 @@ from sar.search.platform import (
     STEP_S,
     TURN_RATE_DEG_S,
     expanding_square_spacing_m,
+    search_effort_m2,
     sector_radius_m,
 )
 from sar.utils.geo import (
@@ -77,7 +79,9 @@ TRUTH_HOURS = (1, 2, 3, 4, 5, 6)
 
 # The Coast Guard patterns, and the two laid out along the datum line rather than the drift.
 DOCTRINAL = ("expanding-square", "sector", "parallel", "trackline")
-ALONG_THE_DATUM_LINE = ("parallel", "trackline")
+# Laid out by the same rule but not in the manual: the Parallel Track's legs reordered (13 Oct).
+REORDERED = ("parallel-skip",)
+ALONG_THE_DATUM_LINE = ("parallel", "trackline", "parallel-skip")
 
 # A datum line shorter than this has no direction worth flying along (frontend/src/searchRun.js).
 MIN_DATUM_LINE_M = 50.0
@@ -244,13 +248,17 @@ def doctrinal_searcher(name: str, setup: SearchSetup, lkp) -> tuple[Pattern, flo
       * Trackline half-length: the datum line's length, at least a Sector radius, so a
         near-still datum still gets a real line: the buoy may have drifted anywhere from not
         at all to twice as far as predicted (frontend/src/searchRun.js).
+      * The Parallel Track reordered (`parallel-skip`) has the Parallel Track's area, the
+        window's effort square, and the same axis; it is drawn to its last leg, because its
+        wider turns cost less time than the autopilot's loops and it must not run out.
       * The patterns that go on for ever (all but the Parallel Track, whose area is the
         window's) are drawn for DRAWN_WINDOWS windows. The autopilot rounds corners and so
         gets along the drawing faster than the clock (D032); it must not run out of legs.
         A helicopter that turns at once flies only the first window, as before.
     """
-    if name not in DOCTRINAL:
-        raise ValueError(f"{name!r} is not a Coast Guard pattern; one of {', '.join(DOCTRINAL)}")
+    if name not in DOCTRINAL + REORDERED:
+        raise ValueError(f"{name!r} is not a Coast Guard pattern; one of "
+                         f"{', '.join(DOCTRINAL + REORDERED)}")
     drift = setup.drift_bearing_deg
     bearing, why = (0.0, "no drift at the datum; north") if drift is None \
         else (float(drift), "along the drift")
@@ -264,6 +272,9 @@ def doctrinal_searcher(name: str, setup: SearchSetup, lkp) -> tuple[Pattern, flo
         pattern = sector_search(first_bearing_deg=bearing, duration_s=drawn)
     elif name == "parallel":
         pattern = parallel_track(first_bearing_deg=bearing)
+    elif name == "parallel-skip":
+        side = float(np.sqrt(search_effort_m2()))
+        pattern = parallel_skip(side, side, first_bearing_deg=bearing, duration_s=drawn)
     else:
         pattern = trackline_return(max(line_m, sector_radius_m()), first_bearing_deg=bearing,
                                    duration_s=drawn)

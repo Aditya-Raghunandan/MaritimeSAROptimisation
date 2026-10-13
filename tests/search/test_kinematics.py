@@ -15,7 +15,8 @@ from sar.search.kinematics import (
     steer,
     steer_to,
 )
-from sar.search.patterns import expanding_square, parallel_track, sector_search, trackline_return
+from sar.search.patterns import (expanding_square, parallel_skip, parallel_track, sector_search,
+                                  trackline_return)
 from sar.search.platform import (
     MAX_BANK_DEG,
     SEARCH_SPEED_MS,
@@ -124,6 +125,8 @@ class TestTheAutopilot:
         "parallel": lambda: parallel_track(first_bearing_deg=30.0),
         "sector": lambda: sector_search(first_bearing_deg=30.0, duration_s=5400.0),
         "trackline": lambda: trackline_return(3000.0, first_bearing_deg=30.0, duration_s=5400.0),
+        "parallel-skip": lambda: parallel_skip(4810.0, 4810.0, first_bearing_deg=30.0,
+                                               duration_s=5400.0),
     }
 
     @pytest.mark.parametrize("name", list(PATTERNS))
@@ -136,9 +139,11 @@ class TestTheAutopilot:
             check_turns(p.t_s - 60.0 * k, p.east_m, p.north_m, p.heading_deg, start, V, W)
 
     @pytest.mark.parametrize("name, within", [("expanding-square", 25.0), ("parallel", 30.0),
-                                              ("sector", 45.0), ("trackline", 20.0)])
+                                              ("sector", 45.0), ("trackline", 20.0),
+                                              ("parallel-skip", 20.0)])
     def test_it_keeps_close_to_the_drawn_legs(self, name, within):
-        # Measured 9 Oct at L1 = r: 17.5, 21.5, 38.3 and 13.9 m (D032).
+        # Measured 9 Oct at L1 = r: 17.5, 21.5, 38.3 and 13.9 m (D032); parallel-skip 14.4 m
+        # (13 Oct), its turns being wide enough to fly as drawn.
         pattern = self.PATTERNS[name]()
         f = follow(pattern.east_m, pattern.north_m, 30.0, 2700.0, V, W)
         assert mean_offset_from_drawn(pattern, f) < within

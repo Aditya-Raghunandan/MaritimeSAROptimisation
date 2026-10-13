@@ -16,9 +16,12 @@ from __future__ import annotations
 from sar.model.position import BY_CURRENT, CALIBRATED_SIGMA, CALIBRATED_SIGMA_U, SIGMA_U_RULE
 from sar.search.episode import Turn, Waypoints, pattern_policy
 from sar.search.greedy import greedy_policy, random_heading_policy
-from sar.search.scenario import DOCTRINAL, doctrinal_searcher
+from sar.search.scenario import DOCTRINAL, REORDERED, doctrinal_searcher
 
 SEARCHERS = DOCTRINAL + ("greedy", "random")
+# Flown by the scorer on request but not yet by the site, its bundles or its golden fixture:
+# the Parallel Track's legs, middle first with turns a helicopter can make (13 Oct).
+EXTRA_SEARCHERS = REORDERED
 # The drift engine's random term, by name. rvc is the calibrated one since D033: the random
 # velocity sized by the current at the start. rv is D030's pooled size, kept as the
 # comparison; rw the old random walk (D028).
@@ -35,7 +38,7 @@ GREEDY = {"headings": 36, "decide_s": 60.0}
 
 def searcher(name: str, setup, row, arrival_h: float, greedy: dict | None = None):
     """A searcher for one scenario: (policy, first bearing or None, how it was laid out)."""
-    if name in DOCTRINAL:
+    if name in DOCTRINAL + REORDERED:
         lkp = (float(row["lat"]), float(row["lon"]))
         pattern, bearing, why = doctrinal_searcher(name, setup, lkp)
         return pattern_policy(pattern), bearing, why
