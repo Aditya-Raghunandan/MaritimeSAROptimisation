@@ -37,7 +37,8 @@ K="${SLURM_ARRAY_TASK_ID:?submit with --array}"
 for R in $(seq $((4 * K - 3)) $((4 * K))); do
     [ "$R" -le "$LAST" ] || continue
     PYTHONPATH=src "$PY" scripts/export_scenario_bundles.py export --csv "$CSV" \
-        --forcing-dir "$DATA" --rows "$R" --noise $NOISE --arrival-h $ARRIVALS "${PPO_ARGS[@]}" \n        --out "$OUT" &
+        --forcing-dir "$DATA" --rows "$R" --noise $NOISE --arrival-h $ARRIVALS "${PPO_ARGS[@]}" \
+        --out "$OUT" &
 done
 wait
 echo "task $K done: $OUT"
