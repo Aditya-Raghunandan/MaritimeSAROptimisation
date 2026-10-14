@@ -93,6 +93,12 @@ test('limits: five a ten minutes per sender, and a ceiling for the day', () => {
   assert.equal(l.allow('c', t + 8), false);          // 7 sent today
 });
 
+test('limits: one laptop at a busy stand, a player every 30 s for an hour, is never turned away', () => {
+  const l = new Limits();
+  const t = Date.UTC(2026, 9, 15, 9);
+  for (let i = 0; i < 120; i += 1) assert.ok(l.allow('stand', t + i * 30_000), `player ${i + 1}`);
+});
+
 test('CORS lets the game site in and nobody else by name', () => {
   assert.equal(corsHeaders('https://aditya-raghunandan.github.io', {})['Access-Control-Allow-Origin'],
     'https://aditya-raghunandan.github.io');
