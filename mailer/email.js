@@ -1,7 +1,7 @@
 /**
  * email.js -- the email a player gets after "Survive the Triangle": did they beat Telemachus,
  * the path they flew (an inline picture the game draws), how they did against the Coast
- * Guard's pattern and the AI on the same sea, and a link to vote for us.
+ * Guard's pattern and our ML model on the same sea, and a link to vote for us.
  *
  * Pure: a result in, {subject, html, text} out. Everything the player typed (their name) is
  * escaped; the numbers are checked by validate() before they get here.
@@ -17,6 +17,9 @@ export const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({
 const pct = (x) => `${(100 * x).toFixed(1)} %`;
 const clock = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
 
+/** How the computer's searcher is named in a row: the trained model, or greedy, which does not learn. */
+const tag = (name) => (name === 'Telemachus' ? 'Telemachus (ML model)' : 'The greedy search');
+
 /** The headline and the line under it, by who the player beat. */
 export function verdictOf(r) {
   const ai = r.ai.name;
@@ -24,14 +27,14 @@ export function verdictOf(r) {
     return {
       subject: `\u{1F3C6} You beat ${ai} AND the Coast Guard`,
       head: `You beat ${ai} and the Coast Guard.`,
-      line: 'Humans 1, AI 0. You out-searched the machine and the textbook pattern on the same sea.',
+      line: 'Humans 1, machine 0. You out-searched the model and the textbook pattern on the same sea.',
     };
   }
   if (r.beatAi) {
     return {
-      subject: `\u{1F389} You beat ${ai}, our AI`,
+      subject: ai === 'Telemachus' ? '\u{1F389} You beat Telemachus, our ML model' : `\u{1F389} You beat ${ai}`,
       head: `You beat ${ai}.`,
-      line: 'Humans 1, AI 0. The Coast Guard’s pattern still edged you out: the textbook is hard to beat.',
+      line: 'Humans 1, machine 0. The Coast Guard’s pattern still edged you out: the textbook is hard to beat.',
     };
   }
   if (r.beatCg) {
@@ -106,7 +109,7 @@ export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = '
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       ${bar(`You (${name})`, r.you, '#ffffff', max, true)}
       ${bar('The Coast Guard’s pattern', r.cg, '#3987e5', max, false)}
-      ${bar(`${ai} (AI)`, r.ai, '#ff6fb5', max, false)}
+      ${bar(tag(ai), r.ai, '#ff6fb5', max, false)}
     </table>
   </td></tr>
   <tr><td style="padding:18px 28px 4px;">
@@ -147,7 +150,7 @@ export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = '
     `Hi ${r.name || 'Player'},`, '', v.head, v.line, '',
     `You: searched ${pct(r.you.pos)}, ${personWords(r.you)}`,
     `The Coast Guard's pattern: searched ${pct(r.cg.pos)}, ${personWords(r.cg)}`,
-    `${r.ai.name} (AI): searched ${pct(r.ai.pos)}, ${personWords(r.ai)}`, '',
+    `${tag(r.ai.name)}: searched ${pct(r.ai.pos)}, ${personWords(r.ai)}`, '',
     `${r.points} points. The sea you had to search was ${Math.round(r.areaKm2)} km2, about ${pitches} football pitches.`,
     voteUrl ? `Vote for us: ${voteUrl}` : '', gameUrl ? `Play again: ${gameUrl}` : '', '',
     'Aditya Raghunandan and Suné Toerien, ELEN4012, Wits EIE. We used your email address once and kept nothing.',

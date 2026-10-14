@@ -16,7 +16,8 @@
  *
  * VERSIONS. v2 (format 2) was flown by the D032 helicopter, which turns at most 7.0 deg/s
  * and carries the heading at every waypoint; v1 (format 1) by the old one that turned at
- * once. v3 is v2 with a seventh flight, the trained agent ("ppo"), and index.json says which
+ * once. v4 (13 Oct) adds the arrivals 15, 30 and 45 min to 1, 2 and 3 h, rvc only, with the
+ * second trained model (Telemachus 2) as "ppo". v3 is v2 with a seventh flight, the trained agent ("ppo"), and index.json says which
  * model flew it. The newest version that is published is used, so publishing one switches
  * the site over without a deploy; each window says which helicopter flew it (`turnRateDegS`).
  */
@@ -25,7 +26,7 @@ import { cloudFromOffsets } from './referee.js';
 
 export const DATA_BASE = String(import.meta.env.VITE_DATA_BASE ?? './data').replace(/\/$/, '');
 /** Newest first. */
-export const SCENARIO_VERSIONS = ['v3', 'v2', 'v1'];
+export const SCENARIO_VERSIONS = ['v4', 'v3', 'v2', 'v1'];
 export const SCENARIO_ROOT = `${DATA_BASE}/scenarios/${SCENARIO_VERSIONS[SCENARIO_VERSIONS.length - 1]}`;
 /** The 3D loops, which do not change with the helicopter. */
 export const SHOWCASE_ROOT = `${DATA_BASE}/scenarios/showcase`;
@@ -37,7 +38,7 @@ export const SEARCHER_INFO = {
   parallel: { label: 'Parallel Track', kind: 'Coast Guard pattern', colour: '#e8b23d' },
   trackline: { label: 'Trackline', kind: 'Coast Guard pattern', colour: '#e8735a' },
   greedy: { label: 'Greedy', kind: 'reads the map', colour: '#04c951' },
-  ppo: { label: 'Telemachus (trained AI)', kind: 'learned from five years of drift', colour: '#ff6fb5' },
+  ppo: { label: 'Telemachus (ML model)', kind: 'reinforcement learning on five years of drift', colour: '#ff6fb5' },
   random: { label: 'Random', kind: 'the floor', colour: '#8a8a80' },
 };
 
@@ -47,9 +48,29 @@ export function searchersOf(index) {
   return Object.keys(SEARCHER_INFO).filter((k) => have.includes(k));
 }
 
-/** Who plays "the AI": the trained agent where a window has its flight, else greedy. */
-export function aiOf(window) {
-  return window?.flights?.ppo ? 'ppo' : 'greedy';
+/**
+ * Until how many hours after the call the trained model plays the computer's side; greedy
+ * after it. Telemachus 2 beats greedy at 30 min and greedy beats it from 1 h, on the 290 dev
+ * buoys of the 13 Oct probe as on the 55, so the line is drawn at 45 min (Aditya, 13 Oct).
+ */
+export const ML_UNTIL_H = 0.75;
+
+/** Who plays the computer's side: the trained model where the window has its flight and the
+ * helicopter arrives by ML_UNTIL_H, else greedy. */
+export function aiOf(window, hours) {
+  return window?.flights?.ppo && hours <= ML_UNTIL_H + 1e-9 ? 'ppo' : 'greedy';
+}
+
+/** The arrival times, in hours, a scenario's files carry for one drift model, soonest first. */
+export function arrivalsOf(scenario, noise) {
+  const hours = (scenario?.windows ?? []).filter((w) => w.startsWith(`${noise}_`) && w.endsWith('h'))
+    .map((w) => Number(w.slice(noise.length + 1, -1))).filter(Number.isFinite);
+  return [...new Set(hours)].sort((a, b) => a - b);
+}
+
+/** An arrival as people say it: 15 min, 1 h. */
+export function arrivalLabel(hours) {
+  return hours < 1 ? `${Math.round(hours * 60)} min` : `${hours} h`;
 }
 
 /**
