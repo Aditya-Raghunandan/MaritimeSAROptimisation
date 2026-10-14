@@ -108,6 +108,32 @@ async function painted(page, selector) {
   }, selector);
 }
 
+/**
+ * A pretend controller, in the standard layout Chrome gave the stand's PS5 pad (14 Oct). Returns
+ * press(name) and stick(x, y) to work it.
+ */
+async function fakePad(page) {
+  await page.addInitScript(() => {
+    const pad = {
+      id: 'Test pad (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', timestamp: 0,
+      axes: [0, 0, 0, 0], buttons: Array.from({ length: 18 }, () => ({ pressed: false, touched: false, value: 0 })),
+    };
+    window.testPad = pad;
+    Object.defineProperty(Navigator.prototype, 'getGamepads', { configurable: true, value: () => [pad, null, null, null] });
+  });
+  const BUTTON = { cross: 0, circle: 1, triangle: 3, up: 12, down: 13, left: 14, right: 15 };
+  const set = (i, on) => page.evaluate(([b, v]) => { Object.assign(window.testPad.buttons[b], { pressed: v, value: v ? 1 : 0 }); }, [i, on]);
+  return {
+    async press(name) {
+      await set(BUTTON[name], true);
+      await page.waitForTimeout(100);
+      await set(BUTTON[name], false);
+      await page.waitForTimeout(100);
+    },
+    stick: (x, y) => page.evaluate(([a, b]) => { window.testPad.axes[0] = a; window.testPad.axes[1] = b; }, [x, y]),
+  };
+}
+
 async function fixtureFlight(noise, searcher, version = 'v2') {
   const meta = JSON.parse(await readFile(join(FIXTURES, `scenarios/${version}/S01`, `${noise}_2h.json`), 'utf8'));
   return meta.flights[searcher].python;
@@ -425,6 +451,81 @@ test.describe('the open-day game', () => {
     await expect(page.locator('#results')).toHaveClass(/on/);
     await expect(page.locator('#verdictWhy')).toContainText('left on the clock');
     await expect(page.locator('#boardNow')).toContainText('Quitter');
+    expect(errors).toEqual([]);
+  });
+
+  test('a controller alone plays it: menus, take-off, steering, ending the search, the results', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    const pad = await fakePad(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=20');
+    await expect(page.locator('#startBtn')).toBeEnabled();
+    await pad.press('cross');                                     // the first touch only shows the highlight
+    await expect(page.locator('#startBtn')).toHaveClass(/pad-focus/);
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    await expect(page.locator('#padChip')).toBeVisible();
+    await pad.press('right');
+    await expect(page.locator('#searchBtn')).toHaveClass(/pad-focus/);
+    await pad.press('cross');
+    await expect(page.locator('#pick')).toHaveClass(/on/);
+    await expect(page.locator('#surprise')).toHaveClass(/pad-focus/);
+    await pad.press('cross');                                     // a buoy, and the highlight moves to Fly
+    await expect(page.locator('#goBtn')).toHaveClass(/pad-focus/);
+    await pad.press('up');
+    await expect(page.locator('.namerow .pad-focus')).toHaveCount(1);
+    await pad.press('cross');                                     // a name with no keyboard
+    await expect(page.locator('#name')).not.toHaveValue('');
+    await pad.press('down');
+    await expect(page.locator('#goBtn')).toHaveClass(/pad-focus/);
+    await pad.press('cross');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await expect(page.locator('#hint')).toContainText('Controller');
+    await pad.press('cross');                                     // take off
+    await expect(page.locator('#endBtn')).toBeVisible();
+    await pad.stick(1, 0);
+    await expect(page.locator('#hudTime')).not.toHaveText(/^4[45]:/, { timeout: 10_000 });
+    await pad.stick(0, 0);
+    await pad.press('triangle');                                  // end the search
+    await expect(page.locator('#reveal')).toHaveClass(/on/);
+    await pad.press('cross');                                     // skip the replay
+    await expect(page.locator('#results')).toHaveClass(/on/);
+    await expect(page.locator('#againBtn')).toHaveClass(/pad-focus/);
+    await expect(page.locator('#verdictWhy')).toContainText('left on the clock');
+    await pad.press('cross');
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    expect(errors).toEqual([]);
+  });
+
+  test('a controller plays the missions: ○ skips, the stick moves the buoy, ✕ drops it, the d-pad slides the slider', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    const pad = await fakePad(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=20');
+    await expect(page.locator('#startBtn')).toBeEnabled();
+    await pad.press('cross');
+    await pad.press('cross');
+    await expect(page.locator('#tut')).toHaveClass(/on/);
+    await expect(page.locator('text=Fly the helicopter')).toHaveClass(/pad-focus/, { timeout: 15_000 });
+    await pad.press('cross');
+    await expect(page.locator('#tutTitle')).toHaveText('Catch the drifting buoy');
+    await pad.press('circle');                                    // skip, even with the stick flying
+    await expect(page.locator('#tutTitle')).toHaveText('Read the sea between the dots');
+    await expect(page.locator('#tutText')).toContainText('click to drop the buoy', { timeout: 15_000 });
+    const before = await page.locator('#tutMap .tut-weight').first().textContent();
+    await pad.stick(-1, 0.6);
+    await expect.poll(() => page.locator('#tutMap .tut-weight').first().textContent()).not.toBe(before);
+    await pad.stick(0, 0);
+    await pad.press('cross');                                     // drop it
+    await expect(page.locator('#tutResult')).toContainText('from our forecast', { timeout: 15_000 });
+    await expect(page.locator('text=Mission 3')).toHaveClass(/pad-focus/);
+    await pad.press('cross');
+    await expect(page.locator('#tutTitle')).toHaveText('10,000 guesses');
+    await expect(page.locator('#tutSigma')).toHaveClass(/pad-focus/, { timeout: 15_000 });
+    for (let k = 0; k < 30 && !(await page.locator('#tutResult').textContent()).includes('Just right'); k += 1) await pad.press('right');
+    await expect(page.locator('#tutResult')).toContainText('Just right');
+    await expect(page.locator('#tutSigma')).toHaveClass(/pad-focus/);   // the new button did not take it
     expect(errors).toEqual([]);
   });
 
