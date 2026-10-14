@@ -48,6 +48,7 @@ import { SEARCH_SPEED_MS, TURN_RADIUS_M, TURN_RATE_DEG_S } from './platform.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 import { DIRECTIONS, PadEvents, firstPad, nearestThatWay, padHeading, randomName } from './gamepad.js';
 import { addSea } from './sea.js';
+import { playable } from './farBuoys.js';
 import { Tutorial } from './tutorial.js';
 
 // The drift model the game flies over: the newest a scenario has (rvc, sized by the current,
@@ -581,11 +582,27 @@ function ordinal(n) {
   return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
 }
 
-/** The big line on the results, and the sentence under it, by who the player beat. */
-function headline(v, aiName) {
+/**
+ * The big line on the results, and the sentence under it, by who the player beat. Finding the
+ * person is worth celebrating even when the prize goes elsewhere (Aditya, 15 Oct: a player who
+ * found them was told "the computer wins"): the prize is still for searching the most, since one
+ * find can be luck and the bigger search finds more people over many rescues.
+ */
+function headline(v, aiName, you, rivals) {
   const ai = `<span class="ai">${aiName === 'Telemachus' ? 'Telemachus' : 'the computer'}</span>`;
+  const found = Boolean(you.target?.found);
   if (v.won) {
-    return { html: 'You win!', cls: 'win', why: `You searched more of the likely sea than both the Coast Guard and ${aiName}. Claim your prize!` };
+    return { html: found ? 'You win, and you found them!' : 'You win!', cls: 'win', why: `You searched more of the likely sea than both the Coast Guard and ${aiName}. Claim your prize!` };
+  }
+  if (found) {
+    const ahead = rivals.filter((r) => !v.beaten.includes(r.name)).map((r) => `${r.name} (${pct(r.pos)})`).join(' and ');
+    return {
+      html: 'You found them!',
+      cls: 'found',
+      why: `🛟 Great flying: you found them ${you.target.foundS < 30 ? 'the moment you arrived' : `${clock(you.target.foundS)} into the search`}. But ${ahead} searched more of the `
+        + `likely sea than your ${pct(you.pos)}, and over many rescues the bigger search finds more people. Beat both on `
+        + '"searched" to win the prize.',
+    };
   }
   if (v.beaten.includes(aiName)) {
     return { html: `You beat ${ai}`, cls: 'close', why: 'But the Coast Guard’s pattern searched more. Beat both to win the prize.' };
@@ -608,11 +625,11 @@ function countUp(el, to, ms = 1200) {
   requestAnimationFrame(step);
 }
 
-function confetti() {
+function confetti(pieces = 90) {
   const box = document.createElement('div');
   box.className = 'confetti';
   const colours = ['#04c951', '#ffc24a', '#ff5a1f', '#ff6fb5', '#3fd0ff', '#ffffff'];
-  for (let i = 0; i < 90; i += 1) {
+  for (let i = 0; i < pieces; i += 1) {
     const c = document.createElement('i');
     c.style.left = `${Math.random() * 100}%`;
     c.style.background = colours[i % colours.length];
@@ -660,11 +677,12 @@ async function results() {
   const [you, cg, ai] = game.flights.map((f) => f.metrics());
   const aiKey = aiOf(game.window, game.hours);
   const aiName = AI_NAME[aiKey];
-  const v = verdict({ pos: you.pos }, [{ name: 'the Coast Guard', pos: cg.pos }, { name: aiName, pos: ai.pos }]);
+  const rivals = [{ name: 'the Coast Guard', pos: cg.pos }, { name: aiName, pos: ai.pos }];
+  const v = verdict({ pos: you.pos }, rivals);
   const area = arrivalAreaKm2(game.window);
   const points = score(you.pos, area);
   game.result = { points, area };
-  const h = headline(v, aiName);
+  const h = headline(v, aiName, you, rivals);
   $('resKicker').textContent = `${WATER[game.scenario.water] ?? game.scenario.water} · the helicopter ${arrivalLabel(game.hours)} after the call`;
   $('verdict').innerHTML = h.html;
   $('verdict').className = `verdict ${h.cls}`;
@@ -673,7 +691,7 @@ async function results() {
   const best = Math.max(you.pos, cg.pos, ai.pos);
   const row = (name, m, colour, cls = '') => {
     const t = m.target;
-    const buoy = !t ? '' : t.found ? `✓ found them at ${clock(t.foundS)}` : `✗ missed by ${(t.closestM / 1000).toFixed(1)} km`;
+    const buoy = !t ? '' : t.found ? (t.foundS < 30 ? '✓ found them on arrival' : `✓ found them at ${clock(t.foundS)}`) : `✗ missed by ${(t.closestM / 1000).toFixed(1)} km`;
     return `<tr class="${cls}"><td class="who">${name}${m.pos === best ? '<span class="best">BEST</span>' : ''}</td>`
       + `<td class="barcell"><div class="bar"><i style="width:${(100 * m.pos).toFixed(1)}%;background:${colour}"></i></div></td>`
       + `<td class="pos">${pct(m.pos)}</td><td class="found${t?.found ? ' yes' : ''}">${buoy}</td></tr>`;
@@ -704,7 +722,8 @@ async function results() {
   show('results');
   drawBoardNow();
   countUp($('pointsBig'), points);
-  if (v.won && !wasOn) confetti();
+  if (!wasOn && v.won) confetti();
+  else if (!wasOn && you.target?.found) confetti(40);  // a smaller cheer for a find
   benchmark().then(drawBoardNow);      // its rows change the room the board has
   offerEmail();
 }
@@ -947,7 +966,7 @@ async function main() {
   requestAnimationFrame(padLoop);
   attract();
   try {
-    game.index = await loadIndex();
+    game.index = playable(await loadIndex());     // not the buoys that end far from their cloud
   } catch (err) {
     $('status').textContent = `the scenario files are not reachable: ${err.message}`;
     return;

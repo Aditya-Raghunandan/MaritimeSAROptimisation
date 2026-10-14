@@ -57,6 +57,16 @@ function boardRows(board) {
 /** The headline and the line under it, by who the player beat. */
 export function verdictOf(r) {
   const ai = r.ai.name;
+  // Found them but did not search the most (15 Oct): a find is cheered, the prize explained.
+  if (r.you?.found && !(r.beatAi && r.beatCg)) {
+    const ahead = [!r.beatCg && 'the Coast Guard’s pattern', !r.beatAi && ai].filter(Boolean).join(' and ');
+    return {
+      subject: '\u{1F6DF} You found them!',
+      head: 'You found them!',
+      line: `You found the person in the water. ${ahead.charAt(0).toUpperCase()}${ahead.slice(1)} still searched `
+        + 'more of the likely sea, and over many rescues the bigger search finds more people. Beat both to win.',
+    };
+  }
   if (r.beatAi && r.beatCg) {
     return {
       subject: `\u{1F3C6} You beat ${ai} AND the Coast Guard`,
@@ -86,7 +96,7 @@ export function verdictOf(r) {
 }
 
 function personWords(s) {
-  if (s.found) return `found them ${clock(s.foundS)} into the search`;
+  if (s.found) return s.foundS < 30 ? 'found them on arrival' : `found them ${clock(s.foundS)} into the search`;
   if (Number.isFinite(s.missedKm)) return `missed them by ${s.missedKm.toFixed(1)} km`;
   return 'did not find them';
 }

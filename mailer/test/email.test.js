@@ -26,6 +26,14 @@ test('the verdict names who the player beat, all four ways', () => {
   assert.match(r(false, false).subject, /Telemachus won this round/);
 });
 
+test('a player who found them is cheered, and told who searched more', () => {
+  const r = (beatAi, beatCg) => verdictOf({ beatAi, beatCg, ai: { name: 'the greedy search' }, you: { found: true } });
+  assert.match(r(false, false).subject, /You found them!/);
+  assert.match(r(false, false).line, /^You found the person in the water\. The Coast Guard’s pattern and the greedy search still searched more/);
+  assert.match(r(false, true).line, /The greedy search still searched more/);
+  assert.match(r(true, true).subject, /beat the greedy search AND the Coast Guard/);   // a win stays a win
+});
+
 test('validate: beat flags come from the numbers, not from the client', () => {
   const r = validate(sample({ beatAi: false }));
   assert.equal(r.beatAi, true);
