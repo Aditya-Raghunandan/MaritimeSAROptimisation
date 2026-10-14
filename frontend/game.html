@@ -74,7 +74,11 @@
 
       /* the three missions */
       #tut { position: relative; grid-template-columns: 1fr; }
-      #tutMap { height: 100%; min-height: 0; background: #0a2747; }
+      #tutMap { height: 100%; min-height: 0; background: #1b1b1d; transition: opacity 0.3s; }
+      #tutMap.tut-fade { opacity: 0; }
+      .tut-pin span { display: block; width: 30px; height: 30px; border-radius: 50%; border: 4px solid #ff5a1f;
+        box-shadow: 0 0 18px #ff5a1f, inset 0 0 8px #ff5a1f; animation: tutpin 0.9s ease-in-out infinite; }
+      @keyframes tutpin { 50% { transform: scale(1.5); opacity: 0.55; } }
       #tutMap.leaflet-container { cursor: crosshair; }
       .tut-panel {
         position: absolute; z-index: 600; top: 14px; left: 14px; width: min(460px, 42vw);
@@ -93,7 +97,11 @@
       .tut-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
       .tut-controls .big { font-size: 16px; padding: 10px 18px; }
       .tut-slider { display: grid; gap: 4px; width: 100%; font-size: 13px; color: var(--ink-2); }
-      .tut-slider input { width: 100%; accent-color: #ff5a1f; }
+      .tut-slider input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 8px; margin: 8px 0; border-radius: 4px;
+        background: linear-gradient(90deg, #3fd0ff, #ffb000 55%, #ff5a1f); outline: none; cursor: pointer; }
+      .tut-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%;
+        background: #fff; border: 4px solid #ff5a1f; box-shadow: 0 0 10px #000c; }
+      .tut-slider input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 4px solid #ff5a1f; }
       .tut-slider b { color: #fff; }
       .tut-corner { position: absolute; z-index: 600; right: 14px; bottom: 18px; display: flex; gap: 8px; }
       .tut-label { white-space: nowrap; font: italic 600 15px var(--font); color: #bfe4ff; text-shadow: 0 0 4px #000, 0 0 2px #000; }

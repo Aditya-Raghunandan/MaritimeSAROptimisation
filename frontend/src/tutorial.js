@@ -2,13 +2,21 @@
  * tutorial.js -- three one-minute missions before the real search, each one idea the project
  * had to work out, played on the real ocean with its real places labelled.
  *
- *   1. Go with the flow   drift = current + 2 % of the wind, then catch the drifting buoy
- *                         with a helicopter that turns like a real one (7 degrees a second)
- *   2. Between the dots   the current is known only every 8 km and every 3 hours, and blended
- *                         in between; then guess where the buoy will be, against the model
+ *   1. Go with the flow   drift = current + 2 % of the wind; then catch the buoy, which keeps
+ *                         drifting the way the arrows said, with a helicopter that turns like a
+ *                         real one (7 degrees a second)
+ *   2. Between the dots   the current is known only every 8 km and every 3 hours; move the mouse
+ *                         to see how the dots around a spot are blended, drop the buoy, and
+ *                         watch the forecast and the real buoy drift apart
  *   3. 10,000 guesses     the model's small error persists, so one forecast becomes a cloud;
- *                         pick the error size that catches the real buoys without a cloud too
- *                         big to search
+ *                         size the error with a slider until the cloud catches the real buoys
+ *                         without growing too big to search
+ *
+ * Reworked 14 Oct after open-day testers found the missions confusing: the buoy now flies on
+ * from where mission 1 left it, mission 2 is explored with the mouse instead of guessed, and
+ * mission 3 shows the real buoys while the slider moves. The sea is the game's own crisp dark
+ * map at whole zoom levels, and each mission cuts in from the Triangle instead of a blurry
+ * zoom across seven levels of half-loaded tiles.
  *
  * The numbers are in tutorialMaths.js (tested); this file only draws and listens. Every
  * mission can be skipped, and so can all three.
@@ -21,7 +29,7 @@ import { esriTiles } from './tiles.js';
 import { SEARCH_SPEED_MS, TURN_RATE_DEG_S } from './platform.js';
 import {
   GridField, HALF_STRIP_M, SIGMA_TRUE, bilinearWeights, driftOf, heliStep, judgeCloud,
-  segmentDistance, toLatLon, toMetres,
+  segmentDistance, toLatLon, toMetres, trialBuoys,
 } from './tutorialMaths.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 
@@ -30,6 +38,10 @@ const $ = (id) => document.getElementById(id);
 const metresPerPixel = (map, lat) => (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (256 * 2 ** map.getZoom());
 const ease = (u) => { const x = Math.max(0, Math.min(1, u)); return x * x * (3 - 2 * x); };
 const km = (m) => `${(m / 1000).toFixed(1)} km`;
+const hhmm = (hours) => {
+  const m = Math.round((12 + hours) * 60);
+  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+};
 
 /** Places to orient by, drawn over the ocean (the tile labels name the land). */
 const SEA_LABELS = [
@@ -38,6 +50,9 @@ const SEA_LABELS = [
   [24.2, -74.0, 'The Bahamas', 'sea'], [32.6, -64.6, 'Bermuda', 'sea'], [26.0, -70.5, 'Bermuda Triangle', 'tri'],
 ];
 const TRIANGLE = [[25.76, -80.19], [32.3, -64.78], [18.47, -66.11], [25.76, -80.19]];
+
+// Mission 1's sea: the Florida Current off Miami, 1.2 m/s north, and 8 m/s of wind from the east.
+const M1 = { lat0: 25.8, lon0: -79.62, current: [0, 1.2], wind: [-8, 0], T: 2 * 3600 };
 
 function label(lat, lon, text, kind) {
   return L.marker([lat, lon], {
@@ -94,15 +109,21 @@ export class Tutorial {
 
   setup() {
     if (!this.map) {
+      // The game's own dark sea, at whole zoom levels only: a fractional zoom scales every tile.
       this.map = L.map('tutMap', {
-        zoomSnap: 0.25, attributionControl: false, keyboard: false, doubleClickZoom: false, zoomControl: false,
+        zoomSnap: 1, attributionControl: false, keyboard: false, doubleClickZoom: false, zoomControl: false,
       });
-      esriTiles('World_Imagery', { maxNativeZoom: 13, maxZoom: 18 }).addTo(this.map);
-      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-        { maxNativeZoom: 13, maxZoom: 18, opacity: 0.9 }).addTo(this.map);
+      // The sea drawn from zoom 10 at most: over open water Esri holds some close-up tiles and not
+      // others, and a mix of the two zooms showed as a patchwork of greys (Bermuda, 14 Oct).
+      esriTiles('Canvas/World_Dark_Gray_Base', { maxNativeZoom: 10, maxZoom: 18 }).addTo(this.map);
+      esriTiles('Canvas/World_Dark_Gray_Reference', { maxNativeZoom: 16, maxZoom: 18, opacity: 0.9 }).addTo(this.map);
       L.polyline(TRIANGLE, { color: '#ff3b47', weight: 2, dashArray: '8 8', opacity: 0.7, interactive: false }).addTo(this.map);
       for (const l of SEA_LABELS) label(...l).addTo(this.map);
-      this.map.on('mousemove', (e) => { this.pointer = e.latlng; if (this.flying) this.input = 'mouse'; });
+      this.map.on('mousemove', (e) => {
+        this.pointer = e.latlng;
+        if (this.flying) this.input = 'mouse';
+        this.move?.(e.latlng);
+      });
       this.map.on('click', (e) => this.click?.(e.latlng));
       window.addEventListener('keydown', this.keys);
       window.addEventListener('keyup', this.keys);
@@ -118,6 +139,8 @@ export class Tutorial {
     this.timers = [];
     this.flying = false;
     this.click = null;
+    this.move = null;
+    this.map?.getContainer().classList.remove('tut-fade');
     this.layers?.clearLayers();
     $('tutControls').innerHTML = '';
     $('tutResult').textContent = '';
@@ -126,6 +149,12 @@ export class Tutorial {
   }
 
   later(ms, fn) { this.timers.push(setTimeout(fn, ms / this.speedUp)); }
+
+  /**
+   * How far through an animation of `ms` begun at `t0` a frame at `now` is, 0 to 1. A frame's
+   * time can be a moment before t0 (it is when the frame began), so it is held at 0, not below.
+   */
+  progress(now, t0, ms) { return Math.max(0, Math.min(1, ((now - t0) / ms) * this.speedUp)); }
 
   panel(step, title, text) {
     $('tutStep').textContent = `Mission ${step} of 3`;
@@ -148,13 +177,30 @@ export class Tutorial {
     return b;
   }
 
-  /** From the whole Triangle down to the mission's patch of sea: you are here. */
+  /** The map centred so that (lat, lon) sits right of the panel, at a whole zoom. */
+  frame(lat, lon, zoom) {
+    const shiftM = 0.17 * this.map.getSize().x * metresPerPixel({ getZoom: () => zoom }, lat);
+    this.map.setView(toLatLon(lat, lon, -shiftM, 0), zoom, { animate: false });
+  }
+
+  /**
+   * You are here: the whole Triangle with a pulsing mark where the mission is, then a quick
+   * cut to it. A cut, not a fly-in: zooming across seven levels draws every tile blown up
+   * before its own has loaded, which is what made the old fly-in blurry.
+   */
   arrive(lat, lon, zoom, then) {
     this.map.setView([26.5, -72.5], 5, { animate: false });
-    const shiftM = 0.17 * this.map.getSize().x * metresPerPixel({ getZoom: () => zoom }, lat);
-    const centre = toLatLon(lat, lon, -shiftM, 0);
-    this.later(400, () => this.map.flyTo(centre, zoom, { duration: 2.4 / this.speedUp }));
-    this.later(2900, then);
+    const pin = L.marker([lat, lon], {
+      interactive: false, icon: L.divIcon({ className: 'tut-pin', html: '<span></span>', iconSize: [30, 30], iconAnchor: [15, 15] }),
+    }).addTo(this.layers);
+    const box = this.map.getContainer();
+    this.later(1400, () => box.classList.add('tut-fade'));
+    this.later(1750, () => {
+      pin.remove();
+      this.frame(lat, lon, zoom);
+    });
+    this.later(2100, () => box.classList.remove('tut-fade'));
+    this.later(2300, then);
   }
 
   start() {
@@ -186,18 +232,15 @@ export class Tutorial {
   mission1() {
     this.clear();
     this.step = 1;
-    const [lat0, lon0] = [25.8, -79.62];                // in the Florida Current, off Miami
-    const current = [0, 1.2];
-    const wind = [-8, 0];
+    const { lat0, lon0, current, wind, T } = M1;
     const drift = driftOf(current, wind);
     const at = (e, n) => toLatLon(lat0, lon0, e, n);
     this.panel(1, 'Go with the flow',
       'Someone is in the water off Miami, in the <b>Florida Current</b>, the start of the Gulf Stream. '
       + 'What moves them? The <b style="color:#5aa9ff">current</b>, and a little of the <b style="color:#9ff0e0">wind</b>: '
       + 'a person floats low, so only about <b>2 %</b> of the wind’s speed pushes them.');
-    this.arrive(lat0 + 0.035, lon0, 12.5, () => {
+    this.arrive(lat0 + 0.039, lon0, 13, () => {
       const buoy = L.marker(at(0, 0), { icon: DOT('#ff4d6d', 16, 'them'), interactive: false }).addTo(this.layers);
-      const T = 2 * 3600;
       this.later(300, () => arrow(at(0, 0), at(current[0] * T, current[1] * T), '#5aa9ff', 'current 1.2 m/s: 8.6 km in 2 h').addTo(this.layers));
       this.later(1800, () => arrow(at(0, 0), at(-4000, 0), '#9ff0e0', 'wind 8 m/s from the east', 3, 'below').addTo(this.layers));
       this.later(3300, () => arrow(at(0, 0), at(drift[0] * T, drift[1] * T), '#ff8a3d', '<b>drift = current + 2 % of the wind</b>', 5, 'left').addTo(this.layers));
@@ -205,13 +248,14 @@ export class Tutorial {
         const trail = L.polyline([], { color: '#ff8a3d', weight: 3, dashArray: '2 6', interactive: false }).addTo(this.layers);
         const t0 = performance.now();
         const run = (now) => {
-          const u = Math.min(1, ((now - t0) / 4000) * this.speedUp);
+          const u = this.progress(now, t0, 4000);
           const p = at(drift[0] * T * u, drift[1] * T * u);
           buoy.setLatLng(p);
           trail.addLatLng(p);
           if (u < 1) this.raf = requestAnimationFrame(run);
           else {
-            this.say(`In 2 hours the sea carried them <b>${km(Math.hypot(...drift) * T)}</b>. Now go and get them.`);
+            this.say(`In 2 hours the sea carried them <b>${km(Math.hypot(...drift) * T)}</b>, right to the tip of the orange arrow. `
+              + 'The helicopter arrives now, and they are still drifting the same way. Go and get them.');
             this.next('Fly the helicopter →', () => this.mission1Fly());
           }
         };
@@ -222,28 +266,36 @@ export class Tutorial {
 
   mission1Fly() {
     this.clear();
-    const [lat0, lon0] = [25.8, -79.62];
-    const drift = driftOf([0, 1.2], [-8, 0]);
+    const { lat0, lon0, current, wind, T } = M1;
+    const drift = driftOf(current, wind);
     const at = (e, n) => toLatLon(lat0, lon0, e, n);
+    // They are where mission 1 left them, 2 h on, and keep drifting the same way.
+    const from = [drift[0] * T, drift[1] * T];
     this.panel(1, 'Catch the drifting buoy',
-      'Fly over them: point the mouse where you want to go (or use the arrow keys). '
+      'They are where the drift took them, and still drifting along the <b style="color:#ff8a3d">orange line</b>. '
+      + 'Fly over them: point the mouse where you want to go (or use the arrow keys). '
       + `<b>It flies like a real Coast Guard helicopter:</b> ${Math.round(SEARCH_SPEED_MS * 3.6)} km/h, `
-      + `and it banks round at ${Math.round(TURN_RATE_DEG_S)}° a second, so it cannot turn on the spot. Aim early, and pass right over them: it only sees a strip 185 m wide.`);
+      + `and it banks round at ${Math.round(TURN_RATE_DEG_S)}° a second, so it cannot turn on the spot. Aim ahead of them: it only sees a strip 185 m wide.`);
     const SPEED = 20 * this.speedUp;              // sim seconds per real second
     const LIMIT_S = 12 * 60;
-    let heli = { east: -2500, north: -3500, heading: 45 };
-    let target = [0, 0];
+    let heli = { east: from[0] - 2400, north: from[1] - 2800, heading: 20 };
+    let target = from;
     let t = 0;
-    const buoy = L.marker(at(0, 0), { icon: DOT('#ff4d6d', 16, 'them'), interactive: false }).addTo(this.layers);
+    // the 2 h they have drifted, and where the drift takes them next
+    L.polyline([at(0, 0), at(...from)], { color: '#ff8a3d', weight: 3, dashArray: '2 6', opacity: 0.6, interactive: false }).addTo(this.layers);
+    L.polyline([at(...from), at(from[0] + drift[0] * LIMIT_S, from[1] + drift[1] * LIMIT_S)],
+      { color: '#ff8a3d', weight: 4, opacity: 0.9, interactive: false }).addTo(this.layers);
+    const buoy = L.marker(at(...from), { icon: DOT('#ff4d6d', 16, 'them'), interactive: false }).addTo(this.layers);
     const strip = L.polyline([at(heli.east, heli.north)], { color: '#ffffff', opacity: 0.4, lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(this.layers);
     const icon = L.marker(at(heli.east, heli.north), { icon: heliIcon('#ffffff', 52), interactive: false, zIndexOffset: 1000 }).addTo(this.layers);
     const restyle = () => strip.setStyle({ weight: Math.max(2, 185.2 / metresPerPixel(this.map, lat0)) });
-    this.map.setView(at(-1200 - 0.17 * this.map.getSize().x * metresPerPixel({ getZoom: () => 13.5 }, lat0), -1500), 13.5, { animate: false });
+    const mid = at(from[0] - 1100, from[1] - 1100);
+    this.frame(mid[0], mid[1], 14);
     restyle();
     this.map.on('zoomend', restyle);
     this.flying = true;
     this.input = 'keys';
-    this.say('Move the mouse to steer. Find them before the clock runs out.');
+    this.say('Move the mouse to steer. Catch them before the clock runs out.');
     let last = performance.now();
     const tick = (now) => {
       if (!this.flying) return;
@@ -257,7 +309,7 @@ export class Tutorial {
       const prev = [heli.east, heli.north];
       heli = heliStep(heli, wanted, dt);
       t += dt;
-      target = [drift[0] * t, drift[1] * t];
+      target = [from[0] + drift[0] * t, from[1] + drift[1] * t];
       buoy.setLatLng(at(...target));
       const p = at(heli.east, heli.north);
       strip.addLatLng(p);
@@ -271,8 +323,8 @@ export class Tutorial {
         this.flying = false;
         this.map.off('zoomend', restyle);
         L.circle(at(...target), { radius: 300, color: '#04c951', weight: 3, fill: false }).addTo(this.layers);
-        this.say(`<b>Found them</b>, ${Math.round(t / 60)} minutes after you took off. That was the easy part: `
-          + 'you knew where they were. Next: how we work out where someone is.', 'ok');
+        this.say(`<b>Found them</b>, ${Math.round(t / 60)} minutes after you arrived, on the line the drift said they would be. `
+          + 'That was the easy part: we knew the current exactly. Next: what if we do not?', 'ok');
         this.next('Mission 2 →', () => this.mission2());
         return;
       }
@@ -303,89 +355,108 @@ export class Tutorial {
     };
     const frame3 = frame0.map((row) => row.map(([u, v]) => rot(u, v, -55)));
     const field = new GridField({ frames: [frame0, frame3] });
-    const start = [2600, -1300];
     this.panel(2, 'Read the sea between the dots',
-      'We never know the current everywhere. The US Navy’s ocean model gives it on a grid, '
-      + '<b>8 km apart</b>, and only <b>every 3 hours</b>. The buoy is between the dots and between the hours, '
-      + 'so we blend: <b>nearer dots count more</b>, and the hour in between is a mix of the two times.');
+      'We never know the current everywhere. The US Navy’s ocean model gives it only at these dots, '
+      + '<b>8 km apart</b>, and only <b>every 3 hours</b>. Watch the 12:00 map turn into the 15:00 one.');
     this.arrive(lat0, lon0, 12, () => {
       const nodes = L.layerGroup().addTo(this.layers);
       const blend = L.layerGroup().addTo(this.layers);
-      L.marker(at(...start), { icon: DOT('#ff4d6d', 14, 'the buoy'), interactive: false }).addTo(this.layers);
       const ARROW_S = 3 * 3600;
-      const t0 = performance.now();
-      const DUR = 7000;
-      const draw = (hours) => {
+      const drawNodes = (hours) => {
         nodes.clearLayers();
-        blend.clearLayers();
         for (const [x, y, i, j] of field.points()) {
           const [u, v] = field.node(i, j, hours);
           L.circleMarker(at(x, y), { radius: 6, color: '#fff', weight: 2, fillColor: '#5aa9ff', fillOpacity: 1, interactive: false }).addTo(nodes);
           arrow(at(x, y), at(x + u * ARROW_S, y + v * ARROW_S), '#5aa9ff', '', 3).addTo(nodes);
         }
-        const { i, j, fx, fy } = field.cell(...start);
-        const w = bilinearWeights(fx, fy);
-        const corners = [[i, j], [i + 1, j], [i, j + 1], [i + 1, j + 1]];
-        corners.forEach(([ci, cj], k) => {
-          const c = at(field.x0 + ci * field.dx, field.y0 + cj * field.dy);
-          L.polyline([at(...start), c], { color: '#fff', weight: 1 + 7 * w[k], opacity: 0.25 + 0.6 * w[k], dashArray: '4 6', interactive: false }).addTo(blend);
-          L.marker([(c[0] + at(...start)[0]) / 2, (c[1] + at(...start)[1]) / 2], { interactive: false, icon: L.divIcon({ className: 'tut-weight', html: `${Math.round(100 * w[k])} %`, iconSize: null }) }).addTo(blend);
-        });
-        const [u, v] = field.at(...start, hours);
-        arrow(at(...start), at(start[0] + u * ARROW_S, start[1] + v * ARROW_S), '#ff8a3d', 'blended here', 5).addTo(blend);
-        const hh = 12 + hours;
-        $('tutClock').textContent = `${Math.floor(hh)}:${String(Math.round((hh % 1) * 60) % 60).padStart(2, '0')}`;
-        this.say(`It is ${Math.floor(hh)}:${String(Math.round((hh % 1) * 60) % 60).padStart(2, '0')}: the 12:00 map counts `
-          + `<b>${Math.round(100 * (1 - hours / 3))} %</b>, the 15:00 map <b>${Math.round((100 * hours) / 3)} %</b>. `
-          + 'The lines show how much each dot counts at the buoy.');
+        $('tutClock').textContent = hhmm(hours);
       };
+      /** How the four dots round `pos` are blended at `hours`: a line and a share to each, and the result. */
+      const drawBlend = (pos, hours) => {
+        blend.clearLayers();
+        const { i, j, fx, fy } = field.cell(...pos);
+        const w = bilinearWeights(fx, fy);
+        [[i, j], [i + 1, j], [i, j + 1], [i + 1, j + 1]].forEach(([ci, cj], k) => {
+          const c = at(field.x0 + ci * field.dx, field.y0 + cj * field.dy);
+          const p = at(...pos);
+          L.polyline([p, c], { color: '#fff', weight: 1 + 7 * w[k], opacity: 0.25 + 0.6 * w[k], dashArray: '4 6', interactive: false }).addTo(blend);
+          L.marker([(2 * c[0] + p[0]) / 3, (2 * c[1] + p[1]) / 3], { interactive: false, icon: L.divIcon({ className: 'tut-weight', html: `${Math.round(100 * w[k])} %`, iconSize: null }) }).addTo(blend);
+        });
+        const [u, v] = field.at(...pos, hours);
+        arrow(at(...pos), at(pos[0] + u * ARROW_S, pos[1] + v * ARROW_S), '#ff8a3d', 'the blend', 5).addTo(blend);
+      };
+      // Keep the buoy inside the dots, half a km clear of the outer row.
+      const inside = ([e, n]) => [
+        Math.max(field.x0 + 500, Math.min(field.x0 + 2 * field.dx - 500, e)),
+        Math.max(field.y0 + 500, Math.min(field.y0 + 2 * field.dy - 500, n)),
+      ];
+      const t0 = performance.now();
       const run = (now) => {
-        const u = Math.min(1, ((now - t0) / DUR) * this.speedUp);
-        draw(3 * ease(u));
+        const u = this.progress(now, t0, 4500);
+        drawNodes(3 * ease(u));
         if (u < 1) this.raf = requestAnimationFrame(run);
-        else this.mission2Guess(field, start, at);
+        else this.later(600, explore);
+      };
+      const explore = () => {
+        drawNodes(0);
+        $('tutText').innerHTML = 'So what is the current <b>between</b> the dots? We blend the four around the spot: '
+          + '<b>the nearer a dot, the more it counts</b>. <b>Move your mouse</b> between the dots and watch the '
+          + '<b style="color:#ff8a3d">orange arrow</b>. Then <b>click to drop the buoy</b>.';
+        this.say('The % on each line is how much that dot counts here.');
+        let pos = [2600, -1300];
+        const buoy = L.marker(at(...pos), { icon: DOT('#ff4d6d', 14, 'the buoy'), interactive: false }).addTo(this.layers);
+        drawBlend(pos, 0);
+        this.move = (ll) => {
+          pos = inside(toMetres(lat0, lon0, ll.lat, ll.lng));
+          buoy.setLatLng(at(...pos));
+          drawBlend(pos, 0);
+        };
+        this.click = (ll) => {
+          this.move = null;
+          this.click = null;
+          pos = inside(toMetres(lat0, lon0, ll.lat, ll.lng));
+          buoy.remove();
+          driftAway(pos);
+        };
+      };
+      const driftAway = (pos) => {
+        $('tutText').innerHTML = 'The forecast follows the blend for 3 hours, the dots turning as the hours pass. '
+          + 'The real buoy feels the same sea, plus the small error every forecast has.';
+        const model = field.path(...pos, 3);
+        // the real buoy: the same field plus a small error that keeps pushing one way (D030's size)
+        const real = field.path(...pos, 3, { extra: [0.13, -0.18] });
+        const modelLine = L.polyline([], { color: '#ffffff', weight: 3, dashArray: '6 6', interactive: false }).addTo(this.layers);
+        const realLine = L.polyline([], { color: '#ff4d6d', weight: 4, interactive: false }).addTo(this.layers);
+        const fc = L.marker(at(...pos), { icon: DOT('#ffffff', 12), interactive: false }).addTo(this.layers);
+        const rb = L.marker(at(...pos), { icon: DOT('#ff4d6d', 14), interactive: false }).addTo(this.layers);
+        const t1 = performance.now();
+        const go = (now) => {
+          const u = this.progress(now, t1, 6000);
+          const k = Math.round(u * (model.length - 1));
+          const hours = (3 * k) / (model.length - 1);
+          drawNodes(hours);
+          drawBlend(model[k], hours);
+          modelLine.setLatLngs(model.slice(0, k + 1).map((p) => at(...p)));
+          realLine.setLatLngs(real.slice(0, k + 1).map((p) => at(...p)));
+          fc.setLatLng(at(...model[k]));
+          rb.setLatLng(at(...real[k]));
+          if (u < 1) {
+            this.raf = requestAnimationFrame(go);
+            return;
+          }
+          blend.clearLayers();
+          fc.setIcon(DOT('#ffffff', 12, 'our forecast'));
+          rb.setIcon(DOT('#ff4d6d', 16, 'the real buoy'));
+          const apart = Math.hypot(model.at(-1)[0] - real.at(-1)[0], model.at(-1)[1] - real.at(-1)[1]);
+          this.say(`Every blend done right, and after 3 hours the real buoy is still <b>${km(apart)}</b> from our forecast. `
+            + 'The model itself is a little wrong, by about 0.2 m/s, and the error keeps pushing the same way for hours. '
+            + 'Next: what we do about that.', 'ok');
+          this.next('Mission 3 →', () => this.mission3());
+        };
+        this.raf = requestAnimationFrame(go);
       };
       this.raf = requestAnimationFrame(run);
     });
-  }
-
-  mission2Guess(field, start, at) {
-    $('tutText').innerHTML = 'Your turn to forecast. The current turns as the hours pass. '
-      + '<b>Click on the map where you think the buoy will be at 15:00</b>, 3 hours from now.';
-    this.say('Click where it will be at 15:00.');
-    this.click = (ll) => {
-      this.click = null;
-      const guess = toMetres(...at(0, 0), ll.lat, ll.lng);
-      L.marker(ll, { icon: DOT('#ffffff', 12, 'your guess'), interactive: false }).addTo(this.layers);
-      const model = field.path(...start, 3);
-      // the real buoy: the same field plus a small error that keeps pushing one way (D030's size)
-      const real = field.path(...start, 3, { extra: [0.13, -0.18] });
-      const modelLine = L.polyline([], { color: '#ffffff', weight: 3, dashArray: '6 6', interactive: false }).addTo(this.layers);
-      const realLine = L.polyline([], { color: '#ff4d6d', weight: 4, interactive: false }).addTo(this.layers);
-      const t0 = performance.now();
-      const run = (now) => {
-        const u = Math.min(1, ((now - t0) / 3500) * this.speedUp);
-        const k = Math.round(u * (model.length - 1));
-        modelLine.setLatLngs(model.slice(0, k + 1).map((p) => at(...p)));
-        realLine.setLatLngs(real.slice(0, k + 1).map((p) => at(...p)));
-        if (u < 1) {
-          this.raf = requestAnimationFrame(run);
-          return;
-        }
-        const end = real[real.length - 1];
-        const mEnd = model[model.length - 1];
-        L.marker(at(...mEnd), { icon: DOT('#ffffff', 10, 'the model'), interactive: false }).addTo(this.layers);
-        L.marker(at(...end), { icon: DOT('#ff4d6d', 16, 'where it really went'), interactive: false }).addTo(this.layers);
-        const you = Math.hypot(guess[0] - end[0], guess[1] - end[1]);
-        const them = Math.hypot(mEnd[0] - end[0], mEnd[1] - end[1]);
-        this.say(`You were <b>${km(you)}</b> off; the model was <b>${km(them)}</b> off. `
-          + (you < them ? 'You beat the model! ' : '')
-          + 'Even with every blend done right, the model is wrong by a small speed, about 0.2 m/s, '
-          + 'that keeps pushing the same way for hours. That is the last thing to deal with.', you < them ? 'ok' : '');
-        this.next('Mission 3 →', () => this.mission3());
-      };
-      this.raf = requestAnimationFrame(run);
-    };
   }
 
   /* ------------------------------------------------------------ mission 3 */
@@ -397,57 +468,51 @@ export class Tutorial {
     const at = (e, n) => toLatLon(lat0, lon0, e, n);
     const T = 2 * 3600;
     this.panel(3, '10,000 guesses',
-      'So the forecast is a little wrong, and we do not know which way. Instead of one guess we make thousands, '
-      + 'each with its own small error, and search the <b>cloud</b>. But how big an error? '
-      + '<b>Set it with the slider</b>: catch at least 4 of the 5 real buoys, with a cloud small enough to search.');
-    this.arrive(lat0, lon0, 11.75, () => {
-      L.marker(at(0, 0), { icon: DOT('#ffffff', 12, 'the forecast, 2 h after the call'), interactive: false }).addTo(this.layers);
+      'The model is a little wrong, and we never know which way. So we run it 10,000 times, each with its own small '
+      + 'error, and search the whole <b>cloud</b>. <b>Drag the slider</b> to size the error: the dashed circle must catch '
+      + '<b>at least 4 of these 5 real buoys</b>, but stay small enough for one helicopter to search (<b>80 km²</b>).');
+    this.arrive(lat0, lon0, 12, () => {
       const cloudLayer = L.layerGroup().addTo(this.layers);
       const renderer = L.canvas({ padding: 0.2 });
+      const buoys = trialBuoys(T).map(([e, n]) => L.marker(at(e, n), { icon: DOT('#d8d8d8', 14), interactive: false }).addTo(this.layers));
+      L.marker(at(0, 0), { icon: DOT('#ffffff', 12, 'forecast'), interactive: false, zIndexOffset: 500 }).addTo(this.layers);
       const wrap = document.createElement('label');
       wrap.className = 'tut-slider';
       wrap.innerHTML = '<span>How wrong could the model be?</span><input type="range" id="tutSigma" min="0" max="100" value="12" />'
         + '<b id="tutSigmaVal"></b>';
       $('tutControls').append(wrap);
-      const go = this.next('Release the drifters', () => show(true));
+      let go = null;
       const sigmaOf = () => 0.02 * (40 ** (Number($('tutSigma').value) / 100));   // 0.02 to 0.8 m/s
-      const label = () => {
+      const draw = () => {
         const s = sigmaOf();
         $('tutSigmaVal').textContent = `${s.toFixed(2)} m/s, so up to about ${km(2.1 * s * T)} after 2 h`;
-      };
-      $('tutSigma').addEventListener('input', () => { label(); show(false); });
-      label();
-      const show = (reveal) => {
+        const j = judgeCloud(s, T);
         cloudLayer.clearLayers();
-        const j = judgeCloud(sigmaOf(), T);
         const [e, n] = j.cloud;
-        for (let k = 0; k < e.length; k += 1) {
+        for (let k = 0; k < e.length; k += 2) {
           L.circleMarker(at(e[k], n[k]), { renderer, radius: 1.6, stroke: false, fillColor: '#7fe6ff', fillOpacity: 0.55, interactive: false }).addTo(cloudLayer);
         }
         L.circle(at(0, 0), { radius: j.r90, color: '#fff', weight: 2, dashArray: '6 6', fill: false, interactive: false }).addTo(cloudLayer);
-        if (!reveal) {
-          this.say(`Cloud: <b>${Math.round(j.areaKm2)} km²</b> holds 90 % of the guesses. Release them to see the real buoys.`);
-          return;
+        buoys.forEach((b, k) => b.setIcon(DOT(j.caught[k] ? '#04c951' : '#ff4d6d', 14)));
+        const tally = `Caught <b>${j.hits} of 5</b> (need 4) · cloud <b>${Math.round(j.areaKm2)} km²</b> (limit 80). `;
+        if (j.verdict === 'small') {
+          this.say(`${tally}<br /><b>Too sure of itself:</b> the real buoys drift outside it. Make the error bigger.`, 'bad');
+        } else if (j.verdict === 'big') {
+          this.say(`${tally}<br /><b>Too vague:</b> far too much sea for one helicopter. Make it smaller.`, 'bad');
+        } else {
+          this.say(`${tally}<br /><b>Just right.</b> We sized ours the same way, on thousands of real drifting buoys: `
+            + `<b>${SIGMA_TRUE} m/s</b>, and 9 in 10 land inside the cloud.`, 'ok');
         }
-        j.buoys.forEach(([be, bn], k) => {
-          this.later(350 * (k + 1), () => {
-            L.marker(at(be, bn), { icon: DOT(j.caught[k] ? '#04c951' : '#ff4d6d', 14, j.caught[k] ? 'caught' : 'missed'), interactive: false }).addTo(cloudLayer);
-          });
-        });
-        this.later(350 * 6, () => {
-          if (j.verdict === 'small') {
-            this.say(`<b>Too sure of itself.</b> The cloud caught only ${j.hits} of the 5 buoys. A helicopter would search the wrong sea.`, 'bad');
-          } else if (j.verdict === 'big') {
-            this.say(`<b>Too vague.</b> It catches all ${j.hits}, but ${Math.round(j.areaKm2)} km² is far too much sea for one helicopter in 45 minutes.`, 'bad');
-          } else {
-            this.say(`<b>Just right:</b> ${j.hits} of 5 caught in ${Math.round(j.areaKm2)} km². We sized ours the same way, on `
-              + `thousands of real drifting buoys: <b>${SIGMA_TRUE} m/s</b>, and 9 in 10 land inside the cloud.`, 'ok');
-            go.remove();
-            this.next('Now the real search →', () => this.finish());
-          }
-        });
+        if (j.verdict === 'right' && !go) go = this.next('Now the real search →', () => this.finish());
+        if (j.verdict !== 'right' && go) { go.remove(); go = null; }
       };
-      show(false);
+      let queued = false;
+      $('tutSigma').addEventListener('input', () => {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => { queued = false; draw(); });
+      });
+      draw();
     });
   }
 }
