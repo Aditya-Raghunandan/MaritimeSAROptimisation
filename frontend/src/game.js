@@ -93,8 +93,11 @@ const AI_LABEL = { ppo: 'Telemachus (ML model)', greedy: 'Greedy search (no lear
 // stand. Unset, the game offers no email.
 const MAILER_URL = String(import.meta.env.VITE_MAILER_URL ?? '');
 // The open-day video plays when nobody has touched the stand for a while (Aditya, 12 Oct):
-// on these screens, after this long. Never in the middle of a flight or a replay.
-const IDLE_MS = { attract: 30_000, pick: 45_000, results: 45_000, tut: 60_000 };
+// on these screens, after this long, counted from the last touch or the last change of screen.
+// Never in the middle of a flight or a replay, and never on the results: the clock used to run
+// on from take-off, so the board vanished ~20 s after it appeared, before anyone had read it.
+// It stays until someone presses a button (Aditya, 14 Oct).
+const IDLE_MS = { attract: 30_000, pick: 45_000, tut: 60_000 };
 const DEMO_VIDEO = String(import.meta.env.VITE_DEMO_VIDEO ?? `${SHOWCASE_ROOT}/openday.mp4`);
 const MODES = { map: 'with the probability map', currents: 'with currents only' };
 const $ = (id) => document.getElementById(id);
@@ -224,6 +227,7 @@ function show(id) {
   if (game.screen === 'tut' && id !== 'tut') stopTutorial();
   if (game.screen === 'demo' && id !== 'demo') $('demoVideo').pause();
   game.screen = id;
+  touched();
   for (const s of document.querySelectorAll('.screen')) s.classList.toggle('on', s.id === id);
 }
 
@@ -497,6 +501,7 @@ function reveal() {
     }
   }
   for (const m of panels) m.invalidateSize();
+  loadBenchmark().catch(() => {});     // fetched while the replay plays, so the results open whole
   if (game.scenes) for (const s of game.scenes) s.destroy();
   const ai = aiOf(game.window, game.hours);
   $('aiTag').textContent = AI_LABEL[ai];
@@ -565,7 +570,7 @@ function revealTick(now) {
     // other panels follow the first), and leave it up long enough to look at.
     game.scenes[0].fitAll(WINDOW_S);
     game.revealing = false;
-    setTimeout(results, REVEAL_HOLD_MS / SPEED_UP);
+    game.holdTimer = setTimeout(results, REVEAL_HOLD_MS / SPEED_UP);
     return;
   }
   requestAnimationFrame(revealTick);
@@ -583,33 +588,119 @@ function arrivalAreaKm2(window) {
   return grid ? cloudAreaKm2(grid.mass, AREA_CELL_M) : NaN;
 }
 
+const WATER = { jet: 'The Gulf Stream', moderate: 'Moderate current', quiet: 'Quiet water' };
+
+/** 1st, 2nd, 3rd, 4th … 11th, 12th, 13th … 21st. */
+function ordinal(n) {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+}
+
+/** The big line on the results, and the sentence under it, by who the player beat. */
+function headline(v, aiName) {
+  const ai = `<span class="ai">${aiName === 'Telemachus' ? 'Telemachus' : 'the computer'}</span>`;
+  if (v.won) {
+    return { html: 'You win!', cls: 'win', why: `You searched more of the likely sea than both the Coast Guard and ${aiName}. Claim your prize!` };
+  }
+  if (v.beaten.includes(aiName)) {
+    return { html: `You beat ${ai}`, cls: 'close', why: 'But the Coast Guard’s pattern searched more. Beat both to win the prize.' };
+  }
+  if (v.beaten.length) {
+    return { html: 'So close!', cls: 'close', why: `You beat the Coast Guard, but not ${aiName}. Rematch?` };
+  }
+  return { html: `${ai} wins`, cls: '', why: `The Coast Guard and ${aiName} both searched more of the sea this time. Rematch?` };
+}
+
+/** 0 up to the score, quickly, the way a scoreboard does. */
+function countUp(el, to, ms = 1200) {
+  const t0 = performance.now();
+  const step = (now) => {
+    const k = Math.min(1, Math.max(0, (now - t0) / ms));
+    el.textContent = Math.round(to * (1 - (1 - k) ** 3)).toLocaleString('en-GB');
+    if (k < 1 && game.screen === 'results') requestAnimationFrame(step);
+    else el.textContent = to.toLocaleString('en-GB');
+  };
+  requestAnimationFrame(step);
+}
+
+function confetti() {
+  const box = document.createElement('div');
+  box.className = 'confetti';
+  const colours = ['#04c951', '#ffc24a', '#ff5a1f', '#ff6fb5', '#3fd0ff', '#ffffff'];
+  for (let i = 0; i < 90; i += 1) {
+    const c = document.createElement('i');
+    c.style.left = `${Math.random() * 100}%`;
+    c.style.background = colours[i % colours.length];
+    c.style.animationDuration = `${2.4 + 2 * Math.random()}s`;
+    c.style.animationDelay = `${0.8 * Math.random()}s`;
+    box.append(c);
+  }
+  $('results').append(box);
+  setTimeout(() => box.remove(), 5500);
+}
+
+/** The board for this mode: the top `shown`, and the player's own line below them if they are further down. */
+function renderBoard(shown) {
+  const s = standing(game.board ?? load(), game.mode, game.name, shown);
+  const line = (l, i) => `<li class="${l.you ? 'me' : ''}" style="--i:${i}"><span class="rank">${l.rank}</span>`
+    + `<span class="nm">${l.name}</span><span class="sc">${Number(l.score).toLocaleString('en-GB')}</span></li>`;
+  let html = s.lines.slice(0, shown).map(line).join('');
+  if (s.rank > shown) html += `${s.rank > shown + 1 ? '<li class="gap">⋯</li>' : ''}${line(s.lines[shown], shown + 1)}`;
+  $('boardNow').innerHTML = html || '<li class="empty">nobody yet</li>';
+  $('boardTitle').textContent = MODES[game.mode];
+  const where = KIOSK ? 'today' : 'on this computer';
+  $('boardYou').textContent = !s.rank ? ''
+    : s.rank === 1 ? (s.of > 1 ? `🏆 Top of the board, ahead of ${s.of - 1} ${s.of === 2 ? 'other' : 'others'}!` : '🏆 First on the board!')
+      : `${ordinal(s.rank)} of ${s.of} ${where}`;
+}
+
+/**
+ * As many of the top as fit beside everything else (nine on a tall screen, six on a 1366 x 768
+ * laptop), measured rather than guessed: the results never scroll. A phone scrolls, so it gets ten.
+ */
+function drawBoardNow() {
+  const res = $('results');
+  const last = res.querySelector('.res-side > :last-child');
+  const scrolls = window.matchMedia('(max-width: 900px)').matches;
+  for (let shown = scrolls ? 10 : 9; shown >= 3; shown -= 1) {
+    renderBoard(shown);
+    if (scrolls || last.offsetTop + last.offsetHeight <= res.clientHeight - 12) return;
+  }
+}
+
 async function results() {
+  clearTimeout(game.holdTimer);
   game.revealing = false;
   for (const f of game.flights) advance(f, WINDOW_S);
   const [you, cg, ai] = game.flights.map((f) => f.metrics());
-  const aiName = AI_NAME[aiOf(game.window, game.hours)];
+  const aiKey = aiOf(game.window, game.hours);
+  const aiName = AI_NAME[aiKey];
   const v = verdict({ pos: you.pos }, [{ name: 'the Coast Guard', pos: cg.pos }, { name: aiName, pos: ai.pos }]);
   const area = arrivalAreaKm2(game.window);
   const points = score(you.pos, area);
   game.result = { points, area };
-  $('verdict').textContent = v.won ? 'You win! Claim your prize.' : 'The search goes on…';
-  $('verdict').className = `verdict${v.won ? ' win' : ''}`;
-  $('verdictWhy').textContent = (v.won
-    ? `You searched more of the likely sea than both the Coast Guard and ${aiName}. ${points} points.`
-    : `${v.beaten.length ? `You beat ${v.beaten.join(' and ')}, but not` : 'You did not beat'} `
-      + `${['the Coast Guard', aiName].filter((n) => !v.beaten.includes(n)).join(' or ')}. ${points} points.`)
+  const h = headline(v, aiName);
+  $('resKicker').textContent = `${WATER[game.scenario.water] ?? game.scenario.water} · the helicopter ${arrivalLabel(game.hours)} after the call`;
+  $('verdict').innerHTML = h.html;
+  $('verdict').className = `verdict ${h.cls}`;
+  $('verdictWhy').textContent = h.why
     + (endedEarly() ? ` You ended the search with ${clock(WINDOW_S - game.player.until)} left on the clock.` : '');
-  const row = (name, m) => {
+  const best = Math.max(you.pos, cg.pos, ai.pos);
+  const row = (name, m, colour, cls = '') => {
     const t = m.target;
-    const buoy = t?.found ? `found at ${clock(t.foundS)}` : `missed by ${(t.closestM / 1000).toFixed(1)} km`;
-    return `<tr><td>${name}</td><td class="n">${pct(m.pos)}</td><td>${buoy}</td></tr>`;
+    const buoy = !t ? '' : t.found ? `✓ found them at ${clock(t.foundS)}` : `✗ missed by ${(t.closestM / 1000).toFixed(1)} km`;
+    return `<tr class="${cls}"><td class="who">${name}${m.pos === best ? '<span class="best">BEST</span>' : ''}</td>`
+      + `<td class="barcell"><div class="bar"><i style="width:${(100 * m.pos).toFixed(1)}%;background:${colour}"></i></div></td>`
+      + `<td class="pos">${pct(m.pos)}</td><td class="found${t?.found ? ' yes' : ''}">${buoy}</td></tr>`;
   };
-  $('scoreTable').innerHTML = '<tr><th></th><th>Searched</th><th>The real person</th></tr>'
-    + row(`You (${game.name})`, you) + row('Coast Guard', cg) + row(AI_LABEL[aiOf(game.window, game.hours)], ai);
-  $('pointsWhy').textContent = `This cloud covered ${Math.round(area)} km² when the helicopter arrived. `
-    + `On a cloud that big the Coast Guard's pattern searches about ${Math.round(100 * par(area))} % of it on average, `
-    + 'and that is worth 1,000 points; you score the same share of 1,000 for what you searched. A bigger '
-    + 'cloud is harder, so the same share is worth more on it.';
+  $('scoreTable').innerHTML = '<tr><th></th><th colspan="2">Searched</th><th>The real person</th></tr>'
+    + row(`You (${game.name})`, you, '#ffffff', 'you')
+    + row('Coast Guard', cg, SEARCHER_INFO[CG].colour)
+    + row(AI_LABEL[aiKey], ai, SEARCHER_INFO[aiKey].colour);
+  $('pointsWhy').textContent = `This cloud covered ${Math.round(area)} km² when the helicopter arrived. On a cloud `
+    + `that big the Coast Guard's pattern searches about ${Math.round(100 * par(area))} % on average: that is 1,000 points, `
+    + 'and you score the same share of 1,000 for what you searched. A bigger cloud is harder, so it pays more.';
   $('aiWords').innerHTML = aiWords(game.window, game.hours);
 
   if (!game.saved) {
@@ -625,11 +716,12 @@ async function results() {
     game.board = list;
     if (!saved) $('status').textContent = 'this browser would not save the board';
   }
-  $('boardTitle').textContent = `The board, ${MODES[game.mode]}`;
-  $('boardNow').innerHTML = top(game.board ?? load(), game.mode, 8)
-    .map((e) => `<li><span>${e.name}</span><span>${e.score}</span></li>`).join('');
+  const wasOn = game.screen === 'results';
   show('results');
-  benchmark();
+  drawBoardNow();
+  countUp($('pointsBig'), points);
+  if (v.won && !wasOn) confetti();
+  benchmark().then(drawBoardNow);      // its rows change the room the board has
   offerEmail();
 }
 
@@ -704,12 +796,16 @@ async function benchmark() {
     const rows = (b.scenarios55 ?? b).filter((r) => r.noise === game.noise && r.arrival_h === game.hours)
       .sort((x, y) => y.pos - x.pos);
     game.benchRows = rows;
-    $('benchNote').textContent = `Over all ${rows[0]?.n_groups ?? 55} buoys, the helicopter arriving ${arrivalLabel(game.hours)} after the call:`;
-    $('benchTable').innerHTML = '<tr><th>Searcher</th><th>Searched, on average</th><th>Found the person</th></tr>'
-      + rows.map((r) => `<tr><td>${SEARCHER_INFO[r.searcher]?.label ?? r.searcher}</td>`
-        + `<td class="n">${pct(r.pos)}</td><td class="n">${pct(r.found)}</td></tr>`).join('');
+    $('benchNote').textContent = `all ${rows[0]?.n_groups ?? 55} buoys, the helicopter ${arrivalLabel(game.hours)} after the call`;
+    $('benchTable').innerHTML = '<tr><th>Searcher</th><th>Searched, on average</th><th class="n">Found them</th></tr>'
+      + rows.map((r) => {
+        const info = SEARCHER_INFO[r.searcher];
+        return `<tr><td>${info?.label ?? r.searcher}</td><td><div class="pbar"><div class="bar sm">`
+          + `<i style="width:${(100 * r.pos).toFixed(1)}%;background:${info?.colour ?? '#8a8a80'}"></i></div>`
+          + `<span>${pct(r.pos)}</span></div></td><td class="n">${pct(r.found)}</td></tr>`;
+      }).join('');
   } catch {
-    $('benchNote').textContent = 'The benchmark across every buoy is not published yet.';
+    $('benchNote').textContent = 'not published yet';
   }
 }
 
@@ -725,7 +821,10 @@ function exportBoard() {
 /* ---------------------------------------------------------------- wiring */
 
 async function main() {
-  if (KIOSK) document.body.classList.add('kiosk');
+  if (KIOSK) {
+    document.body.classList.add('kiosk');
+    $('againBtn').textContent = 'Next player';
+  }
   // The start screen shows at once, but its two play buttons wait (disabled in the HTML) for
   // the list of buoys: a click before it arrived used to be lost (14 Oct, live: up to a second
   // on good Wi-Fi, longer at a venue).
