@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  GAME_AREA_KM2, OLD_STORAGE_KEY, STORAGE_KEY, add, cloudAreaKm2, load, nickname, par, rescore, score, top, verdict,
+  GAME_AREA_KM2, OLD_STORAGE_KEY, STORAGE_KEY, add, cloudAreaKm2, load, nickname, par, rescore, score, standing, top,
+  verdict,
 } from '../src/leaderboard.js';
 
 function memory() {
@@ -91,6 +92,25 @@ describe('the board', () => {
     ];
     expect(top(list, 'map').map((e) => [e.name, e.score])).toEqual([['aditya ', 437], ['Sune', 420]]);
     expect(top(list, 'currents')).toHaveLength(1);
+  });
+
+  it('says where a player stands, for the email', () => {
+    const list = [
+      { name: 'Ada', mode: 'map', score: 1200, when: '1' },
+      { name: 'Bo', mode: 'map', score: 900, when: '2' },
+      { name: 'ada', mode: 'map', score: 1000, when: '3' },
+      { name: 'Cy', mode: 'map', score: 800, when: '4' },
+      { name: 'Di', mode: 'currents', score: 2000, when: '5' },
+    ];
+    const first = standing(list, 'map', 'ADA ');
+    expect([first.rank, first.of]).toEqual([1, 3]);
+    expect(first.lines.map((l) => [l.rank, l.name, l.score, l.you]))
+      .toEqual([[1, 'Ada', 1200, true], [2, 'Bo', 900, false], [3, 'Cy', 800, false]]);
+    const low = standing(list, 'map', 'Cy', 2);
+    expect(low.rank).toBe(3);
+    expect(low.lines.map((l) => [l.rank, l.you])).toEqual([[1, false], [2, false], [3, true]]);
+    expect(standing(list, 'currents', 'Di').of).toBe(1);
+    expect(standing([], 'map', 'Nobody')).toEqual({ rank: 0, of: 0, lines: [] });
   });
 
   it('survives storage that refuses or holds rubbish', () => {

@@ -35,6 +35,21 @@ export class Limits {
 }
 
 const num = (x, lo, hi) => typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi;
+const whole = (x, lo, hi) => num(x, lo, hi) && Number.isInteger(x);
+const ARRIVAL_RE = /^(\d{1,2} min|\d{1,2}(\.\d{1,2})? h)$/;
+
+/**
+ * Where the player stands on the board of the computer they played on, or null: a bad board
+ * costs the email its board section, never the email.
+ */
+function boardOf(b) {
+  if (!b || typeof b !== 'object' || !whole(b.of, 1, 100_000) || !whole(b.rank, 1, b.of)) return null;
+  const lines = Array.isArray(b.lines)
+    ? b.lines.slice(0, 6).filter((l) => l && whole(l.rank, 1, b.of) && typeof l.name === 'string' && num(l.score, 0, 100_000))
+      .map((l) => ({ rank: l.rank, name: l.name.slice(0, 16), score: Math.round(l.score), you: l.rank === b.rank }))
+    : [];
+  return { rank: b.rank, of: b.of, mode: b.mode === 'currents' ? 'currents' : 'map', lines };
+}
 
 function searcher(s, name) {
   if (!s || !num(s.pos, 0, 1)) throw new Error(`${name}.pos must be a share between 0 and 1`);
@@ -76,6 +91,8 @@ export function validate(body) {
     beatAi: you.pos > ai.pos,
     beatCg: you.pos > cg.pos,
     bench,
+    arrival: typeof body.arrival === 'string' && ARRIVAL_RE.test(body.arrival) ? body.arrival : null,
+    board: boardOf(body.board),
     image,
   };
 }

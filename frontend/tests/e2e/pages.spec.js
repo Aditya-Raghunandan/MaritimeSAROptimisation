@@ -399,6 +399,53 @@ test.describe('the open-day game', () => {
     expect(errors).toEqual([]);
   });
 
+  test('ends the search early on its button, and says so', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=4');
+    await page.click('#searchBtn');
+    await page.click('#surprise');
+    await page.fill('#name', 'Quitter');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await expect(page.locator('#endBtn')).toBeHidden();             // not before take-off
+    await page.keyboard.down('ArrowUp');
+    await expect(page.locator('#endBtn')).toBeVisible();
+    await expect(page.locator('#hudTime')).not.toHaveText(/^4[45]:/, { timeout: 10_000 });
+    await page.keyboard.up('ArrowUp');
+    await expectFits(page);
+    await page.click('#endBtn');
+    await expect(page.locator('#reveal')).toHaveClass(/on/);
+    await expect(page.locator('#revealNote')).toContainText('You ended your search with');
+    await page.click('#skipBtn');
+    await expect(page.locator('#results')).toHaveClass(/on/);
+    await expect(page.locator('#verdictWhy')).toContainText('left on the clock');
+    await expect(page.locator('#boardNow')).toContainText('Quitter');
+    expect(errors).toEqual([]);
+  });
+
+  test('the start buttons wait for the buoys, and the kiosk has no links off the game', async ({ page }) => {
+    const errors = collectErrors(page);
+    let release;
+    const held = new Promise((r) => { release = r; });
+    await serveFixture(page);
+    // Registered last, so asked first: hold the list of buoys back, then hand it on.
+    await page.route(/scenarios\/v\d\/index\.json/, async (route) => { await held; await route.fallback(); });
+    await page.goto('game.html?kiosk=1');
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    await expect(page.locator('#startBtn')).toBeDisabled();
+    await expect(page.locator('#searchBtn')).toBeDisabled();
+    await expect(page.locator('#status')).toHaveText('loading the buoys…');
+    await expect(page.locator('header nav')).toBeHidden();
+    release();
+    await expect(page.locator('#searchBtn')).toBeEnabled();
+    await expect(page.locator('#status')).toHaveText('');
+    await page.click('#searchBtn');
+    await expect(page.locator('#pick')).toHaveClass(/on/);
+    expect(errors).toEqual([]);
+  });
+
   test('still plays from a data root that only has the older v1 bundles', async ({ page }) => {
     test.setTimeout(60_000);
     const errors = collectErrors(page);

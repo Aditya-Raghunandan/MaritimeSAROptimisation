@@ -104,6 +104,25 @@ describe('a player', () => {
     expect(f.pose(12).heading).toBeCloseTo(12 * f.turnRateDegS, 9);
   });
 
+  it('ends the search early: the minute in progress is scored whole, nothing after it', () => {
+    const f = new PlayerFlight(window(), { heading: 90 });
+    f.advanceTo(125);
+    f.stop();
+    expect(f.until).toBe(180);
+    expect(f.ep.k).toBe(3);
+    const pos = f.metrics().pos;
+    const { offset } = f.pose(180);
+    f.advanceTo(45 * 60);
+    expect(f.ep.k).toBe(3);
+    expect(f.metrics().pos).toBe(pos);
+    expect(f.pose(600).offset).toEqual(offset);       // it stays put, about the drifting marker
+    expect(f.preview(600)).toHaveLength(1);
+    const onTheMinute = new PlayerFlight(window(), { heading: 90 });
+    onTheMinute.advanceTo(120);
+    onTheMinute.stop();
+    expect(onTheMinute.until).toBe(120);
+  });
+
   it('holds a heading for one leg, and flies a minute at a time', () => {
     const f = new PlayerFlight(window(), { heading: 90 });
     f.advanceTo(SAMPLE_S * 3);

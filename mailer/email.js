@@ -20,6 +20,40 @@ const clock = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStar
 /** How the computer's searcher is named in a row: the trained model, or greedy, which does not learn. */
 const tag = (name) => (name === 'Telemachus' ? 'Telemachus (ML model)' : 'The greedy search');
 
+const ordinal = (n) => {
+  const v = n % 100;
+  const s = ['th', 'st', 'nd', 'rd'];
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+};
+const BOARD_MODE = { map: 'with the probability map', currents: 'with currents only' };
+
+/** Where the player stands on the board, in words (plain text, not escaped), or null with no board. */
+export function standingWords(board) {
+  if (!board) return null;
+  if (board.rank === 1) {
+    return board.of === 1 ? 'You are the first name on the board.'
+      : `You are top of the board right now, ahead of ${board.of - 1} other player${board.of > 2 ? 's' : ''}.`;
+  }
+  const leader = board.lines.find((l) => l.rank === 1);
+  const you = board.lines.find((l) => l.you);
+  const head = `You are ${ordinal(board.rank)} of ${board.of} on the board right now`;
+  if (!leader || !you) return `${head}.`;
+  const gap = leader.score - you.score;
+  return gap > 0 ? `${head}, ${gap.toLocaleString('en-GB')} points behind ${leader.name}.` : `${head}, level with ${leader.name}.`;
+}
+
+/** The board's lines as table rows, the player's highlighted, with a gap row before theirs if it is further down. */
+function boardRows(board) {
+  return board.lines.map((l, i) => {
+    const gap = i > 0 && l.rank > board.lines[i - 1].rank + 1
+      ? '<tr><td colspan="3" style="padding:2px 10px;color:#7f93a8;">…</td></tr>' : '';
+    return `${gap}<tr style="${l.you ? 'background:#16314d;' : ''}">
+      <td style="padding:7px 10px;color:#9fb3c8;width:34px;">${l.rank}.</td>
+      <td style="padding:7px 0;color:#ffffff;${l.you ? 'font-weight:700;' : ''}">${escapeHtml(l.name)}${l.you ? ' (you)' : ''}</td>
+      <td align="right" style="padding:7px 10px;color:#ffc24a;font-weight:700;">${l.score.toLocaleString('en-GB')}</td></tr>`;
+  }).join('');
+}
+
 /** The headline and the line under it, by who the player beat. */
 export function verdictOf(r) {
   const ai = r.ai.name;
@@ -73,6 +107,8 @@ function bar(label, s, colour, max, bold) {
  */
 export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = 'flight') {
   const v = verdictOf(r);
+  const standing = standingWords(r.board);
+  const subject = r.board?.rank === 1 && r.board.of > 1 ? `${v.subject} · top of the board!` : v.subject;
   const name = escapeHtml(r.name || 'Player');
   const ai = escapeHtml(r.ai.name);
   const max = Math.max(r.you.pos, r.cg.pos, r.ai.pos, 0.01);
@@ -125,12 +161,19 @@ export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = '
       </td></tr>
     </table>
   </td></tr>
+  ${r.board ? `<tr><td style="padding:18px 28px 4px;">
+    <div style="color:#ffffff;font-size:18px;font-weight:700;">\u{1F3C6} The leaderboard <span style="color:#9fb3c8;font-size:14px;font-weight:400;">(${BOARD_MODE[r.board.mode]})</span></div>
+    <div style="color:#d3dde8;font-size:15px;line-height:1.5;margin:4px 0 8px;">${escapeHtml(standing)}</div>
+    ${r.board.lines.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b2238;border-radius:12px;font-size:15px;">
+      ${boardRows(r.board)}
+    </table>` : ''}
+  </td></tr>` : ''}
   <tr><td style="padding:16px 28px 0;color:#d3dde8;font-size:14px;line-height:1.55;">
     <b style="color:#ffffff;">What "searched" means.</b> It is the share of the 10,000 possible positions your
     strip passed over. If our drift model is right, a search that covers 60 % finds the person about 6 times in 10.
   </td></tr>
   ${bench.length ? `<tr><td style="padding:14px 28px 0;color:#d3dde8;font-size:14px;line-height:1.55;">
-    <b style="color:#ffffff;">Across all 55 real buoys we tested</b> (helicopter arriving 2 hours after the call):
+    <b style="color:#ffffff;">Across all 55 real buoys we tested</b>${r.arrival ? ` (helicopter arriving ${escapeHtml(r.arrival)} after the call)` : ''}:
     ${bench.map((b) => `${escapeHtml(b.label)} ${pct(b.pos)}`).join(' · ')}.
   </td></tr>` : ''}
   <tr><td style="padding:22px 28px 8px;">
@@ -152,9 +195,11 @@ export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = '
     `The Coast Guard's pattern: searched ${pct(r.cg.pos)}, ${personWords(r.cg)}`,
     `${tag(r.ai.name)}: searched ${pct(r.ai.pos)}, ${personWords(r.ai)}`, '',
     `${r.points} points. The sea you had to search was ${Math.round(r.areaKm2)} km2, about ${pitches} football pitches.`,
+    ...(standing ? ['', `The leaderboard (${BOARD_MODE[r.board.mode]}): ${standing}`,
+      ...r.board.lines.map((l) => `${l.rank}. ${l.name}${l.you ? ' (you)' : ''}  ${l.score}`)] : []),
     voteUrl ? `Vote for us: ${voteUrl}` : '', gameUrl ? `Play again: ${gameUrl}` : '', '',
     'Aditya Raghunandan and Suné Toerien, ELEN4012, Wits EIE. We used your email address once and kept nothing.',
   ].filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n');
 
-  return { subject: v.subject, html, text };
+  return { subject, html, text };
 }
