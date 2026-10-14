@@ -1,7 +1,7 @@
 /**
  * preview.js -- writes the four versions of the email (beat both, beat the ML model only, beat the
  * Coast Guard only, beat neither) as HTML files to look at in a browser, with an optional
- * picture: node test/preview.js [out-dir] [image.png|jpg]
+ * picture and a board: node test/preview.js [out-dir] [image.png|jpg]
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -27,6 +27,11 @@ for (const [name, p] of Object.entries(cases)) {
     ai: { pos: p.ai, found: true, foundS: 605, name: 'Telemachus' },
     bench: [{ label: 'Parallel Track', pos: 0.493 }, { label: 'Expanding Square', pos: 0.486 },
       { label: 'Telemachus (ML model)', pos: 0.438 }],
+    arrival: '30 min',
+    // top of the board when they beat both, further down otherwise
+    board: name === 'both'
+      ? { rank: 1, of: 14, mode: 'map', lines: [[1, 'Ada', 1184], [2, 'Thabo', 1102], [3, 'Lerato', 1040], [4, 'Sam', 998], [5, 'Kim', 951]].map(([rank, n, score]) => ({ rank, name: n, score })) }
+      : { rank: 9, of: 14, mode: 'map', lines: [[1, 'Thabo', 1102], [2, 'Lerato', 1040], [3, 'Sam', 998], [4, 'Kim', 951], [5, 'Jo', 930], [9, 'Ada', Math.round(1000 * p.you / 0.49)]].map(([rank, n, score]) => ({ rank, name: n, score })) },
   });
   const { subject, html } = buildResultEmail(r, {
     gameUrl: 'https://aditya-raghunandan.github.io/MaritimeSAROptimisation/game.html',

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildResultEmail, escapeHtml, verdictOf } from '../email.js';
+import { buildResultEmail, escapeHtml, standingWords, verdictOf } from '../email.js';
 import { corsHeaders, handleSend, Limits, validate } from '../handler.js';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -98,4 +98,37 @@ test('CORS lets the game site in and nobody else by name', () => {
     'https://aditya-raghunandan.github.io');
   assert.equal(corsHeaders('https://evil.example', {})['Access-Control-Allow-Origin'],
     'https://aditya-raghunandan.github.io');
+});
+
+test('the email says where the player stands on the board, and the arrival', () => {
+  const board = (rank, of, lines) => ({ rank, of, mode: 'map', lines });
+  const line = (rank, name, score, you = false) => ({ rank, name, score, you });
+  const top = validate(sample({ arrival: '30 min', board: board(1, 4, [line(1, 'Ada', 1204, true), line(2, 'Bo', 990)]) }));
+  const first = buildResultEmail(top, { gameUrl: 'https://x.example/game.html' });
+  assert.match(first.subject, /top of the board!$/);
+  assert.ok(first.html.includes('You are top of the board right now, ahead of 3 other players.'));
+  assert.ok(first.html.includes('Ada (you)') && first.html.includes('1,204'));
+  assert.ok(first.html.includes('helicopter arriving 30 min after the call'));
+  assert.ok(first.text.includes('1. Ada (you)  1204'));
+
+  const fourth = validate(sample({
+    board: board(7, 9, [line(1, '<b>Zed</b>', 1500), line(2, 'Bo', 1400), line(7, 'Ada', 1100, true)]),
+  }));
+  const behind = buildResultEmail(fourth, {});
+  assert.ok(behind.html.includes('You are 7th of 9 on the board right now, 400 points behind &lt;b&gt;Zed&lt;/b&gt;.'));
+  assert.ok(!behind.html.includes('<b>Zed</b>'));
+  assert.ok(behind.html.includes('…'));
+  assert.doesNotMatch(behind.subject, /top of the board/);
+  assert.equal(standingWords(validate(sample({ board: board(1, 1, [line(1, 'Ada', 900, true)]) })).board),
+    'You are the first name on the board.');
+});
+
+test('validate drops a bad board or arrival instead of refusing the email', () => {
+  const r = validate(sample({ arrival: '<script>', board: { rank: 5, of: 3, lines: [] } }));
+  assert.equal(r.arrival, null);
+  assert.equal(r.board, null);
+  const lines = validate(sample({ board: { rank: 1, of: 2, mode: 'x', lines: [{ rank: 1, name: 'A', score: 'lots' }, { rank: 2, name: 'B', score: 5 }] } })).board;
+  assert.equal(lines.mode, 'map');
+  assert.deepEqual(lines.lines, [{ rank: 2, name: 'B', score: 5, you: false }]);
+  assert.ok(!buildResultEmail(validate(sample()), {}).html.includes('The leaderboard'));
 });
