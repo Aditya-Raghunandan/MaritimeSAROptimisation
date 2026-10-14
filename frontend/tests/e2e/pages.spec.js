@@ -428,6 +428,37 @@ test.describe('the open-day game', () => {
     expect(errors).toEqual([]);
   });
 
+  test('the results stay up until someone presses a button; the start screen still falls back to the video', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await page.clock.install();
+    await serveFixture(page);
+    await page.goto('game.html?speed=20&kiosk=1');
+    await page.click('#searchBtn');
+    await page.click('#surprise');
+    await page.fill('#name', 'Reader');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowUp');
+    await expect(page.locator('#endBtn')).toBeVisible();
+    await page.keyboard.up('ArrowUp');
+    await page.click('#endBtn');
+    await page.click('#skipBtn');
+    await expect(page.locator('#results')).toHaveClass(/on/);
+    await expect(page.locator('#boardNow li.me')).toContainText('Reader');
+    await expect(page.locator('#boardYou')).toContainText('First on the board');
+    await expect(page.locator('#againBtn')).toHaveText('Next player');
+    await expectFits(page);
+    // Nobody touches it for five minutes: it used to be the video after ~20 s.
+    await page.clock.fastForward('05:00');
+    await expect(page.locator('#results')).toHaveClass(/on/);
+    await page.click('#againBtn');
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    await page.clock.fastForward('01:00');
+    await expect(page.locator('#demo')).toHaveClass(/on/);
+    expect(errors.filter((e) => !/media|video|webm|mp4/i.test(e))).toEqual([]);
+  });
+
   test('the start buttons wait for the buoys, and the kiosk has no links off the game', async ({ page }) => {
     const errors = collectErrors(page);
     let release;
