@@ -6,13 +6,13 @@
     <title>Survive the Triangle</title>
     <style>
       :root {
-        --surface-0: #121211;
-        --surface-1: #1a1a19;
-        --surface-2: #262624;
+        --surface-0: #051321;
+        --surface-1: #0a1f36;
+        --surface-2: #11304f;
         --ink: #ffffff;
-        --ink-2: #c3c2b7;
-        --ink-3: #8a8a80;
-        --line: #3a3a37;
+        --ink-2: #c3d2e0;
+        --ink-3: #8aa2ba;
+        --line: #1d4466;
         --accent: #3987e5;
         --win: #04c951;
         --warm: #eb6834;
@@ -36,6 +36,25 @@
       button { font: inherit; color: var(--ink); cursor: pointer; }
       button:disabled { opacity: 0.5; cursor: progress; }
       body.kiosk header nav { display: none; }
+      /* the sea (sea.js): the dark map's water made see-through and its land green, over our own blue */
+      .sea-land { filter: url(#landOnly); }
+      #pickMap, #flyMap, #tutMap, .panel .map { background: #0a3358 !important; }
+      #pickMap::after, #flyMap::after, #tutMap::after, .panel .map::after {
+        content: ''; position: absolute; inset: 0; z-index: 450; pointer-events: none;
+        box-shadow: inset 0 0 140px 30px rgba(2, 12, 28, 0.55);
+      }
+      /* a controller: the highlight it moves, and the button glyphs it uses */
+      body.pad-mode .pad-focus {
+        outline: 3px solid #ffc24a !important; outline-offset: 3px;
+        box-shadow: 0 0 0 7px #ffc24a2e, 0 0 26px #ffc24acc !important;
+      }
+      .pad-chip { font-size: 12px; font-weight: 700; color: #ffc24a; border: 1px solid #ffc24a66; border-radius: 999px; padding: 2px 10px; }
+      .pad-only { display: none; }
+      body.pad-mode .pad-only { display: inline; }
+      .glyph { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; margin-left: 8px;
+        background: #ffffff1f; font-size: 13px; font-weight: 800; vertical-align: 1px; }
+      .namerow { display: flex; gap: 6px; }
+      .namerow .ghost { padding: 6px 10px; font-size: 16px; }
       .big {
         background: var(--accent); border: 0; border-radius: 10px; padding: 12px 26px;
         font-size: 18px; font-weight: 600;
@@ -256,9 +275,21 @@
     </style>
   </head>
   <body>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <filter id="landOnly" color-interpolation-filters="sRGB">
+        <!-- alpha from brightness: the dark map's water (35, 34, 39: luminance 0.135) and the flat
+             grey it sends for some open-sea tiles (~51: 0.20) to 0, its land (65-78: 0.26-0.30)
+             to 1, the coastline's anti-aliasing in between -->
+        <feColorMatrix type="matrix" values="0.80 0    0    0 0.05
+                                             0    1.00 0    0 0.07
+                                             0    0    0.70 0 0.02
+                                             4.68 15.73 1.59 0 -4.62" />
+      </filter>
+    </svg>
     <header>
       <h1>Can you survive the Bermuda Triangle?</h1>
       <span class="muted" id="status"></span>
+      <span class="pad-chip" id="padChip" hidden>🎮 Controller ready · ✕ choose · ○ back</span>
       <nav><a href="./bench.html">the scenarios</a><a href="./index.html">the map</a></nav>
     </header>
 
@@ -266,7 +297,7 @@
       <div class="demo-frame">
         <div class="demo-bar">
           <b>Humans vs ML</b><span class="muted">our project in five minutes</span>
-          <button class="big" id="demoPlay">Play the game</button>
+          <button class="big" id="demoPlay">Play the game<span class="glyph pad-only">✕</span></button>
           <button class="ghost" id="demoClose" aria-label="Close the video">✕ Close</button>
         </div>
         <video id="demoVideo" muted playsinline controls></video>
@@ -290,6 +321,7 @@
           <button class="ghost" id="searchBtn" disabled>Skip to the search</button>
           <button class="ghost" id="demoBtn">▶ Watch the video</button>
         </div>
+        <p class="small" style="margin:12px 0 0">🎮 Got a controller? Press ✕ on it, then the stick or d-pad and ✕ work every menu.</p>
       </div>
       <div class="att-side">
         <div class="boards">
@@ -309,7 +341,7 @@
         <div id="tutControls" class="tut-controls"></div>
       </div>
       <div class="tut-corner">
-        <button class="ghost" id="tutSkip">Skip this mission</button>
+        <button class="ghost" id="tutSkip">Skip this mission<span class="glyph pad-only">○</span></button>
         <button class="ghost" id="tutSkipAll">Skip to the real search</button>
       </div>
     </section>
@@ -329,7 +361,7 @@
           <div class="seg" id="arrivalSeg"></div>
           <div class="muted" id="arrivalNote">Sooner is easier: the cloud has had less time to spread.</div>
         </div>
-        <div><b>4. Your name for the board</b><input type="text" id="name" maxlength="16" placeholder="Player" /></div>
+        <div><b>4. Your name for the board</b><div class="namerow"><input type="text" id="name" maxlength="16" placeholder="Player" /><button class="ghost" id="nameDice" title="Pick a name for me" aria-label="Pick a name for me">🎲</button></div></div>
         <button class="big" id="goBtn" disabled>Fly</button>
       </aside>
     </section>
@@ -341,12 +373,12 @@
         <div class="card" id="hudPosCard"><b id="hudPos">0 %</b><span class="muted">searched</span></div>
       </div>
       <div class="hint" id="hint">Point with the mouse where you want to fly and click to take off.</div>
-      <button class="ghost end-btn" id="endBtn" hidden>End the search now</button>
+      <button class="ghost end-btn" id="endBtn" hidden>End the search now<span class="glyph pad-only">△</span></button>
     </section>
 
     <section class="screen" id="reveal">
       <div class="bar"><b>Same sea, same 45 minutes, three searchers.</b><span class="muted" id="revealNote"></span>
-        <button class="ghost" id="skipBtn" style="margin-left:auto">Skip to the results</button></div>
+        <button class="ghost" id="skipBtn" style="margin-left:auto">Skip to the results<span class="glyph pad-only">✕</span></button></div>
       <div class="panels">
         <div class="panel"><div class="map" id="mapYou"></div><div class="tag"><span>You</span><b id="posYou">0 %</b></div></div>
         <div class="panel"><div class="map" id="mapCg"></div><div class="tag"><span>Coast Guard (Expanding Square)</span><b id="posCg">0 %</b></div></div>

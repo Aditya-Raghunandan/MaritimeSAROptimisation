@@ -26,6 +26,8 @@ import L from 'leaflet';
 import { heliIcon } from './scene.js';
 import { bearing } from './kinematics.js';
 import { esriTiles } from './tiles.js';
+import { BUTTONS, DIRECTIONS, firstPad, padHeading, padStick } from './gamepad.js';
+import { addSea } from './sea.js';
 import { SEARCH_SPEED_MS, TURN_RATE_DEG_S } from './platform.js';
 import {
   GridField, HALF_STRIP_M, SIGMA_TRUE, bilinearWeights, driftOf, heliStep, judgeCloud,
@@ -97,6 +99,7 @@ export class Tutorial {
     Object.assign(this, { speedUp, onDone, map: null, layers: null, raf: 0, timers: [] });
     this.held = new Set();
     this.pointer = null;
+    this.padHandler = null;
     this.keys = (e) => {
       const d = keyDirection(e.code);
       if (!d || !this.flying) return;
@@ -109,14 +112,14 @@ export class Tutorial {
 
   setup() {
     if (!this.map) {
-      // The game's own dark sea, at whole zoom levels only: a fractional zoom scales every tile.
+      // The game's own sea, at whole zoom levels only: a fractional zoom scales every tile.
       this.map = L.map('tutMap', {
         zoomSnap: 1, attributionControl: false, keyboard: false, doubleClickZoom: false, zoomControl: false,
       });
-      // The sea drawn from zoom 10 at most: over open water Esri holds some close-up tiles and not
-      // others, and a mix of the two zooms showed as a patchwork of greys (Bermuda, 14 Oct).
-      esriTiles('Canvas/World_Dark_Gray_Base', { maxNativeZoom: 10, maxZoom: 18 }).addTo(this.map);
-      esriTiles('Canvas/World_Dark_Gray_Reference', { maxNativeZoom: 16, maxZoom: 18, opacity: 0.9 }).addTo(this.map);
+      // The land at full detail: its water is see-through (sea.js), so the patchwork of greys
+      // Esri's mixed close-up tiles made over open water (Bermuda, 14 Oct) no longer shows.
+      addSea(this.map, { maxNativeZoom: 16, maxZoom: 18 });
+      esriTiles('Canvas/World_Dark_Gray_Reference', { maxNativeZoom: 16, maxZoom: 18, opacity: 0.9, zIndex: 2 }).addTo(this.map);
       L.polyline(TRIANGLE, { color: '#ff3b47', weight: 2, dashArray: '8 8', opacity: 0.7, interactive: false }).addTo(this.map);
       for (const l of SEA_LABELS) label(...l).addTo(this.map);
       this.map.on('mousemove', (e) => {
@@ -140,6 +143,7 @@ export class Tutorial {
     this.flying = false;
     this.click = null;
     this.move = null;
+    this.padHandler = null;
     this.map?.getContainer().classList.remove('tut-fade');
     this.layers?.clearLayers();
     $('tutControls').innerHTML = '';
@@ -149,6 +153,9 @@ export class Tutorial {
   }
 
   later(ms, fn) { this.timers.push(setTimeout(fn, ms / this.speedUp)); }
+
+  /** A controller press the mission wants for itself (game.js asks before the menus get it). */
+  pad(name) { return Boolean(this.padHandler?.(name)); }
 
   /**
    * How far through an animation of `ms` begun at `t0` a frame at `now` is, 0 to 1. A frame's
@@ -273,7 +280,7 @@ export class Tutorial {
     const from = [drift[0] * T, drift[1] * T];
     this.panel(1, 'Catch the drifting buoy',
       'They are where the drift took them, and still drifting along the <b style="color:#ff8a3d">orange line</b>. '
-      + 'Fly over them: point the mouse where you want to go (or use the arrow keys). '
+      + 'Fly over them: point the mouse where you want to go (or use the arrow keys, or a controller’s stick). '
       + `<b>It flies like a real Coast Guard helicopter:</b> ${Math.round(SEARCH_SPEED_MS * 3.6)} km/h, `
       + `and it banks round at ${Math.round(TURN_RATE_DEG_S)}° a second, so it cannot turn on the spot. Aim ahead of them: it only sees a strip 185 m wide.`);
     const SPEED = 20 * this.speedUp;              // sim seconds per real second
@@ -295,14 +302,19 @@ export class Tutorial {
     this.map.on('zoomend', restyle);
     this.flying = true;
     this.input = 'keys';
-    this.say('Move the mouse to steer. Catch them before the clock runs out.');
+    this.padHandler = (name) => this.flying && DIRECTIONS.includes(name);   // the stick steers, not the menus
+    this.say('Move the mouse (or the stick) to steer. Catch them before the clock runs out.');
     let last = performance.now();
     const tick = (now) => {
       if (!this.flying) return;
       const dt = Math.min(0.1, (now - last) / 1000) * SPEED;
       last = now;
       let wanted = null;
-      if (this.input === 'mouse' && this.pointer) {
+      const pad = padHeading();
+      if (pad !== null) {
+        this.input = 'pad';
+        wanted = pad;
+      } else if (this.input === 'mouse' && this.pointer) {
         const [e, n] = toMetres(lat0, lon0, this.pointer.lat, this.pointer.lng);
         if (Math.hypot(e - heli.east, n - heli.north) > 30) wanted = bearing(e - heli.east, n - heli.north);
       } else wanted = headingFromKeys(this.held);
@@ -401,7 +413,8 @@ export class Tutorial {
         drawNodes(0);
         $('tutText').innerHTML = 'So what is the current <b>between</b> the dots? We blend the four around the spot: '
           + '<b>the nearer a dot, the more it counts</b>. <b>Move your mouse</b> between the dots and watch the '
-          + '<b style="color:#ff8a3d">orange arrow</b>. Then <b>click to drop the buoy</b>.';
+          + '<b style="color:#ff8a3d">orange arrow</b>. Then <b>click to drop the buoy</b>. '
+          + '(A controller: the stick moves the buoy, ✕ drops it.)';
         this.say('The % on each line is how much that dot counts here.');
         let pos = [2600, -1300];
         const buoy = L.marker(at(...pos), { icon: DOT('#ff4d6d', 14, 'the buoy'), interactive: false }).addTo(this.layers);
@@ -411,12 +424,45 @@ export class Tutorial {
           buoy.setLatLng(at(...pos));
           drawBlend(pos, 0);
         };
-        this.click = (ll) => {
+        const drop = () => {
           this.move = null;
           this.click = null;
-          pos = inside(toMetres(lat0, lon0, ll.lat, ll.lng));
+          this.padHandler = null;
           buoy.remove();
           driftAway(pos);
+        };
+        this.click = (ll) => {
+          pos = inside(toMetres(lat0, lon0, ll.lat, ll.lng));
+          drop();
+        };
+        const place = (p) => {
+          pos = inside(p);
+          buoy.setLatLng(at(...pos));
+          drawBlend(pos, 0);
+        };
+        // A controller: the stick slides the buoy (3 km a second, pushed right over), the d-pad
+        // steps it 400 m, and ✕ drops it.
+        let last = performance.now();
+        const slide = (now) => {
+          if (!this.move) return;
+          const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
+          last = now;
+          const [sx, sy] = padStick();
+          if (sx || sy) place([pos[0] + 3000 * sx * dt, pos[1] + 3000 * sy * dt]);
+          this.raf = requestAnimationFrame(slide);
+        };
+        this.raf = requestAnimationFrame(slide);
+        this.padHandler = (name) => {
+          if (name === 'cross') {
+            drop();
+            return true;
+          }
+          if (!DIRECTIONS.includes(name)) return false;
+          if (firstPad()?.buttons[BUTTONS[name]]?.pressed) {
+            const [de, dn] = { up: [0, 1], down: [0, -1], left: [-1, 0], right: [1, 0] }[name];
+            place([pos[0] + 400 * de, pos[1] + 400 * dn]);
+          }
+          return true;                          // the stick's own direction events belong to the slide
         };
       };
       const driftAway = (pos) => {

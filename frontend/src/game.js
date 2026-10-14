@@ -46,7 +46,8 @@ import { bearing } from './kinematics.js';
 import { M_PER_DEG_LAT } from './geo.js';
 import { SEARCH_SPEED_MS, TURN_RADIUS_M, TURN_RATE_DEG_S } from './platform.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
-import { esriTiles } from './tiles.js';
+import { DIRECTIONS, PadEvents, firstPad, nearestThatWay, padHeading, randomName } from './gamepad.js';
+import { addSea } from './sea.js';
 import { Tutorial } from './tutorial.js';
 
 // The drift model the game flies over: the newest a scenario has (rvc, sized by the current,
@@ -118,6 +119,9 @@ const HINT = '<b>Fly it like a real search helicopter.</b> Point with the mouse 
   + `go and click to take off. At ${SPEED_KMH}\u00a0km/h it cannot stop or turn on the spot: it banks `
   + `round at ${TURN_DEG}\u00b0 a second, so a U-turn takes ${U_TURN_S}\u00a0s and swings ${CIRCLE_M}\u00a0m wide. `
   + 'Point well ahead of it. Arrow keys, WASD or a game controller work too.';
+const PAD_HINT = '<br />🎮 <strong>Controller:</strong> push the stick (or the d-pad) the way to fly, or press ✕ to take off. '
+  + '△ ends the search.';
+const hint = () => HINT + (firstPad() ? PAD_HINT : '');
 /** How far off the asked-for heading it must be before the game says it is still turning. */
 const COACH_OFF_DEG = 25;
 
@@ -149,28 +153,12 @@ function coach() {
   return `Turning, ${TURN_DEG}\u00b0 a second: at search speed a helicopter banks round like a plane.`;
 }
 
-/** The first connected game controller's stick or d-pad as a heading, or null. */
-function padHeading() {
-  const pads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : [];
-  for (const pad of pads) {
-    if (!pad) continue;
-    const [x = 0, y = 0] = pad.axes;
-    if (Math.hypot(x, y) > 0.45) return bearing(x, -y);
-    const b = (i) => Boolean(pad.buttons[i]?.pressed);
-    const held = new Set([b(12) && 'up', b(13) && 'down', b(14) && 'left', b(15) && 'right'].filter(Boolean));
-    const h = headingFromKeys(held);
-    if (h !== null) return h;
-    if (pad.buttons.some((btn) => btn.pressed)) return undefined;   // pressed, but no direction
-  }
-  return null;
-}
-
 /** What the player is asking for now, from whichever input they used last. */
 function wanted() {
   const pad = padHeading();
   if (pad !== null) {
     game.input = 'pad';
-    return pad ?? null;
+    return pad;
   }
   if (game.input === 'mouse' && game.pointer) return headingTo(game.pointer);
   if (game.input === 'keys') return headingFromKeys(game.held);
@@ -199,7 +187,8 @@ function endSearch() {
   reveal();
 }
 
-/** Before take-off, a controller is only seen by asking it, so ask every frame. */
+/** Before take-off, a controller is only seen by asking it, so ask every frame. A stick or the
+ * d-pad takes off this way; ✕ takes off as it is pointing (onPad). */
 function waitForPad() {
   if (!$('fly').classList.contains('on') || game.running || game.t !== 0) return;
   if (padHeading() !== null) {
@@ -210,16 +199,10 @@ function waitForPad() {
   requestAnimationFrame(waitForPad);
 }
 
-function basemap() {
-  return esriTiles('Canvas/World_Dark_Gray_Base', {
-    maxZoom: 16, maxNativeZoom: 16, attribution: 'Esri, HERE, Garmin, &copy; OpenStreetMap contributors',
-  });
-}
-
 function newMap(id, options = {}) {
   // Whole zoom levels: a fractional zoom scales tiles by a non-integer and leaves hairline seams.
   const map = L.map(id, { zoomSnap: 1, attributionControl: false, ...options });
-  basemap().addTo(map);
+  addSea(map, { maxZoom: 16, maxNativeZoom: 16, attribution: 'Esri, HERE, Garmin, &copy; OpenStreetMap contributors' });
   return map;
 }
 
@@ -228,6 +211,7 @@ function show(id) {
   if (game.screen === 'demo' && id !== 'demo') $('demoVideo').pause();
   game.screen = id;
   touched();
+  setPadFocus(null);
   for (const s of document.querySelectorAll('.screen')) s.classList.toggle('on', s.id === id);
 }
 
@@ -434,7 +418,7 @@ async function fly() {
   game.pointer = null;
   $('endBtn').hidden = true;
   $('hint').style.display = '';
-  $('hint').innerHTML = HINT;
+  $('hint').innerHTML = hint();
   $('hint').classList.add('intro');
   drawFly();
   requestAnimationFrame(waitForPad);
@@ -818,6 +802,125 @@ function exportBoard() {
   URL.revokeObjectURL(a.href);
 }
 
+/* ---------------------------------------------------------------- the controller */
+
+// A PS5 or Xbox pad plays the whole game (Aditya, 14 Oct: it did nothing on the menus or in
+// mission 1). The stick or the d-pad moves a highlight between the buttons, ✕ presses, ○ goes
+// back; in flight the stick steers, ✕ takes off and △ ends the search; a mission can claim the
+// pad for itself (steering in mission 1, the buoy in mission 2). The first touch only shows the
+// highlight, so nobody presses a button they have not seen.
+let padFocus = null;
+let tutButtons = 0;
+const padEvents = new PadEvents((name) => onPad(name));
+
+/** Where the highlight starts on each screen: the button a visitor most likely wants. */
+const PAD_START = { attract: 'startBtn', pick: 'surprise', results: 'againBtn', demo: 'demoPlay' };
+
+const padMode = () => document.body.classList.contains('pad-mode');
+
+/** Everything on this screen the highlight can sit on. */
+function padTargets() {
+  const screen = $(game.screen);
+  if (!screen) return [];
+  return [...screen.querySelectorAll('button, input')].filter((el) => !el.disabled && el.getClientRects().length > 0);
+}
+
+function defaultPadTarget() {
+  const els = padTargets();
+  if (game.screen === 'tut') return els.find((el) => $('tutControls').contains(el)) ?? $('tutSkip');
+  return $(PAD_START[game.screen]) ?? els[0] ?? null;
+}
+
+function setPadFocus(el) {
+  padFocus?.classList.remove('pad-focus');
+  padFocus = el;
+  if (!el) return;
+  el.classList.add('pad-focus');
+  // A text box takes the keyboard once highlighted; anything else gives it back.
+  if (el.tagName === 'INPUT') el.focus({ preventScroll: true });
+  else if (document.activeElement?.tagName === 'INPUT') document.activeElement.blur();
+}
+
+function movePadFocus(dir) {
+  if (!padFocus) {
+    setPadFocus(defaultPadTarget());
+    return;
+  }
+  // On a slider, left and right slide it; up and down leave it.
+  if (padFocus.type === 'range' && (dir === 'left' || dir === 'right')) {
+    const r = padFocus;
+    const step = (Number(r.max) - Number(r.min)) / 25;
+    r.value = String(Number(r.value) + (dir === 'right' ? step : -step));
+    r.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+  const next = nearestThatWay(padFocus, padTargets(), dir);
+  if (next) setPadFocus(next);
+}
+
+function pressPadFocus() {
+  const el = padFocus;
+  if (!el) {
+    setPadFocus(defaultPadTarget());
+    return;
+  }
+  if (el.id === 'name') {
+    el.value = randomName();                 // a name on the board without a keyboard
+    return;
+  }
+  if (el.tagName === 'INPUT') return;
+  el.click();
+  // "Surprise me" picked a buoy: the next thing a pad player wants is Fly.
+  if (el.id === 'surprise' && !$('goBtn').disabled) setPadFocus($('goBtn'));
+}
+
+function onPad(name) {
+  const first = !padMode();
+  document.body.classList.add('pad-mode');
+  $('padChip').hidden = false;
+  const s = game.screen;
+  if (s === 'fly') {
+    if (name === 'cross' && !game.running && game.t === 0) {
+      game.input = 'pad';
+      takeOff();
+    }
+    if ((name === 'triangle' || name === 'options') && game.running) endSearch();
+    return;
+  }
+  if (s === 'reveal') {
+    if (name === 'cross' || name === 'options') $('skipBtn').click();
+    return;
+  }
+  if (s === 'tut' && tutorial?.pad(name)) return;
+  if (first) {
+    setPadFocus(defaultPadTarget());
+    return;
+  }
+  if (name === 'circle') {
+    if (s === 'pick' || s === 'demo') attract();
+    else if (s === 'tut') tutorial?.skip();       // even mid-flight in mission 1, where the stick is the helicopter's
+    return;
+  }
+  if (DIRECTIONS.includes(name)) movePadFocus(name);
+  else if (name === 'cross' || name === 'options') pressPadFocus();
+}
+
+/** Every frame: read the pad, and keep the highlight on something that is there. */
+function padLoop(now) {
+  if (padEvents.poll(now)) touched();
+  if (padMode() && game.screen !== 'fly' && game.screen !== 'reveal') {
+    const els = padTargets();
+    if (game.screen === 'tut') {
+      // A mission's next button has just appeared: go to it, unless the player is on the slider.
+      const inside = els.filter((el) => $('tutControls').contains(el));
+      if (inside.length > tutButtons && !(padFocus && $('tutControls').contains(padFocus))) setPadFocus(inside.at(-1));
+      tutButtons = inside.length;
+    }
+    if (!padFocus || !els.includes(padFocus)) setPadFocus(defaultPadTarget());
+  }
+  requestAnimationFrame(padLoop);
+}
+
 /* ---------------------------------------------------------------- wiring */
 
 async function main() {
@@ -834,6 +937,14 @@ async function main() {
   $('demoClose').addEventListener('click', attract);
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && game.screen === 'demo') attract(); });
   watchIdle();
+  // The controller: a mouse click puts the highlight away until the pad is touched again.
+  window.addEventListener('gamepadconnected', () => { $('padChip').hidden = false; });
+  window.addEventListener('gamepaddisconnected', () => { $('padChip').hidden = !firstPad(); });
+  window.addEventListener('pointerdown', () => {
+    document.body.classList.remove('pad-mode');
+    setPadFocus(null);
+  });
+  requestAnimationFrame(padLoop);
   attract();
   try {
     game.index = await loadIndex();
@@ -865,6 +976,7 @@ async function main() {
   });
   $('againBtn').addEventListener('click', attract);
   $('exportBtn').addEventListener('click', exportBoard);
+  $('nameDice').addEventListener('click', () => { $('name').value = randomName(); });
   $('mailForm').addEventListener('submit', sendEmail);
   // A free server sleeps when idle: wake it while the player flies, not when they press Send.
   if (MAILER_URL) fetch(MAILER_URL, { method: 'GET' }).catch(() => {});
