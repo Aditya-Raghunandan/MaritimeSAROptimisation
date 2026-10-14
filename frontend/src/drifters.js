@@ -15,6 +15,8 @@
  * browser, the way geo.js and drift.js are.
  */
 
+import { SCENARIO_BUOYS, scenarioOf } from './scenarioBuoys.js';
+
 const HOUR_MS = 3600 * 1000;
 
 /**
@@ -84,10 +86,23 @@ function periodOf(query) {
  * For a date, buoys FIRST SEEN in that period come first. A long-lived buoy that only
  * passes through it still matches, but listed first it sent a search for March 2021 to
  * a buoy first seen on 1 January 2019, which is correct and not what anyone meant.
+ *
+ * A scenario's name (S10, or s10, or S5 for S05) finds that scenario's buoy, marked with the
+ * name and the moment of its call (`scenario`, `callMs`), so the map can go to the start of
+ * the scenario rather than of the buoy's whole record (Aditya, 15 Oct). "S" or "scenarios"
+ * lists all 55, in order.
  */
-export function searchBuoys(entries, query) {
+export function searchBuoys(entries, query, scenarios = SCENARIO_BUOYS) {
   const q = (query ?? '').trim();
   if (!q) return [];
+  const named = scenarioOf(q);
+  if (named || /^(s|scenarios?)$/i.test(q)) {
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    return Object.entries(scenarios)
+      .filter(([name]) => !named || name === named)
+      .map(([name, [id, call]]) => byId.has(id) && { ...byId.get(id), scenario: name, callMs: Date.parse(`${call}Z`) })
+      .filter(Boolean);
+  }
   const byDate = DATE_QUERY.test(q) ? periodOf(q) : null;
   const hits = entries.filter((e) => e.id.includes(q)
     || (byDate && e.startMs < byDate[1] && e.endMs >= byDate[0]));
