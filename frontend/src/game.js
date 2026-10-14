@@ -513,7 +513,7 @@ function reveal() {
   });
   game.flights = flights;
   $('revealNote').textContent = `${game.scenario.water} water, the helicopter arriving ${arrivalLabel(game.hours)} after the call.`
-    + (endedEarly() ? ` You ended your search at ${clock(game.player.until)}.` : '');
+    + (endedEarly() ? ` You ended your search with ${clock(WINDOW_S - game.player.until)} left.` : '');
   game.t = 0;
   game.last = performance.now();
   game.revealing = true;

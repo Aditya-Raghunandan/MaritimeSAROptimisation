@@ -417,7 +417,7 @@ test.describe('the open-day game', () => {
     await expectFits(page);
     await page.click('#endBtn');
     await expect(page.locator('#reveal')).toHaveClass(/on/);
-    await expect(page.locator('#revealNote')).toContainText('You ended your search at');
+    await expect(page.locator('#revealNote')).toContainText('You ended your search with');
     await page.click('#skipBtn');
     await expect(page.locator('#results')).toHaveClass(/on/);
     await expect(page.locator('#verdictWhy')).toContainText('left on the clock');
