@@ -17,7 +17,7 @@
  * probabilityLayer.js.
  */
 
-import { ICE, INFERNO, VIRIDIS, ramp } from './colormap.js';
+import { ICE_GLOW, INFERNO, VIRIDIS, ramp } from './colormap.js';
 import { relativeM } from './referee.js';
 
 export const CELL_M = 250;
@@ -42,7 +42,7 @@ export const CONTOURS = [
 export const PALETTES = {
   viridis: { label: 'Viridis', anchors: VIRIDIS },
   heat: { label: 'Heat', anchors: INFERNO },
-  ice: { label: 'Ice', anchors: ICE },
+  ice: { label: 'Ice', anchors: ICE_GLOW },
 };
 
 /** A grid bigger than this is trimmed to the bulk of the cloud: a far stray would cost megabytes. */
@@ -390,8 +390,27 @@ export function joinSegments(segs) {
  * Opacity for a place on the ramp: the likeliest sea nearly solid, fading to nothing at the
  * edge of the likeliest 99 % (t = 0.01). Without the cut, the last few strays' cells draw as a
  * staircase of faint dark squares round the cloud.
+ *
+ * The power was 0.6 until 15 Oct; on the game's blue sea the cloud's outer half (t below 0.5)
+ * was too faint to see. At 0.4 the edge of the likeliest 90 % (t = 0.1) is 34 % opaque, not 21 %,
+ * and the half line (t = 0.5) 68 %, not 59 %; the likeliest sea is unchanged. Below t = 0.09 it fades
+ * in on a straight line, so the strays at the very edge do not show as a ring of faint squares.
  */
-export const alphaFor = (t) => 0.9 * Math.max(0, Math.min(1, (t - 0.01) / 0.99)) ** 0.6;
+export const alphaFor = (t) => {
+  const u = Math.max(0, Math.min(1, (t - 0.01) / 0.99));
+  return 0.9 * u ** 0.4 * Math.min(1, u / 0.08);   // the last few per cent fade in straight, so no staircase
+};
+
+/**
+ * Where on its palette a place on the ramp is drawn. The darkest quarter of every palette is
+ * near the game's dark blue sea, so it is skipped, and the low end is lifted (t to the power
+ * 0.55), so thinly populated sea is already a clear colour: at the edge of the likeliest 90 %
+ * (t = 0.1) the colour sits 46 % of the way up the palette, where it sat 17 % before (Aditya,
+ * 15 Oct: "more sensitive, so less population is brighter"). Brighter still means likelier.
+ */
+export const COLOUR_FROM = 0.25;
+export const COLOUR_GAMMA = 0.55;
+export const colourAt = (t) => COLOUR_FROM + (1 - COLOUR_FROM) * Math.max(0, Math.min(1, t)) ** COLOUR_GAMMA;
 
 /** 256 RGBA entries for a palette: colour and transparency for t = 0..1. */
 export function paletteTable(name) {
@@ -399,7 +418,7 @@ export function paletteTable(name) {
   const lut = new Uint8ClampedArray(256 * 4);
   for (let i = 0; i < 256; i += 1) {
     const t = i / 255;
-    const [r, g, b] = ramp(anchors, 0.08 + 0.92 * t);
+    const [r, g, b] = ramp(anchors, colourAt(t));
     lut.set([r, g, b, Math.round(255 * alphaFor(t))], 4 * i);
   }
   return lut;
