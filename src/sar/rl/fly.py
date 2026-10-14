@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from sar.pipeline.ensemble import Ensemble
-from sar.rl.features import Context, command, observe, time_weighted_return
+from sar.rl.features import Context, command, observe, speed_share, split_speed, time_weighted_return
 from sar.rl.windows import is_test, load, parse_windows_name
 from sar.search.benchmark import BASELINE, GREEDY, SEARCHERS, recorded, searcher
 from sar.search.episode import run
@@ -36,12 +36,26 @@ def load_halves(model_path) -> int:
     return int(config.get("halves") or 0)
 
 
-def ppo_policy(model, headings: int, context: Context, halves: int = 0):
+def load_speeds(model_path) -> tuple[float, ...]:
+    """The speeds, in knots, an agent picks from each minute (Telemachus S); empty for one that
+    always flies 90 kt."""
+    config = json.loads((Path(model_path).parent / "config.json").read_text())["arguments"]
+    return tuple(float(s) for s in (config.get("speeds") or ()))
+
+
+def ppo_policy(model, headings: int, context: Context, halves: int = 0, speeds=()):
     """The trained policy as a searcher: its most likely action from the same observation it
-    trained on, as a heading, or (halves) as the minute's two 30 s legs."""
+    trained on, as a heading, or (halves) as the minute's two 30 s legs. With `speeds` it also
+    sets the helicopter's speed for the minute, as it did in training (SearchEnv.step)."""
     def policy(episode):
-        action, _ = model.predict(observe(episode, context), deterministic=True)
-        return command(episode, int(action), headings, halves)
+        obs = observe(episode, context)
+        if speeds:
+            obs = np.append(obs, np.float32(speed_share(episode)))
+        action, _ = model.predict(obs, deterministic=True)
+        action, speed_ms = split_speed(int(action), headings, halves, speeds)
+        if speed_ms is not None:
+            episode.set_speed(speed_ms)
+        return command(episode, action, headings, halves)
 
     return policy
 

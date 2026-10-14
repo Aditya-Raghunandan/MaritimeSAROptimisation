@@ -8,7 +8,7 @@ from typing import ClassVar
 import gymnasium as gym
 import numpy as np
 
-from sar.rl.features import SIZE, Context, command, observe, reward
+from sar.rl.features import SIZE, Context, actions, command, observe, reward, speed_share, split_speed
 from sar.rl.windows import SearchWindows, load, parse_windows_name
 from sar.search.episode import SearchEpisode
 from sar.search.scenario import search_episode
@@ -37,12 +37,18 @@ class SearchEnv(gym.Env):
     and the search ends there, terminated, as a real one would. `pos_scale` multiplies the
     probability reward above, so find = 1 with pos_scale = 0 pays only for finding the buoy and
     an episode's return is 1 or 0. Needs windows that carry a buoy (`windows.build_truth`).
+
+    SPEED (15 Oct, Telemachus S, L43). `speeds`, in knots, lets the agent also pick its speed each
+    minute: the action is speed-major (`features.split_speed`), the referee turns at the rate a
+    30 degree bank gives at that speed (`SearchEpisode.set_speed`), and the observation gains one
+    number, the speed now over 90 kt. Empty, the environment is exactly the one before.
     """
 
     metadata: ClassVar[dict] = {"render_modes": []}
 
     def __init__(self, sources, headings: int, arrivals_min=None, cycle: bool = False,
-                 decay: float = 1.0, halves: int = 0, find: float = 0.0, pos_scale: float = 1.0):
+                 decay: float = 1.0, halves: int = 0, find: float = 0.0, pos_scale: float = 1.0,
+                 speeds=()):
         self.items = window_items(sources, arrivals_min)
         if not self.items:
             raise ValueError("SearchEnv needs at least one window")
@@ -58,8 +64,12 @@ class SearchEnv(gym.Env):
         self.headings, self.cycle, self.decay = int(headings), bool(cycle), float(decay)
         self.halves = int(halves)
         self.find, self.pos_scale = float(find), float(pos_scale)
-        self.action_space = gym.spaces.Discrete(self.halves ** 2 if self.halves else self.headings)
-        self.observation_space = gym.spaces.Box(-np.inf, np.inf, (SIZE,), np.float32)
+        self.speeds = tuple(float(s) for s in (speeds or ()))
+        if any(not np.isfinite(s) or s <= 0.0 for s in self.speeds):
+            raise ValueError(f"speeds must be positive knots, got {speeds!r}")
+        self.action_space = gym.spaces.Discrete(actions(self.headings, self.halves, self.speeds))
+        size = SIZE + (1 if self.speeds else 0)
+        self.observation_space = gym.spaces.Box(-np.inf, np.inf, (size,), np.float32)
         self._next, self._cached = 0, (None, None)
         self.episode: SearchEpisode | None = None
 
@@ -85,11 +95,19 @@ class SearchEnv(gym.Env):
         self.context = Context(windows.lkp, setup.arrival_s, setup.drift_bearing_deg)
         self.episode = search_episode(setup)
         self.pos = 0.0
-        return observe(self.episode, self.context), {"window": windows.name,
-                                                     "arrival_s": setup.arrival_s}
+        return self._observe(), {"window": windows.name, "arrival_s": setup.arrival_s}
+
+    def _observe(self) -> np.ndarray:
+        obs = observe(self.episode, self.context)
+        if self.speeds:
+            obs = np.append(obs, np.float32(speed_share(self.episode)))
+        return obs
 
     def step(self, action):
         k = self.episode.k
+        action, speed_ms = split_speed(action, self.headings, self.halves, self.speeds)
+        if speed_ms is not None:
+            self.episode.set_speed(speed_ms)
         order = command(self.episode, int(action), self.headings, self.halves)
         seen = self.episode.found_s is not None
         removed = self.episode.fly(order) if self.halves else self.episode.step(order)
@@ -99,5 +117,6 @@ class SearchEnv(gym.Env):
         found = self.find > 0.0 and not seen and self.episode.found_s is not None
         if found:
             paid, done = paid + self.find, True
-        return (observe(self.episode, self.context), paid, done, False,
-                {"pos": self.pos, "removed": removed, "found": found})
+        return (self._observe(), paid, done, False,
+                {"pos": self.pos, "removed": removed, "found": found,
+                 "speed_ms": float(self.episode.speed_ms)})

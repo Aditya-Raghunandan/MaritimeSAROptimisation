@@ -8,7 +8,7 @@ import numpy as np
 
 from sar.search.episode import Waypoints
 from sar.search.kinematics import steer_to
-from sar.search.platform import STEP_S
+from sar.search.platform import KNOT_MS, SEARCH_SPEED_MS, STEP_S
 from sar.search.sweep import relative_m
 
 MAP_CELLS, MAP_CELL_M = 32, 1000.0      # project choice: the plan's 32 x 32 map (R5a), 32 km about the marker
@@ -53,9 +53,38 @@ def two_halves(episode, first_deg: float, second_deg: float) -> Waypoints:
                  episode.turn_rate_deg_s)
     b = steer_to(float(a.east_m[-1]), float(a.north_m[-1]), float(a.heading_deg[-1]), second_deg,
                  half, episode.speed_ms, episode.turn_rate_deg_s)
-    return Waypoints(np.concatenate((a.t_s, half + b.t_s)), np.concatenate((a.east_m, b.east_m)),
-                     np.concatenate((a.north_m, b.north_m)),
-                     np.concatenate((a.heading_deg, b.heading_deg)))
+    # A first half that ends a few rounding units off the second command (29.999999999999993 deg
+    # against 30) makes the second a ~1e-15 s turn, and 30 + 1e-15 == 30: two waypoints at one
+    # time, which Waypoints refuses (killed t3_find, 13 Oct). Such a point sits where the first
+    # half ended, so it is dropped.
+    keep = half + b.t_s > a.t_s[-1] + 1e-9
+    return Waypoints(np.concatenate((a.t_s, half + b.t_s[keep])),
+                     np.concatenate((a.east_m, b.east_m[keep])),
+                     np.concatenate((a.north_m, b.north_m[keep])),
+                     np.concatenate((a.heading_deg, b.heading_deg[keep])))
+
+
+def actions(headings: int, halves: int = 0, speeds=()) -> int:
+    """How many actions: the headings (or halves x halves), times the speeds if it picks one."""
+    base = int(halves) ** 2 if halves else int(headings)
+    return base * max(1, len(speeds))
+
+
+def split_speed(action: int, headings: int, halves: int = 0, speeds=()) -> tuple[int, float | None]:
+    """Action a as (the heading action, the speed in m/s), or (a, None) without speeds.
+
+    With speeds (knots) the actions are speed-major: the first base actions fly the first speed.
+    """
+    if not speeds:
+        return int(action), None
+    base = int(halves) ** 2 if halves else int(headings)
+    s, rest = divmod(int(action), base)
+    return rest, float(speeds[s]) * KNOT_MS
+
+
+def speed_share(episode) -> float:
+    """The speed now as a share of the 90 kt search speed: what Telemachus S sees of its own speed."""
+    return float(episode.speed_ms / SEARCH_SPEED_MS)
 
 
 def command(episode, action: int, headings: int, halves: int = 0):

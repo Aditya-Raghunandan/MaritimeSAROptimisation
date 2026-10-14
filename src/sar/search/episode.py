@@ -79,12 +79,14 @@ from sar.search.kinematics import (
 )
 from sar.search.patterns import PATTERNS, MarkerTrack, Pattern
 from sar.search.platform import (
+    MAX_BANK_DEG,
     ON_SCENE_WINDOW_S,
     SEARCH_SPEED_MS,
     STEP_S,
     SWEEP_WIDTH_M,
     TURN_RATE_DEG_S,
     expanding_square_spacing_m,
+    turn_rate_deg_s,
 )
 from sar.search.sweep import first_contact, relative_m, sweep
 from sar.utils.geo import east_north, offset_position, to_display_longitude
@@ -283,6 +285,23 @@ class SearchEpisode:
         p = steer(self._offset[0], self._offset[1], self._heading, turn, STEP_S, self.speed_ms,
                   self.turn_rate_deg_s)
         return Waypoints(p.t_s, p.east_m, p.north_m, p.heading_deg)
+
+    def set_speed(self, speed_ms: float, bank_deg: float = MAX_BANK_DEG) -> None:
+        """Fly the steps from now at `speed_ms`, turning at the rate `bank_deg` gives at that speed.
+
+        omega = g tan(bank) / V, so a slower helicopter turns tighter: 90 kt turns at 7.0 deg/s on a
+        379 m radius, 45 kt at 14.0 deg/s on 95 m (L43). Only Telemachus S calls it (exp/telemachus-
+        speed, 15 Oct); every other searcher keeps the speed its episode was built with. The sweep
+        width stays what it was: a slower pass is not taken to see further. Each step's checks and
+        its distance then use the speed set here.
+        """
+        speed_ms = float(speed_ms)
+        if not np.isfinite(speed_ms) or speed_ms <= 0.0:
+            raise ValueError(f"speed_ms must be positive, got {speed_ms}")
+        if self.instant:
+            raise ValueError("a helicopter that turns at once has no turn rate to follow its speed")
+        self.speed_ms = speed_ms
+        self.turn_rate_deg_s = check_turn_rate(turn_rate_deg_s(bank_deg, speed_ms))
 
     def step(self, heading_deg) -> float:
         """Turn to a heading, relative to the marker, and fly on along it, for one step."""

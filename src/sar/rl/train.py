@@ -141,6 +141,11 @@ def _cli(argv=None) -> Path:
                         help="a trained model.zip to start from (same observation and actions); "
                              "its network and PPO settings, with this run's rate, entropy, clip, "
                              "KL brake, gamma, batch and epochs")
+    # Telemachus S (15 Oct, L43): it also picks its speed each minute. Optional.
+    parser.add_argument("--speeds", type=float, nargs="+",
+                        help="speeds in knots to choose from each minute, such as 45 60 90; the "
+                             "turn rate follows (30 degree bank) and the observation gains the "
+                             "speed. Not given: always 90 kt, as every agent before")
     parser.add_argument("--torch-threads", type=int, default=1,
                         help="threads for the network's update; a CNN wants the node's cores")
     parser.add_argument("--out", required=True, help="directory the run's folder goes in")
@@ -180,7 +185,8 @@ def _cli(argv=None) -> Path:
     eval_find = args.find_reward if args.eval_find is None else args.eval_find
     eval_pos_scale = args.pos_scale if args.eval_pos_scale is None else args.eval_pos_scale
 
-    kwargs = {"headings": args.headings, "arrivals_min": args.arrival_min, "halves": args.halves}
+    kwargs = {"headings": args.headings, "arrivals_min": args.arrival_min, "halves": args.halves,
+              "speeds": tuple(args.speeds or ())}
     vec = SubprocVecEnv if args.envs > 1 else DummyVecEnv
     env = make_vec_env(SearchEnv, n_envs=args.envs, seed=args.seed, vec_env_cls=vec,
                        monitor_dir=str(run / "monitor"),
@@ -233,8 +239,10 @@ def _cli(argv=None) -> Path:
     config = {
         "arguments": vars(args), "git_commit": git_commit(),
         "stable_baselines3": stable_baselines3.__version__,
-        "observation": {"size": SIZE, "map": [MAP_CELLS, MAP_CELL_M],
-                        "near": [NEAR_CELLS, NEAR_CELL_M], "vector": list(VECTOR)},
+        "observation": {"size": SIZE + (1 if args.speeds else 0), "map": [MAP_CELLS, MAP_CELL_M],
+                        "near": [NEAR_CELLS, NEAR_CELL_M],
+                        "vector": list(VECTOR) + (["speed_share"] if args.speeds else [])},
+        "speeds_kt": list(args.speeds or []),
         "ppo": {"learning_rate": args.learning_rate, "n_steps": model.n_steps,
                 "batch_size": model.batch_size, "n_epochs": model.n_epochs, "gamma": model.gamma,
                 "gae_lambda": model.gae_lambda, "clip_range": args.clip_range,
