@@ -15,9 +15,14 @@ const EMAIL_RE = /^[^\s@<>()[\]\\,;:"]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24
 const MAX_IMAGE_CHARS = 900_000;           // a 640 px JPEG is ~80 kB; this is generous
 const IMAGE_RE = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/;
 
-/** Per-address-of-the-sender limits: a few emails a minute, and a ceiling for the day. */
+/**
+ * Per-address-of-the-sender limits: a few emails a minute, and a ceiling for the day. One
+ * address can be a whole room: the open-day stand's laptop sends every player's email, and
+ * phones on the Wits Wi-Fi leave through a few shared addresses. Five per ten minutes would
+ * turn players away at a busy stand; thirty still slows a script down.
+ */
 export class Limits {
-  constructor({ perIp = 5, windowMs = 10 * 60_000, perDay = 400 } = {}) {
+  constructor({ perIp = 30, windowMs = 10 * 60_000, perDay = 400 } = {}) {
     Object.assign(this, { perIp, windowMs, perDay, seen: new Map(), day: '', count: 0 });
   }
 
