@@ -34,6 +34,8 @@
       .screen { display: none; min-height: 0; height: 100%; }
       .screen.on { display: grid; }
       button { font: inherit; color: var(--ink); cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: progress; }
+      body.kiosk header nav { display: none; }
       .big {
         background: var(--accent); border: 0; border-radius: 10px; padding: 12px 26px;
         font-size: 18px; font-weight: 600;
@@ -141,6 +143,7 @@
       }
       .hint.intro { font-size: 16px; line-height: 1.45; padding: 14px 20px; color: #f2efe6; border: 1px solid #ffcd8d66; }
       .hint.intro b { display: block; color: #ffcd8d; font-size: 19px; margin-bottom: 4px; }
+      .end-btn { position: absolute; z-index: 600; top: 14px; right: 14px; font-size: 16px; padding: 10px 18px; background: #000c; border-color: #ffcd8d88; }
 
       /* reveal */
       #reveal { grid-template-rows: auto 1fr; }
@@ -203,8 +206,8 @@
           sea. Beat both and you win a prize.
         </p>
         <div class="att-buttons">
-          <button class="big" id="startBtn">Start: 3 missions, then the search</button>
-          <button class="ghost" id="searchBtn">Skip to the search</button>
+          <button class="big" id="startBtn" disabled>Start: 3 missions, then the search</button>
+          <button class="ghost" id="searchBtn" disabled>Skip to the search</button>
           <button class="ghost" id="demoBtn">▶ Watch the video</button>
         </div>
       </div>
@@ -258,6 +261,7 @@
         <div class="card" id="hudPosCard"><b id="hudPos">0 %</b><span class="muted">searched</span></div>
       </div>
       <div class="hint" id="hint">Point with the mouse where you want to fly and click to take off.</div>
+      <button class="ghost end-btn" id="endBtn" hidden>End the search now</button>
     </section>
 
     <section class="screen" id="reveal">

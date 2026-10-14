@@ -139,6 +139,21 @@ export function top(list, mode, n = 8) {
     .slice(0, n);
 }
 
+/**
+ * Where a player stands on one mode's board, read as top() shows it (one line per name): their
+ * place, how many players are on it, and its first n lines with theirs marked, plus theirs if
+ * it is further down. For the result email (Aditya, 14 Oct: "tell them if they are winning").
+ */
+export function standing(list, mode, name, n = 5) {
+  const all = top(list, mode, Infinity);
+  const key = String(name ?? '').trim().toLowerCase();
+  const rank = all.findIndex((e) => String(e.name ?? '').trim().toLowerCase() === key) + 1;
+  const line = (e, i) => ({ rank: i + 1, name: e.name, score: e.score, you: i + 1 === rank });
+  const lines = all.slice(0, n).map(line);
+  if (rank > n) lines.push(line(all[rank - 1], rank - 1));
+  return { rank, of: all.length, lines };
+}
+
 /** A nickname fit for a public screen: trimmed, short, plain characters only. */
 export function nickname(text) {
   const clean = String(text ?? '').replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 16);

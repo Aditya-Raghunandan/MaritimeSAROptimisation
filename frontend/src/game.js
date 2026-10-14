@@ -3,7 +3,7 @@
  *
  * A visitor picks a real buoy (one of the 55 scenarios), chooses to see the probability map
  * or only the currents, and flies one helicopter for the 45-minute window, the clock
- * compressed so the search takes about 90 seconds. Then the same sea is searched again,
+ * compressed so the search takes a minute (or less: "End the search" stops it early). Then the same sea is searched again,
  * side by side, by the Coast Guard's Expanding Square and by our ML model, and the real buoy is
  * revealed. The model is Telemachus, Suné's trained agent, where the published files carry its
  * flight (v3), and the greedy search where they do not; the results say which one it was.
@@ -27,7 +27,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { FieldLayer } from './fieldLayer.js';
 import {
-  AREA_CELL_M, add, cloudAreaKm2, load, nickname, par, score, top, verdict,
+  AREA_CELL_M, add, cloudAreaKm2, load, nickname, par, score, standing, top, verdict,
 } from './leaderboard.js';
 import { densityGrid } from './probabilityMap.js';
 import { trackAt } from './referee.js';
@@ -56,15 +56,22 @@ import { Tutorial } from './tutorial.js';
 const DEFAULT_ARRIVAL_H = 0.5;
 const WINDOW_S = 45 * 60;
 // ?speed=10 plays everything ten times faster: for rehearsing the stand and for the tests.
-const SPEED_UP = Math.max(1, Number(new URLSearchParams(window.location.search).get('speed')) || 1);
-const FLY_SPEED = 30 * SPEED_UP;          // 45 minutes in 90 seconds
-const REVEAL_SPEED = 90 * SPEED_UP;       // the side-by-side replay in 30 seconds
+const PARAMS = new URLSearchParams(window.location.search);
+const SPEED_UP = Math.max(1, Number(PARAMS.get('speed')) || 1);
+// ?kiosk=1 is the open-day stand: no links off the game (frontend/tools/kiosk.cmd opens it).
+const KIOSK = PARAMS.has('kiosk');
+// Faster after open-day testers found 90 s long (Aditya, 14 Oct).
+const FLY_SPEED = 45 * SPEED_UP;          // 45 minutes in 60 seconds
+const REVEAL_SPEED = 135 * SPEED_UP;      // the side-by-side replay in 20 seconds
+const REVEAL_HOLD_MS = 5000;              // the real buoy left up this long before the results
 const CG = 'expanding-square';
 // What the results say the computer's searcher was, by who flew it (aiOf).
 const AI_WORDS = {
+  // Telemachus 2 (scenarios/v4): paid plain POS, gamma 1, two headings a minute; the first
+  // Telemachus was also paid for finding it sooner, and these words described it until 14 Oct.
   ppo: '<b>Telemachus</b> is our machine-learning model: a small neural network trained by '
     + 'reinforcement learning (PPO). It learned where to fly by searching five years of simulated '
-    + 'drift, minute by minute, rewarded for every possible position it found, more for finding it sooner.',
+    + 'drift, choosing a new heading every 30 seconds, rewarded for every possible position its strip passed over.',
   greedy: '<b>The computer</b> here flies a greedy search, with no learning: always to where the most '
     + 'probability is left. The trained model takes its place once its flights are published.',
   // The trained model's flight is there, but the helicopter arrives too late for it (aiOf).
@@ -173,7 +180,20 @@ function takeOff() {
   game.last = performance.now();
   $('hint').style.display = 'none';
   $('hint').classList.remove('intro');
+  $('endBtn').hidden = false;
   requestAnimationFrame(flyTick);
+}
+
+/**
+ * "End the search": the player has seen enough. The minute in progress is flown out, so the
+ * referee scores it whole, and the search ends there; the rivals still fly all 45 minutes.
+ */
+function endSearch() {
+  if (!game.running) return;
+  game.running = false;
+  game.player.stop();
+  game.t = game.player.until;
+  reveal();
 }
 
 /** Before take-off, a controller is only seen by asking it, so ask every frame. */
@@ -408,6 +428,7 @@ async function fly() {
   game.t = 0;
   game.running = false;
   game.pointer = null;
+  $('endBtn').hidden = true;
   $('hint').style.display = '';
   $('hint').innerHTML = HINT;
   $('hint').classList.add('intro');
@@ -491,7 +512,8 @@ function reveal() {
     return s;
   });
   game.flights = flights;
-  $('revealNote').textContent = `${game.scenario.water} water, the helicopter arriving ${arrivalLabel(game.hours)} after the call.`;
+  $('revealNote').textContent = `${game.scenario.water} water, the helicopter arriving ${arrivalLabel(game.hours)} after the call.`
+    + (endedEarly() ? ` You ended your search at ${clock(game.player.until)}.` : '');
   game.t = 0;
   game.last = performance.now();
   game.revealing = true;
@@ -502,7 +524,13 @@ function reveal() {
 function rewind(player) {
   const again = new PlayerFlight(game.window);
   again.script = player.record();
+  again.endS = player.endS;
   return again;
+}
+
+/** Did the player press "End the search" before the 45 minutes were up? */
+function endedEarly() {
+  return game.player.until < WINDOW_S;
 }
 
 /** Fly a flight on to t: a recorded searcher as recorded, the player's legs as steered. */
@@ -512,7 +540,8 @@ function advance(flight, t) {
     return;
   }
   const headings = flight.script.heading_deg;
-  while (!flight.done && flight.t + SAMPLE_S <= t + 1e-9) {
+  const end = Math.min(t, flight.until);
+  while (!flight.done && flight.t + SAMPLE_S <= end + 1e-9) {
     flight.steer(headings[Math.min(Math.round(flight.t / SAMPLE_S), headings.length - 1)]);
     flight.advanceTo(flight.t + SAMPLE_S);
   }
@@ -536,7 +565,7 @@ function revealTick(now) {
     // other panels follow the first), and leave it up long enough to look at.
     game.scenes[0].fitAll(WINDOW_S);
     game.revealing = false;
-    setTimeout(results, 7000 / SPEED_UP);
+    setTimeout(results, REVEAL_HOLD_MS / SPEED_UP);
     return;
   }
   requestAnimationFrame(revealTick);
@@ -565,10 +594,11 @@ async function results() {
   game.result = { points, area };
   $('verdict').textContent = v.won ? 'You win! Claim your prize.' : 'The search goes on…';
   $('verdict').className = `verdict${v.won ? ' win' : ''}`;
-  $('verdictWhy').textContent = v.won
+  $('verdictWhy').textContent = (v.won
     ? `You searched more of the likely sea than both the Coast Guard and ${aiName}. ${points} points.`
     : `${v.beaten.length ? `You beat ${v.beaten.join(' and ')}, but not` : 'You did not beat'} `
-      + `${['the Coast Guard', aiName].filter((n) => !v.beaten.includes(n)).join(' or ')}. ${points} points.`;
+      + `${['the Coast Guard', aiName].filter((n) => !v.beaten.includes(n)).join(' or ')}. ${points} points.`)
+    + (endedEarly() ? ` You ended the search with ${clock(WINDOW_S - game.player.until)} left on the clock.` : '');
   const row = (name, m) => {
     const t = m.target;
     const buoy = t?.found ? `found at ${clock(t.foundS)}` : `missed by ${(t.closestM / 1000).toFixed(1)} km`;
@@ -586,6 +616,7 @@ async function results() {
     const entry = {
       name: game.name, mode: game.mode, scenario: game.scenario.scenario, pos: you.pos,
       found: Boolean(you.target?.found), area_km2: area, score: points, won: v.won,
+      arrival_h: game.hours, ended_s: endedEarly() ? game.player.until : null,
       when: new Date().toISOString(),
       record: game.player.record(),
     };
@@ -646,6 +677,9 @@ async function sendEmail(e) {
     cg: forEmail(cg),
     ai: { ...forEmail(ai), name: AI_NAME[aiOf(game.window, game.hours)] === 'Telemachus' ? 'Telemachus' : 'the greedy search' },
     bench: (game.benchRows ?? []).slice(0, 4).map((r) => ({ label: SEARCHER_INFO[r.searcher]?.label ?? r.searcher, pos: r.pos })),
+    arrival: arrivalLabel(game.hours),
+    // The board on this computer (at the stand, everyone who played there today).
+    board: { mode: game.mode, ...standing(game.board ?? load(), game.mode, game.name) },
   };
   try {
     body.image = flightPicture();
@@ -691,18 +725,26 @@ function exportBoard() {
 /* ---------------------------------------------------------------- wiring */
 
 async function main() {
+  if (KIOSK) document.body.classList.add('kiosk');
+  // The start screen shows at once, but its two play buttons wait (disabled in the HTML) for
+  // the list of buoys: a click before it arrived used to be lost (14 Oct, live: up to a second
+  // on good Wi-Fi, longer at a venue).
+  $('status').textContent = 'loading the buoys…';
+  $('demoBtn').addEventListener('click', () => demo());
+  $('demoPlay').addEventListener('click', attract);
+  $('demoClose').addEventListener('click', attract);
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && game.screen === 'demo') attract(); });
+  watchIdle();
+  attract();
   try {
     game.index = await loadIndex();
   } catch (err) {
     $('status').textContent = `the scenario files are not reachable: ${err.message}`;
     return;
   }
+  $('status').textContent = '';
   $('startBtn').addEventListener('click', missions);
   $('searchBtn').addEventListener('click', pick);
-  $('demoBtn').addEventListener('click', () => demo());
-  $('demoPlay').addEventListener('click', attract);
-  $('demoClose').addEventListener('click', attract);
-  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && game.screen === 'demo') attract(); });
   $('tutSkip').addEventListener('click', () => tutorial?.skip());
   $('tutSkipAll').addEventListener('click', () => pick());
   $('surprise').addEventListener('click', () => {
@@ -716,6 +758,7 @@ async function main() {
     });
   }
   $('goBtn').addEventListener('click', () => { game.saved = false; fly(); });
+  $('endBtn').addEventListener('click', endSearch);
   $('skipBtn').addEventListener('click', () => {
     for (const s of game.scenes ?? []) s.showBuoy(WINDOW_S);
     game.scenes?.[0]?.fitAll(WINDOW_S);
@@ -738,8 +781,8 @@ async function main() {
     const d = keyDirection(e.code);
     if (d) game.held.delete(d);
   });
-  watchIdle();
-  attract();
+  $('startBtn').disabled = false;
+  $('searchBtn').disabled = false;
 }
 
 main();
