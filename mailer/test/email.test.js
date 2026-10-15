@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildResultEmail, escapeHtml, standingWords, verdictOf } from '../email.js';
+import { buildResultEmail, escapeHtml, sizeWords, standingWords, verdictOf } from '../email.js';
 import { corsHeaders, handleSend, Limits, validate } from '../handler.js';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -44,6 +44,13 @@ test('the email ranks everyone who searched the sea, as a list, and drops a bad 
   assert.equal(validate(sample({ field: [{ label: 7, pos: 2 }] })).field.length, 0);
 });
 
+test('the size of the search in plain numbers: a share of a big sea, times over a small one', () => {
+  assert.deepEqual(sizeWords(76), { area: 76, seen: 23, so: 'So at best you could search about 30 % of it. Where you fly matters.' });
+  assert.match(sizeWords(11).so, /^Enough to cover it about 2 times over/);
+  assert.match(sizeWords(20).so, /about once/);
+  assert.equal(sizeWords(0.4).area, 1);
+});
+
 test('a player who found them is cheered, and told who searched more', () => {
   const r = (beatAi, beatCg) => verdictOf({ beatAi, beatCg, ai: { name: 'the greedy search' }, you: { found: true } });
   assert.match(r(false, false).subject, /You found them!/);
@@ -81,7 +88,9 @@ test('the email says the numbers, the inline picture and the vote link only when
   assert.ok(without.html.includes('cid:flight'));
   assert.ok(without.html.includes('found them 23:10 into the search'));
   assert.ok(without.html.includes('missed them by 1.2 km'));
-  assert.ok(without.html.includes('4,888 football pitches'));
+  assert.ok(without.html.includes('35 km²') && without.html.includes('23 km²'));
+  assert.ok(without.html.includes('search about 66 % of it'));
+  assert.ok(!without.html.includes('football'));
   assert.ok(!without.html.includes('Vote for us'));
   const withVote = buildResultEmail(r, { gameUrl: 'https://x.example/game.html', voteUrl: 'https://vote.example/' });
   assert.ok(withVote.html.includes('Vote for us') && withVote.text.includes('https://vote.example/'));
