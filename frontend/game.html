@@ -175,7 +175,10 @@
       /* reveal */
       #reveal { grid-template-rows: auto 1fr; }
       #reveal .bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; }
-      .panels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 0 6px 6px; min-height: 0; }
+      .panels {
+        display: grid; grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+        grid-template-rows: repeat(var(--rows, 2), minmax(0, 1fr)); gap: 6px; padding: 0 6px 6px; min-height: 0;
+      }
       .panel { position: relative; min-height: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
       .panel .map { position: absolute; inset: 0; background: #111; }
       .panel .tag {
@@ -183,6 +186,11 @@
         justify-content: space-between; background: #000a; border-radius: 8px; padding: 6px 10px;
       }
       .panel .tag b { font-variant-numeric: tabular-nums; }
+      .panel .tag { font-size: 13px; padding: 4px 8px; gap: 6px; }
+      .panel .tag span { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .panel .tag i { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+      .panel .tag em { font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: .08em; color: #071629; background: #ffb38a; border-radius: 3px; padding: 0 4px; }
+      .panel.you { border-color: #ffffffaa; }
 
       /* results: it stays up until someone presses a button (no video on idle), so the board can be read */
       #results {
@@ -214,6 +222,27 @@
       .race td.found { font-size: 13px; color: #ffb38a; white-space: nowrap; }
       .race td.found.yes { color: #7dffb0; }
       .barcell { width: 40%; }
+      /* every searcher on the player's sea, best first, two to a row */
+      .field { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
+      .field-head { grid-column: 1 / -1; display: flex; justify-content: space-between; font-size: 11px; font-weight: 700;
+        letter-spacing: 0.1em; text-transform: uppercase; color: #8fa6bd; }
+      .field-head b { color: #fff; }
+      #results.tight .res-explain p:first-child, #results.tighter #aiWords { display: none; }
+      .sr { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; column-gap: 8px; row-gap: 2px; align-items: center;
+        padding: 4px 10px; border-radius: 9px; background: #ffffff0a; animation: rise 0.45s ease-out both; }
+      .sr .rk { grid-row: 1 / 3; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+        font-size: 12px; font-weight: 800; background: #ffffff14; color: #c9d6e3; }
+      .sr:nth-child(2) .rk { background: #ffc24a; color: #2b1d00; }
+      .sr .nm { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; font-weight: 600; font-size: 14px; }
+      .sr .nm i { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+      .sr .pc { font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; }
+      .sr .bar { height: 6px; }
+      .sr .fd { font-size: 11.5px; color: #ffb38a; white-space: nowrap; }
+      .sr .fd.yes { color: #7dffb0; }
+      .sr.you { background: #ffffff17; box-shadow: inset 0 0 0 2px #ffffffcc; }
+      .sr.you .nm { font-weight: 800; }
+      @media (max-width: 900px) { .field { grid-template-columns: 1fr; } }
       .bar { height: 12px; border-radius: 6px; background: #16314d; overflow: hidden; }
       .bar i { display: block; height: 100%; border-radius: 6px; transform-origin: left; animation: grow 1.1s cubic-bezier(.2,.8,.2,1) both; }
       .bar.sm { height: 7px; }
@@ -378,13 +407,9 @@
     </section>
 
     <section class="screen" id="reveal">
-      <div class="bar"><b>Same sea, same 45 minutes, three searchers.</b><span class="muted" id="revealNote"></span>
+      <div class="bar"><b>Same sea, same 45 minutes: you and every searcher we tested.</b><span class="muted" id="revealNote"></span>
         <button class="ghost" id="skipBtn" style="margin-left:auto">Skip to the results<span class="glyph pad-only">✕</span></button></div>
-      <div class="panels">
-        <div class="panel"><div class="map" id="mapYou"></div><div class="tag"><span>You</span><b id="posYou">0 %</b></div></div>
-        <div class="panel"><div class="map" id="mapCg"></div><div class="tag"><span>Coast Guard (Expanding Square)</span><b id="posCg">0 %</b></div></div>
-        <div class="panel"><div class="map" id="mapAi"></div><div class="tag"><span id="aiTag">Telemachus (ML model)</span><b id="posAi">0 %</b></div></div>
-      </div>
+      <div class="panels" id="panels"></div>
     </section>
 
     <section class="screen" id="results">
@@ -394,7 +419,7 @@
           <h2 class="verdict" id="verdict"></h2>
         </div>
         <p class="res-why" id="verdictWhy"></p>
-        <table class="race" id="scoreTable"></table>
+        <div class="field" id="scoreTable"></div>
         <div class="res-explain">
           <p class="explain"><b>Searched</b> is the share of all the places the person could be that each helicopter
             looked at: the paper calls it POS. The person is in exactly one of those places, so if

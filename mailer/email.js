@@ -125,6 +125,7 @@ export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = '
   const pitches = Math.round((r.areaKm2 * 1e6) / PITCH_M2);
   const strips = Math.round((r.areaKm2 * 1e6) / (SWEEP_M * 1000));
   const bench = (r.bench ?? []).slice(0, 4);
+  const field = r.field ?? [];
   const button = (href, label, colour) => `<a href="${escapeHtml(href)}" style="display:inline-block;background:${colour};`
     + 'color:#ffffff;text-decoration:none;font-weight:700;font-size:16px;padding:13px 26px;border-radius:10px;'
     + `margin:6px 6px 0 0;">${label}</a>`;
@@ -158,6 +159,17 @@ export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = '
       ${bar(tag(ai), r.ai, '#ff6fb5', max, false)}
     </table>
   </td></tr>
+  ${field.length > 3 ? `<tr><td style="padding:16px 28px 4px;">
+    <div style="color:#ffffff;font-size:16px;font-weight:700;">Everyone who searched your sea</div>
+    <div style="color:#9fb3c8;font-size:12px;margin:2px 0 6px;">The same cloud, flown by every searcher we tested: the Coast Guard's patterns, our ML model, greedy and random. Best first.</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">
+      ${field.map((s, i) => `<tr style="${s.you ? 'background:#16314d;' : ''}">
+        <td style="padding:4px 8px;color:#9fb3c8;width:24px;">${i + 1}</td>
+        <td style="padding:4px 8px;color:#ffffff;${s.you ? 'font-weight:800;' : ''}">${escapeHtml(s.label)}</td>
+        <td style="padding:4px 8px;color:#ffffff;font-weight:700;text-align:right;">${pct(s.pos)}</td>
+        <td style="padding:4px 8px;text-align:right;">${s.found ? '✅' : '❌'}</td></tr>`).join('')}
+    </table>
+  </td></tr>` : ''}
   <tr><td style="padding:18px 28px 4px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b2238;border-radius:12px;">
       <tr><td style="padding:16px 18px;">
@@ -204,6 +216,8 @@ export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = '
     `You: searched ${pct(r.you.pos)}, ${personWords(r.you)}`,
     `The Coast Guard's pattern: searched ${pct(r.cg.pos)}, ${personWords(r.cg)}`,
     `${tag(r.ai.name)}: searched ${pct(r.ai.pos)}, ${personWords(r.ai)}`, '',
+    ...(field.length > 3 ? ['Everyone who searched your sea, best first:',
+      ...field.map((s, i) => `${i + 1}. ${s.label}  ${pct(s.pos)}${s.found ? '  found them' : ''}`), ''] : []),
     `${r.points} points. The sea you had to search was ${Math.round(r.areaKm2)} km2, about ${pitches} football pitches.`,
     ...(standing ? ['', `The leaderboard (${BOARD_MODE[r.board.mode]}): ${standing}`,
       ...r.board.lines.map((l) => `${l.rank}. ${l.name}${l.you ? ' (you)' : ''}  ${l.score}`)] : []),

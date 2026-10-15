@@ -26,6 +26,24 @@ test('the verdict names who the player beat, all four ways', () => {
   assert.match(r(false, false).subject, /Telemachus won this round/);
 });
 
+test('the email ranks everyone who searched the sea, as a list, and drops a bad one', () => {
+  const field = [
+    { label: 'Greedy (no learning)', pos: 0.439, found: false },
+    { label: 'Coast Guard (Square)', pos: 0.409, found: true },
+    { label: 'You', pos: 0.385, found: true, you: true },
+    { label: 'Random', pos: 0.05, found: false },
+  ];
+  const r = validate(sample({ field }));
+  assert.equal(r.field.length, 4);
+  const out = buildResultEmail(r, { gameUrl: 'https://example.org/game' }, null);
+  assert.ok(out.html.includes('Everyone who searched your sea'));
+  assert.ok(out.html.includes('Greedy (no learning)'));
+  assert.match(out.text, /1\. Greedy \(no learning\)  43\.9 %/);
+  assert.match(out.text, /3\. You  38\.5 %  found them/);
+  assert.equal(validate(sample({ field: 'nonsense' })).field.length, 0);
+  assert.equal(validate(sample({ field: [{ label: 7, pos: 2 }] })).field.length, 0);
+});
+
 test('a player who found them is cheered, and told who searched more', () => {
   const r = (beatAi, beatCg) => verdictOf({ beatAi, beatCg, ai: { name: 'the greedy search' }, you: { found: true } });
   assert.match(r(false, false).subject, /You found them!/);
