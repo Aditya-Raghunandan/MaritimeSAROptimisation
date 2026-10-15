@@ -7,8 +7,28 @@
  * escaped; the numbers are checked by validate() before they get here.
  */
 
-const PITCH_M2 = 105 * 68;          // a FIFA football pitch
 const SWEEP_M = 185.2;              // what the helicopter sees across its track (D027)
+const TRACK_M = 90 * (1852 / 3600) * 45 * 60;   // 45 minutes at 90 kt: 125 km
+/** What one helicopter can see in its 45 minutes, km²: a 185 m strip, 125 km long (23 km²). */
+const SEEN_KM2 = (SWEEP_M * TRACK_M) / 1e6;
+
+/**
+ * The size of the search in plain numbers (Aditya, 15 Oct: football pitches, then 125 km of
+ * flying against a cloud of a few km², was confusing). Where they could be, what one helicopter
+ * can see, and what that means: a share of the sea, or how many times over it could be covered.
+ */
+export function sizeWords(areaKm2) {
+  const area = Math.max(1, Math.round(areaKm2));
+  const seen = Math.round(SEEN_KM2);
+  if (SEEN_KM2 < areaKm2) {
+    return { area, seen, so: `So at best you could search about ${Math.round((100 * SEEN_KM2) / areaKm2)} % of it. Where you fly matters.` };
+  }
+  const times = Math.round(SEEN_KM2 / areaKm2);
+  return {
+    area, seen,
+    so: `Enough to cover it ${times <= 1 ? 'about once' : `about ${times} times over`}, if you fly neat lanes: every turn costs time.`,
+  };
+}
 
 export const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -122,8 +142,7 @@ export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = '
   const name = escapeHtml(r.name || 'Player');
   const ai = escapeHtml(r.ai.name);
   const max = Math.max(r.you.pos, r.cg.pos, r.ai.pos, 0.01);
-  const pitches = Math.round((r.areaKm2 * 1e6) / PITCH_M2);
-  const strips = Math.round((r.areaKm2 * 1e6) / (SWEEP_M * 1000));
+  const size = sizeWords(r.areaKm2);
   const bench = (r.bench ?? []).slice(0, 4);
   const field = r.field ?? [];
   const button = (href, label, colour) => `<a href="${escapeHtml(href)}" style="display:inline-block;background:${colour};`
@@ -174,12 +193,13 @@ export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = '
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b2238;border-radius:12px;">
       <tr><td style="padding:16px 18px;">
         <div style="color:#ffc24a;font-size:30px;font-weight:800;">${r.points.toLocaleString('en-GB')} points</div>
-        <div style="color:#d3dde8;font-size:14px;line-height:1.55;margin-top:4px;">
-          The sea you had to search was <b>${Math.round(r.areaKm2)} km²</b>: about
-          <b>${pitches.toLocaleString('en-GB')} football pitches</b>. Your helicopter could see a strip
-          <b>185 m</b> wide, so covering all of it once would take about ${strips.toLocaleString('en-GB')} km of flying.
-          You had 45 minutes, which is 125 km. That is why where you fly matters.
-        </div>
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:8px;color:#d3dde8;font-size:14px;line-height:1.5;">
+          <tr><td style="padding:2px 16px 2px 0;">Where they could be</td>
+            <td style="padding:2px 0;color:#ffffff;font-weight:700;text-align:right;">${size.area} km²</td></tr>
+          <tr><td style="padding:2px 16px 2px 0;">What your helicopter can see in 45 minutes (a 185 m strip)</td>
+            <td style="padding:2px 0;color:#ffffff;font-weight:700;text-align:right;">${size.seen} km²</td></tr>
+        </table>
+        <div style="color:#d3dde8;font-size:14px;line-height:1.55;margin-top:6px;">${size.so}</div>
       </td></tr>
     </table>
   </td></tr>
@@ -218,7 +238,9 @@ export function buildResultEmail(r, { gameUrl, voteUrl = '' } = {}, imageCid = '
     `${tag(r.ai.name)}: searched ${pct(r.ai.pos)}, ${personWords(r.ai)}`, '',
     ...(field.length > 3 ? ['Everyone who searched your sea, best first:',
       ...field.map((s, i) => `${i + 1}. ${s.label}  ${pct(s.pos)}${s.found ? '  found them' : ''}`), ''] : []),
-    `${r.points} points. The sea you had to search was ${Math.round(r.areaKm2)} km2, about ${pitches} football pitches.`,
+    `${r.points} points.`,
+    `Where they could be: ${size.area} km2. What your helicopter can see in 45 minutes (a 185 m strip): ${size.seen} km2.`,
+    size.so,
     ...(standing ? ['', `The leaderboard (${BOARD_MODE[r.board.mode]}): ${standing}`,
       ...r.board.lines.map((l) => `${l.rank}. ${l.name}${l.you ? ' (you)' : ''}  ${l.score}`)] : []),
     voteUrl ? `Vote for us: ${voteUrl}` : '', gameUrl ? `Play again: ${gameUrl}` : '', '',
