@@ -251,11 +251,12 @@ test.describe('the open-day game', () => {
     await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
     await page.keyboard.up('ArrowRight');
     await expectFits(page);
+    await expect(page.locator('#panels .panel')).toHaveCount(7);         // every searcher the window carries, and you
 
     await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
     await expectFits(page);
     const cg = await fixtureFlight('rvc', 'expanding-square');
-    await expect(page.locator('#scoreTable tr')).toHaveCount(4);
+    await expect(page.locator('#scoreTable .sr')).toHaveCount(7);          // you and the fixture's six searchers
     await expect(page.locator('#scoreTable')).toContainText(`${(100 * cg.pos).toFixed(1)} %`);
     await expect(page.locator('#verdict')).not.toBeEmpty();
     await expect(page.locator('#boardNow')).toContainText('E2E');
@@ -335,7 +336,7 @@ test.describe('the open-day game', () => {
     await page.keyboard.up('ArrowRight');
     await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
     const greedy = await fixtureFlight('rvc', 'greedy');
-    await expect(page.locator('#scoreTable tr').last()).toContainText(`${(100 * greedy.pos).toFixed(1)} %`);
+    await expect(page.locator('#scoreTable .sr.ai')).toContainText(`${(100 * greedy.pos).toFixed(1)} %`);
     await expect(page.locator('#aiWords')).toContainText('within 45 minutes');
     await expect(page.locator('#benchNote')).toContainText('2 h after the call');
     await expectFits(page);
@@ -392,7 +393,7 @@ test.describe('the open-day game', () => {
     await page.keyboard.up('ArrowRight');
     await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
     const agent = await fixtureFlight('rvc', 'sector');
-    await expect(page.locator('#scoreTable tr').last()).toContainText(`${(100 * agent.pos).toFixed(1)} %`);
+    await expect(page.locator('#scoreTable .sr.ai')).toContainText(`${(100 * agent.pos).toFixed(1)} %`);
     await expect(page.locator('#aiWords')).toContainText('machine-learning model');
     await expect(page.locator('#benchTable')).toContainText('Telemachus');
     await expect(page.locator('#benchTable tr')).toHaveCount(8);

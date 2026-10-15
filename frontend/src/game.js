@@ -474,34 +474,69 @@ function flyTick(now) {
 
 /* ---------------------------------------------------------------- reveal */
 
+/** What each searcher is called on a replay panel and in the results: short enough for a quarter of the screen. */
+const SHORT = {
+  'expanding-square': 'Coast Guard (Square)', sector: 'Sector', parallel: 'Parallel Track', trackline: 'Trackline',
+  greedy: 'Greedy (no learning)', ppo: 'Telemachus (ML)', random: 'Random',
+};
+/** After the prize's two rivals, everyone else the window carries, in this order. */
+const REPLAY_ORDER = ['parallel', 'trackline', 'sector', 'greedy', 'ppo', 'random'];
+/** A replay panel's probability map repaints every this many frames, the panels in turn. */
+const HEAT_EVERY = 4;
+
 let panels = null;
+
+/** One map per searcher, four to a row, synced to the first; rebuilt only when the line-up changes. */
+function buildPanels(field) {
+  const keys = field.map((r) => r.key).join();
+  if (panels?.keys === keys) return panels;
+  if (panels) for (const p of panels.list) p.map.remove();
+  const box = $('panels');
+  box.innerHTML = '';
+  const cols = Math.min(4, field.length);
+  box.style.setProperty('--cols', cols);
+  box.style.setProperty('--rows', Math.ceil(field.length / cols));
+  const list = field.map((r) => {
+    const el = document.createElement('div');
+    el.className = `panel${r.key === 'you' ? ' you' : ''}`;
+    el.innerHTML = `<div class="map"></div><div class="tag"><span title="${r.kind}"><i style="background:${r.colour}"></i>`
+      + `${r.label}</span><b>0 %</b></div>`;
+    box.append(el);
+    return { el, map: newMap(el.querySelector('.map'), { zoomControl: false }), pos: el.querySelector('b') };
+  });
+  const [a, ...rest] = list;
+  for (const p of rest) a.map.on('move', () => p.map.setView(a.map.getCenter(), a.map.getZoom(), { animate: false }));
+  panels = { keys, list };
+  return panels;
+}
 
 function reveal() {
   show('reveal');
-  if (!panels) {
-    panels = ['mapYou', 'mapCg', 'mapAi'].map((id) => newMap(id, { zoomControl: false }));
-    const [a, ...rest] = panels;
-    for (const m of rest) {
-      a.on('move', () => m.setView(a.getCenter(), a.getZoom(), { animate: false }));
-    }
-  }
-  for (const m of panels) m.invalidateSize();
   loadBenchmark().catch(() => {});     // fetched while the replay plays, so the results open whole
   if (game.scenes) for (const s of game.scenes) s.destroy();
   const ai = aiOf(game.window, game.hours);
-  $('aiTag').textContent = AI_LABEL[ai];
-  const flights = [
-    rewind(game.player),
-    new RecordedFlight(game.window, CG),
-    new RecordedFlight(game.window, ai),
+  // You, the prize's two rivals (the Coast Guard's pattern and the computer), then every other
+  // searcher the window carries (Aditya, 15 Oct: "compare how all the models did").
+  const keys = [CG, ai, ...REPLAY_ORDER.filter((k) => k !== ai)].filter((k) => game.window.flights[k]);
+  game.field = [
+    { key: 'you', label: `You (${game.name})`, colour: '#ffffff', kind: 'you', flight: rewind(game.player) },
+    ...keys.map((k) => ({
+      key: k,
+      label: SHORT[k] ?? SEARCHER_INFO[k]?.label ?? k,
+      colour: SEARCHER_INFO[k]?.colour ?? '#8a8a80',
+      kind: SEARCHER_INFO[k]?.kind ?? '',
+      flight: new RecordedFlight(game.window, k),
+    })),
   ];
-  const colours = ['#ffffff', SEARCHER_INFO[CG].colour, SEARCHER_INFO[ai].colour];
-  game.scenes = panels.map((m, i) => {
-    const s = new Scene(m, { colour: colours[i], heliSize: 46 });
+  buildPanels(game.field);
+  for (const p of panels.list) p.map.invalidateSize();
+  game.scenes = game.field.map((r, i) => {
+    const s = new Scene(panels.list[i].map, { colour: r.colour, heliSize: game.field.length > 4 ? 34 : 46 });
     s.setWindow(game.window, { fit: i === 0 });
     return s;
   });
-  game.flights = flights;
+  // The three the prize is decided by, as the results' verdict and the email read them.
+  game.flights = game.field.slice(0, 3).map((r) => r.flight);
   $('revealNote').textContent = `${game.scenario.water} water, the helicopter arriving ${arrivalLabel(game.hours)} after the call.`
     + (endedEarly() ? ` You ended your search with ${clock(WINDOW_S - game.player.until)} left.` : '');
   game.t = 0;
@@ -542,14 +577,16 @@ function revealTick(now) {
   const dt = Math.max(0, Math.min(0.1, (now - game.last) / 1000));
   game.last = now;
   game.t = Math.min(WINDOW_S, game.t + dt * REVEAL_SPEED);
-  game.flights.forEach((f, i) => {
-    advance(f, game.t);
-    game.scenes[i].update(game.t, f);
+  // Every helicopter moves every frame; the probability maps repaint two panels a frame in
+  // turn (eight at once cost ~8x a panel), and all of them on the last frame.
+  const last = game.t >= WINDOW_S;
+  game.tick = (game.tick ?? 0) + 1;
+  game.field.forEach((r, i) => {
+    advance(r.flight, game.t);
+    game.scenes[i].update(game.t, r.flight, { heat: last || (game.tick + i) % HEAT_EVERY === 0 });
+    panels.list[i].pos.textContent = pct(r.flight.metrics().pos);
   });
-  $('posYou').textContent = pct(game.flights[0].metrics().pos);
-  $('posCg').textContent = pct(game.flights[1].metrics().pos);
-  $('posAi').textContent = pct(game.flights[2].metrics().pos);
-  if (game.t >= WINDOW_S) {
+  if (last) {
     for (const s of game.scenes) s.showBuoy(WINDOW_S);
     // The real buoy is often kilometres outside the cloud: zoom out until it is in view (the
     // other panels follow the first), and leave it up long enough to look at.
@@ -599,9 +636,8 @@ function headline(v, aiName, you, rivals) {
     return {
       html: 'You found them!',
       cls: 'found',
-      why: `🛟 Great flying: you found them ${you.target.foundS < 30 ? 'the moment you arrived' : `${clock(you.target.foundS)} into the search`}. But ${ahead} searched more of the `
-        + `likely sea than your ${pct(you.pos)}, and over many rescues the bigger search finds more people. Beat both on `
-        + '"searched" to win the prize.',
+      why: `🛟 You found them ${you.target.foundS < 30 ? 'the moment you arrived' : `${clock(you.target.foundS)} in`}! But ${ahead} `
+        + `searched more of the sea than your ${pct(you.pos)}, and over many rescues that finds more people. Beat both to win.`,
     };
   }
   if (v.beaten.includes(aiName)) {
@@ -657,6 +693,21 @@ function renderBoard(shown) {
 }
 
 /**
+ * The left column never scrolls: with eight searchers, a long verdict and the email form it can
+ * run past a 1366 x 768 screen, so the explanations go, the definition of "searched" first
+ * (it is in the email too), then the words about the computer. Measured, not guessed.
+ */
+function fitMain() {
+  const res = $('results');
+  res.classList.remove('tight', 'tighter');
+  if (window.matchMedia('(max-width: 900px)').matches) return;
+  const last = res.querySelector('.res-main > :last-child');
+  const over = () => last.offsetTop + last.offsetHeight > res.clientHeight - 12;
+  if (over()) res.classList.add('tight');
+  if (over()) res.classList.add('tighter');
+}
+
+/**
  * As many of the top as fit beside everything else (nine on a tall screen, six on a 1366 x 768
  * laptop), measured rather than guessed: the results never scroll. A phone scrolls, so it gets ten.
  */
@@ -673,7 +724,7 @@ function drawBoardNow() {
 async function results() {
   clearTimeout(game.holdTimer);
   game.revealing = false;
-  for (const f of game.flights) advance(f, WINDOW_S);
+  for (const r of game.field) advance(r.flight, WINDOW_S);
   const [you, cg, ai] = game.flights.map((f) => f.metrics());
   const aiKey = aiOf(game.window, game.hours);
   const aiName = AI_NAME[aiKey];
@@ -686,20 +737,27 @@ async function results() {
   $('resKicker').textContent = `${WATER[game.scenario.water] ?? game.scenario.water} · the helicopter ${arrivalLabel(game.hours)} after the call`;
   $('verdict').innerHTML = h.html;
   $('verdict').className = `verdict ${h.cls}`;
+  const field = game.field.map((r) => ({ ...r, m: r.flight.metrics() })).sort((a, b) => b.m.pos - a.m.pos);
+  const place = field.findIndex((r) => r.key === 'you') + 1;
+  game.ranked = field;
   $('verdictWhy').textContent = h.why
     + (endedEarly() ? ` You ended the search with ${clock(WINDOW_S - game.player.until)} left on the clock.` : '');
-  const best = Math.max(you.pos, cg.pos, ai.pos);
-  const row = (name, m, colour, cls = '') => {
-    const t = m.target;
-    const buoy = !t ? '' : t.found ? (t.foundS < 30 ? '✓ found them on arrival' : `✓ found them at ${clock(t.foundS)}`) : `✗ missed by ${(t.closestM / 1000).toFixed(1)} km`;
-    return `<tr class="${cls}"><td class="who">${name}${m.pos === best ? '<span class="best">BEST</span>' : ''}</td>`
-      + `<td class="barcell"><div class="bar"><i style="width:${(100 * m.pos).toFixed(1)}%;background:${colour}"></i></div></td>`
-      + `<td class="pos">${pct(m.pos)}</td><td class="found${t?.found ? ' yes' : ''}">${buoy}</td></tr>`;
+  // Everyone who flew this sea, best first, a card each, two to a row: the player against the
+  // Coast Guard's four patterns, greedy, Telemachus and random, not only the prize's two rivals.
+  const best = field[0].m.pos;
+  const card = (r, rank) => {
+    const t = r.m.target;
+    const buoy = !t ? '' : t.found ? (t.foundS < 30 ? '✓ found on arrival' : `✓ found at ${clock(t.foundS)}`)
+      : `✗ missed by ${(t.closestM / 1000).toFixed(1)} km`;
+    const cls = ['sr', r.key === 'you' && 'you', r.key === aiKey && 'ai', r.key === CG && 'cg'].filter(Boolean).join(' ');
+    return `<div class="${cls}"><span class="rk">${rank}</span>`
+      + `<span class="nm"><i style="background:${r.colour}"></i>${r.label}${r.m.pos === best ? '<span class="best">BEST</span>' : ''}</span>`
+      + `<b class="pc">${pct(r.m.pos)}</b>`
+      + `<div class="bar"><i style="width:${(100 * r.m.pos).toFixed(1)}%;background:${r.colour}"></i></div>`
+      + `<span class="fd${t?.found ? ' yes' : ''}">${buoy}</span></div>`;
   };
-  $('scoreTable').innerHTML = '<tr><th></th><th colspan="2">Searched</th><th>The real person</th></tr>'
-    + row(`You (${game.name})`, you, '#ffffff', 'you')
-    + row('Coast Guard', cg, SEARCHER_INFO[CG].colour)
-    + row(AI_LABEL[aiKey], ai, SEARCHER_INFO[aiKey].colour);
+  $('scoreTable').innerHTML = `<div class="field-head"><span><b>You placed ${ordinal(place)} of ${field.length}</b> on this sea, `
+    + 'by how much each searched</span><span>and the real person</span></div>' + field.map((r, i) => card(r, i + 1)).join('');
   $('pointsWhy').textContent = `This cloud covered ${Math.round(area)} km² when the helicopter arrived. On a cloud `
     + `that big the Coast Guard's pattern searches about ${Math.round(100 * par(area))} % on average: that is 1,000 points, `
     + 'and you score the same share of 1,000 for what you searched. A bigger cloud is harder, so it pays more.';
@@ -720,6 +778,7 @@ async function results() {
   }
   const wasOn = game.screen === 'results';
   show('results');
+  fitMain();
   drawBoardNow();
   countUp($('pointsBig'), points);
   if (!wasOn && v.won) confetti();
@@ -775,6 +834,11 @@ async function sendEmail(e) {
     arrival: arrivalLabel(game.hours),
     // The board on this computer (at the stand, everyone who played there today).
     board: { mode: game.mode, ...standing(game.board ?? load(), game.mode, game.name) },
+    // Everyone on this sea, best first, as a list: the picture keeps to three flights, so it
+    // does not turn into a tangle of eight.
+    field: (game.ranked ?? []).map((r) => ({
+      label: r.key === 'you' ? 'You' : r.label, pos: r.m.pos, found: Boolean(r.m.target?.found), you: r.key === 'you',
+    })),
   };
   try {
     body.image = flightPicture();

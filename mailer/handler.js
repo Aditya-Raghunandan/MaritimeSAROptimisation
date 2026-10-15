@@ -81,6 +81,11 @@ export function validate(body) {
     if (!m) throw new Error('image must be a PNG or JPEG data URL under 900 kB');
     image = { type: m[1], base64: m[2] };
   }
+  // Everyone who searched the player's sea, best first (15 Oct). A bad list is dropped, not refused.
+  const field = Array.isArray(body.field)
+    ? body.field.slice(0, 10).filter((s) => s && typeof s.label === 'string' && num(s.pos, 0, 1))
+      .map((s) => ({ label: s.label.slice(0, 40), pos: s.pos, found: Boolean(s.found), you: Boolean(s.you) }))
+    : [];
   const bench = Array.isArray(body.bench)
     ? body.bench.slice(0, 7).filter((b) => b && typeof b.label === 'string' && num(b.pos, 0, 1))
       .map((b) => ({ label: b.label.slice(0, 40), pos: b.pos }))
@@ -96,6 +101,7 @@ export function validate(body) {
     beatAi: you.pos > ai.pos,
     beatCg: you.pos > cg.pos,
     bench,
+    field,
     arrival: typeof body.arrival === 'string' && ARRIVAL_RE.test(body.arrival) ? body.arrival : null,
     board: boardOf(body.board),
     image,

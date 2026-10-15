@@ -170,14 +170,20 @@ export class Scene {
     this.map.fitBounds(L.latLngBounds(pts).pad(pad), { animate: true });
   }
 
-  /** The search at t seconds after arrival, as `flight` has flown it so far. */
-  update(time, flight) {
+  /**
+   * The search at t seconds after arrival, as `flight` has flown it so far. `heat: false` moves
+   * the helicopter and its trail but leaves the probability map as it was, the costly part: the
+   * replay's eight panels repaint their maps in turn rather than all eight every frame.
+   */
+  update(time, flight, { heat = true } = {}) {
     // requestAnimationFrame's clock can start a frame a hair before the one a loop stored.
     const t = Math.min(flight.duration, Math.max(0, time));
-    const { lat, lon } = flight.ep.particlesAt(t);
-    this.probability.setState({
-      lat, lon, weight: flight.ep.weight, prior: this.window.cloud.weight, marker: this.window.marker, t,
-    });
+    if (heat) {
+      const { lat, lon } = flight.ep.particlesAt(t);
+      this.probability.setState({
+        lat, lon, weight: flight.ep.weight, prior: this.window.cloud.weight, marker: this.window.marker, t,
+      });
+    }
     const trail = flight.trail(t).map(([, la, lo]) => ll(la, lo));
     this.strip.setLatLngs(trail);
     this.path.setLatLngs(trail);
