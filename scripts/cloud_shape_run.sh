@@ -40,26 +40,10 @@ prepare)
     [ -f "$SHAPE" ] || { echo "no fit at $SHAPE"; exit 1; }
     [ ! -e "$TRUTH_RVS/validation" ] || { echo "$TRUTH_RVS/validation exists"; exit 1; }
     mkdir -p "$TRUTH_RVS" && cp "$TRUTH"/rows_*.csv "$TRUTH_RVS"/
-    V=$(sbatch --parsable --job-name=truth_rvs --partition=jaguarcluster --array=1-12 \
-        --exclude=jaguar11 --cpus-per-task=4 --mem=16G --time=01:00:00 \
-        --output=logs/truth_rvs_%A_%a.out --wrap="export OMP_NUM_THREADS=1
-K=\$((SLURM_ARRAY_TASK_ID-1))
-for P in 0 1 2 3; do timeout 1800 $PY scripts/truth_windows.py build --forcing-dir $DATA \
-    --out $TRUTH_RVS --roles validation --part \$((4*K+P)) --parts 48 --shape-json $SHAPE & done
-wait")
-    M=$(sbatch --parsable --job-name=measure_rvs --partition=jaguarcluster --array=0-11 \
-        --exclude=jaguar11 --mem=8G --time=00:30:00 --dependency="afterany:$V" \
-        --output=logs/measure_rvs_%A_%a.out --wrap="export OMP_NUM_THREADS=1
-$PY scripts/cloud_shape.py measure --windows $TRUTH_RVS/validation --rows $TRUTH_RVS/rows_validation.csv \
-    --forcing-dir $DATA --out $DATA/derived/shape/validation_rvs/part\$SLURM_ARRAY_TASK_ID.csv \
-    --part \$SLURM_ARRAY_TASK_ID --parts 12")
-    W=$(sbatch --parsable --job-name=windows_rvs --partition=jaguarcluster --array=1-12 \
-        --exclude=jaguar11 --cpus-per-task=4 --mem=24G --time=02:00:00 \
-        --output=logs/windows_rvs_%A_%a.out --wrap="export OMP_NUM_THREADS=1
-K=\$((SLURM_ARRAY_TASK_ID-1))
-for P in 0 1 2 3; do $PY scripts/shaped_windows.py --src $ROUND --out $SHAPED --forcing-dir $DATA \
-    --shape-json $SHAPE --part \$((4*K+P)) --parts 48 & done
-wait")
+    V=$(TASKS=12 sbatch --parsable --job-name=truth_rvs --partition=jaguarcluster --array=1-12         --exclude=jaguar11 --cpus-per-task=4 --mem=16G --time=01:00:00         --output=logs/truth_rvs_%A_%a.out scripts/run_parts.sh "$PY" scripts/truth_windows.py build         --forcing-dir "$DATA" --out "$TRUTH_RVS" --roles validation --shape-json "$SHAPE")
+    M=$(sbatch --parsable --job-name=measure_rvs --partition=jaguarcluster --array=0-11         --exclude=jaguar11 --mem=8G --time=00:30:00 --dependency="afterok:$V"         --output=logs/measure_rvs_%A_%a.out --wrap="export OMP_NUM_THREADS=1
+$PY scripts/cloud_shape.py measure --windows $TRUTH_RVS/validation --rows $TRUTH_RVS/rows_validation.csv     --forcing-dir $DATA --out $DATA/derived/shape/validation_rvs/part\$SLURM_ARRAY_TASK_ID.csv     --part \$SLURM_ARRAY_TASK_ID --parts 12")
+    W=$(TASKS=12 sbatch --parsable --job-name=windows_rvs --partition=jaguarcluster --array=1-12         --exclude=jaguar11 --cpus-per-task=4 --mem=24G --time=02:00:00         --output=logs/windows_rvs_%A_%a.out scripts/run_parts.sh "$PY" scripts/shaped_windows.py         --src "$ROUND" --out "$SHAPED" --forcing-dir "$DATA" --shape-json "$SHAPE")
     echo "held-out clouds $V -> measured $M; practice clouds $W -> $SHAPED"
     ;;
 train)
