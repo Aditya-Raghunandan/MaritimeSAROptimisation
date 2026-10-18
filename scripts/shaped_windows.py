@@ -65,6 +65,7 @@ def main(argv=None):
     parser.add_argument("--parts", type=int, default=1)
     args = parser.parse_args(argv)
     shape = json.loads(Path(args.shape_json).read_text())
+    print(f"part {args.part}: shape {shape}", flush=True)      # what was read, not what was meant
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     files = sorted(Path(args.src).glob("windows_*.npz"))[args.part::args.parts]

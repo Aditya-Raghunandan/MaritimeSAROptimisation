@@ -97,6 +97,7 @@ def main(argv=None) -> None:
         select(args.csv, args.out, args.per_group, args.val_per_group, args.val_every)
     else:
         shape = json.loads(Path(args.shape_json).read_text()) if args.shape_json else None
+        print(f"part {args.part}: shape {shape}", flush=True)
         build(args.forcing_dir, args.out, args.part, args.parts, args.arrival_min, args.particles,
               shape, args.roles)
 
