@@ -17,9 +17,9 @@ and after on the same footing).
 
 `fit`, from measure's CSV: the buoy's along offset = b_c x the current's along displacement +
 b_w x the leeway's, no intercept, so the model's current is scaled by 1 + b_c and the leeway is
-2 % x (1 + b_w); 95 % intervals resampling groups. Then the offsets that remain, in units of the
-cloud's spread along and across: the factors the random velocity must take along and across the
-drift for each to come out at 1.
+2 % x (1 + b_w); 95 % intervals resampling groups. The correction used is one scale for the whole
+drift (the split is not identifiable, see the 18 Oct notebook). Then, per axis, the factor on the
+random velocity that puts 90 % of the training buoys inside the new cloud's central 90 %.
 
     python scripts/cloud_shape.py measure --windows DIR/train --rows DIR/rows_train.csv \\
         --forcing-dir DATA --out shape_train.csv [--part K --parts P]
@@ -43,6 +43,7 @@ from sar.search.sweep import relative_m
 from sar.utils.geo import offset_position
 
 CHI2_90_2DOF = 4.605170185988092      # -2 ln(0.1): the 90 % ellipse of a 2-D Gaussian
+Z90 = 1.6448536269514722              # the central 90 % of one Gaussian axis
 MIN_DRIFT_M = 50.0                    # below this the drift has no direction worth projecting on
 SAMPLE_S = 300.0                      # how often the forcing is sampled along the centre's path
 BOOTSTRAP_SEED, RESAMPLES = 20261018, 2000
@@ -171,8 +172,14 @@ def fit(csvs, out) -> dict:
     # The correction taken forward is the one scale: the two-way split cannot be told apart
     # from a noisy forecast measured in its own direction (18 Oct), so it is reported, not used.
     shape = _shape(f, (one, one))
-    along = float(np.mean([s["rms_along_units"] for s in shape.values()]))
-    across = float(np.mean([s["rms_across_units"] for s in shape.values()]))
+    # The factors: per axis, the one that puts 90 % of the training buoys within the new cloud's
+    # central 90 % (+-1.645 sd), the criterion D030 and D033 calibrated the size on. The first
+    # try matched the rms instead (1.21 along, 0.94 across), and a few large errors at 1 h pulled
+    # it so far that the held-out cloud covered 96-97 % (18 Oct): rms is not robust here.
+    a = (f["along_m"] - one * (f["current_along_m"] + f["leeway_along_m"])) / f["sd_along_m"]
+    c = f["across_m"] / f["sd_across_m"]
+    along = float(np.quantile(np.abs(a), 0.9) / Z90)
+    across = float(np.quantile(np.abs(c), 0.9) / Z90)
     result = {
         "rows": int(len(f)), "groups": int(groups.size), "windows": int(f["name"].nunique()),
         "b_current": float(b[0]), "b_current_ci": [float(lo[0]), float(hi[0])],
@@ -182,6 +189,8 @@ def fit(csvs, out) -> dict:
         "b_one": one, "b_one_ci": [float(one_lo), float(one_hi)],
         "current_scale": 1.0 + one, "wind_scale": 1.0 + one,
         "along": along, "across": across,
+        "rms_along": float(np.mean([s["rms_along_units"] for s in shape.values()])),
+        "rms_across": float(np.mean([s["rms_across_units"] for s in shape.values()])),
         "by_hour": shape,
     }
     Path(out).write_text(json.dumps(result, indent=1))

@@ -27,10 +27,12 @@ EXTRA_SEARCHERS = REORDERED
 # comparison; rw the old random walk (D028).
 # rvs (18 Oct, vault L41) is rvc recalibrated on the 1,448 TRAINING truth windows
 # (scripts/cloud_shape.py fit, derived/shape/fit_train.json; 80 groups, fixes at 1, 2, 3 h):
-# the whole drift scaled by 0.695 (95 % CI 0.61-0.79), and the random velocity stretched 1.21
-# along each particle's drift and 0.94 across it. A forecast recalibration, not a physical
-# claim: a noisy, unbiased drift measured along its own direction shows the same lag and stretch.
-SHAPE = {"current_scale": 0.695, "wind_scale": 0.695, "along": 1.210, "across": 0.940}
+# the whole drift scaled by 0.695 (95 % CI 0.61-0.79), then the random velocity scaled 0.891 along
+# each particle's drift and 0.851 across it, so 90 % of the training buoys sit inside the central
+# 90 % on each axis. Once the cloud is where the buoys go it can be smaller, and nearly round.
+# A forecast recalibration, not a physical claim: a noisy, unbiased drift measured along its own
+# direction shows the same lag and stretch.
+SHAPE = {"current_scale": 0.695, "wind_scale": 0.695, "along": 0.891, "across": 0.851}
 NOISE = {"rvc": {"sigma_u": BY_CURRENT, "sigma": 0.0},
          "rv": {"sigma_u": CALIBRATED_SIGMA_U, "sigma": 0.0},
          "rw": {"sigma_u": 0.0, "sigma": CALIBRATED_SIGMA},
