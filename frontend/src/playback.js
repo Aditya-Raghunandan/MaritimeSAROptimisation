@@ -105,7 +105,9 @@ export class RecordedFlight extends Flight {
   /** Fly every minute that has finished by t seconds after arrival. */
   advanceTo(t) {
     while (!this.ep.done && (this.ep.k + 1) * STEP_S <= t + 1e-9) {
-      this.ep.fly(this.steps[this.ep.k]);
+      const step = this.steps[this.ep.k];
+      if (step.speedMs) this.ep.setSpeed(step.speedMs);   // Telemachus S picks its speed each minute
+      this.ep.fly(step);
     }
   }
 

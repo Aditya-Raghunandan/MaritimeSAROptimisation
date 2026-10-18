@@ -18,7 +18,8 @@
  * and carries the heading at every waypoint; v1 (format 1) by the old one that turned at
  * once. v4 (13 Oct) adds the arrivals 15, 30 and 45 min to 1, 2 and 3 h, rvc only, with the
  * second trained model (Telemachus 2) as "ppo". v3 is v2 with a seventh flight, the trained agent ("ppo"), and index.json says which
- * model flew it. The newest version that is published is used, so publishing one switches
+ * model flew it. v5 (18 Oct) is v4 plus Telemachus S as "telemachus", which picks its speed each
+ * minute, so its steps carry `speed_ms`. The newest version that is published is used, so publishing one switches
  * the site over without a deploy; each window says which helicopter flew it (`turnRateDegS`).
  */
 
@@ -26,7 +27,7 @@ import { cloudFromOffsets } from './referee.js';
 
 export const DATA_BASE = String(import.meta.env.VITE_DATA_BASE ?? './data').replace(/\/$/, '');
 /** Newest first. */
-export const SCENARIO_VERSIONS = ['v4', 'v3', 'v2', 'v1'];
+export const SCENARIO_VERSIONS = ['v5', 'v4', 'v3', 'v2', 'v1'];
 export const SCENARIO_ROOT = `${DATA_BASE}/scenarios/${SCENARIO_VERSIONS[SCENARIO_VERSIONS.length - 1]}`;
 /** The 3D loops, which do not change with the helicopter. */
 export const SHOWCASE_ROOT = `${DATA_BASE}/scenarios/showcase`;
@@ -39,12 +40,13 @@ export const SEARCHER_INFO = {
   trackline: { label: 'Trackline', kind: 'Coast Guard pattern', colour: '#e8735a' },
   greedy: { label: 'Greedy', kind: 'reads the map', colour: '#04c951' },
   ppo: { label: 'Telemachus (ML model)', kind: 'reinforcement learning on five years of drift', colour: '#ff6fb5' },
+  telemachus: { label: 'Telemachus S (ML model)', kind: 'the ML model that also picks its speed', colour: '#ff3df5' },
   random: { label: 'Random', kind: 'the floor', colour: '#8a8a80' },
 };
 
 /** The searchers a version's files carry, in SEARCHER_INFO's order. Before v3 there is no agent. */
 export function searchersOf(index) {
-  const have = index?.searchers ?? Object.keys(SEARCHER_INFO).filter((k) => k !== 'ppo');
+  const have = index?.searchers ?? Object.keys(SEARCHER_INFO).filter((k) => k !== 'ppo' && k !== 'telemachus');
   return Object.keys(SEARCHER_INFO).filter((k) => have.includes(k));
 }
 
@@ -54,11 +56,21 @@ export function searchersOf(index) {
  * buoys of the 13 Oct probe as on the 55, so the line is drawn at 45 min (Aditya, 13 Oct).
  */
 export const ML_UNTIL_H = 0.75;
+/**
+ * The same line for Telemachus S, where a version carries it (v5): on the 55 it beats greedy on
+ * POS up to 1 h (+2.2 points, better on 54 of 55) and only ties it at 2 h (18 Oct).
+ */
+export const ML_S_UNTIL_H = 1;
 
-/** Who plays the computer's side: the trained model where the window has its flight and the
- * helicopter arrives by ML_UNTIL_H, else greedy. */
+/** Until when the trained model plays, for a version that does (`hasS`) or does not carry Telemachus S. */
+export function mlUntilH(hasS) { return hasS ? ML_S_UNTIL_H : ML_UNTIL_H; }
+
+/** Who plays the computer's side: the newest trained model whose flight the window has, while
+ * the helicopter arrives by its line, else greedy. */
 export function aiOf(window, hours) {
-  return window?.flights?.ppo && hours <= ML_UNTIL_H + 1e-9 ? 'ppo' : 'greedy';
+  const f = window?.flights;
+  if (f?.telemachus) return hours <= ML_S_UNTIL_H + 1e-9 ? 'telemachus' : 'greedy';
+  return f?.ppo && hours <= ML_UNTIL_H + 1e-9 ? 'ppo' : 'greedy';
 }
 
 /** The arrival times, in hours, a scenario's files carry for one drift model, soonest first. */
@@ -185,6 +197,7 @@ export async function loadWindow(scenario, noise, hours, root) {
       ...f,
       steps: f.steps.map((s) => ({
         tS: s.t_s, eastM: s.east_m, northM: s.north_m, headingDeg: s.heading_deg ?? undefined,
+        speedMs: s.speed_ms ?? undefined,
       })),
     };
   }
