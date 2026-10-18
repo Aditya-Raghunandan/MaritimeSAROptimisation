@@ -40,7 +40,7 @@ import {
   arrivalLabel,
   arrivalsOf,
   loadWindow,
-  ML_UNTIL_H,
+  mlUntilH,
 } from './scenarioData.js';
 import { bearing } from './kinematics.js';
 import { M_PER_DEG_LAT } from './geo.js';
@@ -74,23 +74,33 @@ const AI_WORDS = {
   ppo: '<b>Telemachus</b> is our machine-learning model: a small neural network trained by '
     + 'reinforcement learning (PPO). It learned where to fly by searching five years of simulated '
     + 'drift, choosing a new heading every 30 seconds, rewarded for every possible position its strip passed over.',
+  // Telemachus S (scenarios/v5, 18 Oct): Telemachus 2 that also picks its speed each minute.
+  telemachus: '<b>Telemachus S</b> is our newest machine-learning model: a small neural network trained by '
+    + 'reinforcement learning (PPO) on five years of simulated drift. Every 30 seconds it picks a heading, '
+    + 'and every minute a speed: 90, 60 or 45 knots. Slower turns tighter but covers less sea, so it '
+    + 'mostly flies flat out and slows only for a few minutes over small, fresh clouds.',
   greedy: '<b>The computer</b> here flies a greedy search, with no learning: always to where the most '
     + 'probability is left. The trained model takes its place once its flights are published.',
   // The trained model's flight is there, but the helicopter arrives too late for it (aiOf).
   late: '<b>The computer</b> here flies a greedy search, with no learning: always to where the most '
     + 'probability is left. When the helicopter arrives within 45 minutes, our machine-learning '
     + 'model, Telemachus, flies instead; from an hour on, greedy finds more on our test buoys.',
+  lateS: '<b>The computer</b> here flies a greedy search, with no learning: always to where the most '
+    + 'probability is left. When the helicopter arrives within an hour, our machine-learning '
+    + 'model, Telemachus S, flies instead; later than that, greedy does as well or better on our test buoys.',
 };
 
 /** The words under the results for whoever flew the computer's side of this window. */
 function aiWords(window, hours) {
   const ai = aiOf(window, hours);
-  return AI_WORDS[ai === 'greedy' && window?.flights?.ppo ? 'late' : ai];
+  if (ai !== 'greedy') return AI_WORDS[ai];
+  if (window?.flights?.telemachus) return AI_WORDS.lateS;
+  return AI_WORDS[window?.flights?.ppo ? 'late' : 'greedy'];
 }
 /** What the computer's searcher is called, by who flew it: Telemachus is the trained model (named
  * 12 Oct). Machine learning, not "AI" (Suné, 13 Oct); greedy does not learn, so it is not called ML. */
-const AI_NAME = { ppo: 'Telemachus', greedy: 'the greedy search' };
-const AI_LABEL = { ppo: 'Telemachus (ML model)', greedy: 'Greedy search (no learning)' };
+const AI_NAME = { ppo: 'Telemachus', telemachus: 'Telemachus', greedy: 'the greedy search' };
+const AI_LABEL = { ppo: 'Telemachus (ML model)', telemachus: 'Telemachus S (ML model)', greedy: 'Greedy search (no learning)' };
 // The mailer (mailer/ in this repo): a Vercel function for the public site, or a laptop at the
 // stand. Unset, the game offers no email.
 const MAILER_URL = String(import.meta.env.VITE_MAILER_URL ?? '');
@@ -349,7 +359,7 @@ function drawArrivals() {
     b.addEventListener('click', () => { game.hours = h; drawArrivals(); });
     box.append(b);
   }
-  $('arrivalNote').textContent = game.hours <= ML_UNTIL_H
+  $('arrivalNote').textContent = game.hours <= mlUntilH(game.index?.searchers?.includes('telemachus'))
     ? `Arriving ${arrivalLabel(game.hours)} after the call: the cloud is still small, and you are up against Telemachus, our machine-learning model.`
     : `Arriving ${arrivalLabel(game.hours)} after the call: the cloud has spread, and you are up against the greedy search.`;
 }
@@ -477,10 +487,11 @@ function flyTick(now) {
 /** What each searcher is called on a replay panel and in the results: short enough for a quarter of the screen. */
 const SHORT = {
   'expanding-square': 'Coast Guard (Square)', sector: 'Sector', parallel: 'Parallel Track', trackline: 'Trackline',
-  greedy: 'Greedy (no learning)', ppo: 'Telemachus (ML)', random: 'Random',
+  greedy: 'Greedy (no learning)', ppo: 'Telemachus (ML)', telemachus: 'Telemachus S (ML)', random: 'Random',
 };
-/** After the prize's two rivals, everyone else the window carries, in this order. */
-const REPLAY_ORDER = ['parallel', 'trackline', 'sector', 'greedy', 'ppo', 'random'];
+/** After the prize's two rivals, everyone else the window carries, in this order. Where a window
+ * carries Telemachus S, it stands in for Telemachus 2, so the replay stays at eight panels. */
+const REPLAY_ORDER = ['parallel', 'trackline', 'sector', 'greedy', 'telemachus', 'ppo', 'random'];
 /** A replay panel's probability map repaints every this many frames, the panels in turn. */
 const HEAT_EVERY = 4;
 
@@ -517,7 +528,8 @@ function reveal() {
   const ai = aiOf(game.window, game.hours);
   // You, the prize's two rivals (the Coast Guard's pattern and the computer), then every other
   // searcher the window carries (Aditya, 15 Oct: "compare how all the models did").
-  const keys = [CG, ai, ...REPLAY_ORDER.filter((k) => k !== ai)].filter((k) => game.window.flights[k]);
+  const older = game.window.flights.telemachus ? 'ppo' : null;   // Telemachus S stands in for Telemachus 2
+  const keys = [CG, ai, ...REPLAY_ORDER.filter((k) => k !== ai && k !== older)].filter((k) => game.window.flights[k]);
   game.field = [
     { key: 'you', label: `You (${game.name})`, colour: '#ffffff', kind: 'you', flight: rewind(game.player) },
     ...keys.map((k) => ({

@@ -28,8 +28,15 @@ describe("who plays the computer's side", () => {
     expect(aiOf({ flights: { greedy: {} } }, 0.5)).toBe('greedy');
   });
 
-  it('looks for v4 first', () => {
-    expect(SCENARIO_VERSIONS[0]).toBe('v4');
+  it('is Telemachus S, up to 1 h, where the window carries it', () => {
+    const all = { flights: { greedy: {}, ppo: {}, telemachus: {} } };
+    expect(aiOf(all, 0.25)).toBe('telemachus');
+    expect(aiOf(all, 1)).toBe('telemachus');
+    expect(aiOf(all, 2)).toBe('greedy');
+  });
+
+  it('looks for v5 first', () => {
+    expect(SCENARIO_VERSIONS[0]).toBe('v5');
   });
 });
 
