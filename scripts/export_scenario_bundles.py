@@ -24,7 +24,9 @@ cloud) and its score agrees with the paper's to about 1e-6.
 The flights are the benchmark's (`sar.search.benchmark`), recorded as they are flown, and the
 numbers beside them are the referee's, computed here. Since D032 (format 2) the helicopter
 turns at most `turn_rate_deg_s` and arrives on `arrival_heading_deg`; every step carries the
-heading at each waypoint, so the browser's referee checks the turns as Python's does. A
+heading at each waypoint, so the browser's referee checks the turns as Python's does. A flight
+whose speed changes (Telemachus S, scenarios/v5) also carries each step's `speed_ms`, and the
+browser flies that step at that speed and the turn rate a 30 degree bank gives at it. A
 format 1 window (scenarios/v1) was flown by a helicopter that turned at once. Nothing about a window is stored that
 cannot be rebuilt from its row and seed.
 
@@ -52,7 +54,7 @@ import pandas as pd
 from sar.pipeline.gridded import GriddedForcing
 from sar.search.benchmark import GREEDY, NOISE, NOISE_RECORD, SEARCHERS, recorded, searcher
 from sar.search.episode import STEPS, run
-from sar.search.platform import STEP_S, SWEEP_WIDTH_M, TURN_RATE_DEG_S
+from sar.search.platform import SEARCH_SPEED_MS, STEP_S, SWEEP_WIDTH_M, TURN_RATE_DEG_S
 from sar.search.scenario import (
     arrival_heading,
     datum_line,
@@ -120,14 +122,26 @@ def flights(setup, row, hours: float, greedy: dict, ppo=None, telemachus=None) -
         policy, first, layout = (agents[name](setup, row) if name in agents
                                  else searcher(name, setup, row, hours, greedy))
         flying, steps = recorded(policy)
-        m = run(flying, search_episode(setup))
+        speeds = []
+
+        def flying_at_speed(episode, flying=flying, speeds=speeds):
+            # Telemachus S sets its speed inside the policy, so the step's speed is read after.
+            action = flying(episode)
+            speeds.append(episode.speed_ms)
+            return action
+
+        m = run(flying_at_speed, search_episode(setup))
         target = m.get("target") or {}
+        # A step's speed is written only for a flight that changes it, so every other
+        # searcher's file is unchanged and an older site reads them as before.
+        varies = any(abs(v - SEARCH_SPEED_MS) > 1e-9 for v in speeds)
         out[name] = {
             "layout": layout, "first_bearing_deg": first,
             "steps": [{"t_s": _floats(s.t_s), "east_m": _floats(s.east_m),
                        "north_m": _floats(s.north_m),
-                       "heading_deg": None if s.heading_deg is None else _floats(s.heading_deg)}
-                      for s in steps],
+                       "heading_deg": None if s.heading_deg is None else _floats(s.heading_deg),
+                       **({"speed_ms": round(float(v), 9)} if varies else {})}
+                      for s, v in zip(steps, speeds)],
             "python": {"pos": m["pos"], "drain_rate": m["removed_per_step"],
                        "expected_ttd_s": m["expected_ttd_s"],
                        "found": target.get("found"), "found_s": target.get("found_s"),
