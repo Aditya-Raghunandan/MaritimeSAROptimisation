@@ -25,12 +25,20 @@ EXTRA_SEARCHERS = REORDERED
 # The drift engine's random term, by name. rvc is the calibrated one since D033: the random
 # velocity sized by the current at the start. rv is D030's pooled size, kept as the
 # comparison; rw the old random walk (D028).
+# rvs (18 Oct, vault L41) is rvc recalibrated on the 1,448 TRAINING truth windows
+# (scripts/cloud_shape.py fit, derived/shape/fit_train.json; 80 groups, fixes at 1, 2, 3 h):
+# the whole drift scaled by 0.695 (95 % CI 0.61-0.79), and the random velocity stretched 1.21
+# along each particle's drift and 0.94 across it. A forecast recalibration, not a physical
+# claim: a noisy, unbiased drift measured along its own direction shows the same lag and stretch.
+SHAPE = {"current_scale": 0.695, "wind_scale": 0.695, "along": 1.210, "across": 0.940}
 NOISE = {"rvc": {"sigma_u": BY_CURRENT, "sigma": 0.0},
          "rv": {"sigma_u": CALIBRATED_SIGMA_U, "sigma": 0.0},
-         "rw": {"sigma_u": 0.0, "sigma": CALIBRATED_SIGMA}}
+         "rw": {"sigma_u": 0.0, "sigma": CALIBRATED_SIGMA},
+         "rvs": {"sigma_u": BY_CURRENT, "sigma": 0.0, "current_scale": SHAPE["current_scale"],
+                 "wind_scale": SHAPE["wind_scale"], "shape": (SHAPE["along"], SHAPE["across"])}}
 # What a results folder's manifest records for each, so a rule change can't hide in a name.
 NOISE_RECORD = {"rvc": {**NOISE["rvc"], "rule": SIGMA_U_RULE}, "rv": NOISE["rv"],
-                "rw": NOISE["rw"]}
+                "rw": NOISE["rw"], "rvs": {**NOISE["rvs"], "rule": SIGMA_U_RULE}}
 BASELINE = "expanding-square"          # D004: what every other searcher is compared with
 # Greedy's settings, chosen on the 55 dev rows (D031), frozen before any test set is opened.
 GREEDY = {"headings": 36, "decide_s": 60.0}

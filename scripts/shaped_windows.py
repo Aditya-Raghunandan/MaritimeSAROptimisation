@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -74,7 +75,8 @@ def main(argv=None):
                 done += 1
         except (ValueError, FileNotFoundError) as error:
             print(f"{path.name}: skipped, {error}", flush=True)
-    print(f"part {args.part}: {done} of {len(files)} remade into {out}")
+    print(f"part {args.part}: {done} of {len(files)} remade into {out}", flush=True)
+    os._exit(0)      # as cloud_shape.py: written, so never left waiting on the readers' threads
 
 
 if __name__ == "__main__":
