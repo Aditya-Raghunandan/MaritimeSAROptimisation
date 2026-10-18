@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -132,6 +134,12 @@ def _fit_lag(f: pd.DataFrame) -> np.ndarray:
     return np.linalg.lstsq(X, f["along_m"].to_numpy(), rcond=None)[0]
 
 
+def _fit_one(f: pd.DataFrame) -> float:
+    """One scale for the whole drift: along = b x (current + leeway) along."""
+    x = (f["current_along_m"] + f["leeway_along_m"]).to_numpy()
+    return float(x @ f["along_m"].to_numpy() / (x @ x))
+
+
 def _shape(f: pd.DataFrame, b) -> dict:
     resid = f["along_m"] - (b[0] * f["current_along_m"] + b[1] * f["leeway_along_m"])
     out = {}
@@ -152,21 +160,28 @@ def fit(csvs, out) -> dict:
     rng = np.random.default_rng(BOOTSTRAP_SEED)
     groups = f["group"].unique()
     by = {g: part for g, part in f.groupby("group")}
-    draws = []
+    one = _fit_one(f)
+    draws, ones = [], []
     for _ in range(RESAMPLES):
-        pick = rng.choice(groups, size=groups.size, replace=True)
-        draws.append(_fit_lag(pd.concat([by[g] for g in pick])))
+        part = pd.concat([by[g] for g in rng.choice(groups, size=groups.size, replace=True)])
+        draws.append(_fit_lag(part))
+        ones.append(_fit_one(part))
     lo, hi = np.percentile(np.array(draws), [2.5, 97.5], axis=0)
-    shape = _shape(f, b)
+    one_lo, one_hi = np.percentile(ones, [2.5, 97.5])
+    # The correction taken forward is the one scale: the two-way split cannot be told apart
+    # from a noisy forecast measured in its own direction (18 Oct), so it is reported, not used.
+    shape = _shape(f, (one, one))
     along = float(np.mean([s["rms_along_units"] for s in shape.values()]))
     across = float(np.mean([s["rms_across_units"] for s in shape.values()]))
     result = {
         "rows": int(len(f)), "groups": int(groups.size), "windows": int(f["name"].nunique()),
         "b_current": float(b[0]), "b_current_ci": [float(lo[0]), float(hi[0])],
         "b_leeway": float(b[1]), "b_leeway_ci": [float(lo[1]), float(hi[1])],
-        "current_scale": 1.0 + float(b[0]),
-        "leeway": LEEWAY_COEFFICIENT * (1.0 + float(b[1])),
-        "sigma_u_factor_along": along, "sigma_u_factor_across": across,
+        "two_way_current_scale": 1.0 + float(b[0]),
+        "two_way_leeway": LEEWAY_COEFFICIENT * (1.0 + float(b[1])),
+        "b_one": one, "b_one_ci": [float(one_lo), float(one_hi)],
+        "current_scale": 1.0 + one, "wind_scale": 1.0 + one,
+        "along": along, "across": across,
         "by_hour": shape,
     }
     Path(out).write_text(json.dumps(result, indent=1))
@@ -190,6 +205,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == "measure":
         measure(args.windows, args.rows, args.forcing_dir, args.out, args.part, args.parts)
+        # On the cluster the interpreter finished its work and then never exited, its forcing
+        # readers' threads still alive (job 59970, 18 Oct), so a shell waiting on it hung. The
+        # CSV is written and closed by now.
+        sys.stdout.flush()
+        os._exit(0)
     else:
         fit(args.csv, args.out)
 
