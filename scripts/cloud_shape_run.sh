@@ -54,7 +54,7 @@ $PY scripts/cloud_shape.py measure --windows $TRUTH_RVS/validation --rows $TRUTH
     --forcing-dir $DATA --out $DATA/derived/shape/validation_rvs/part\$SLURM_ARRAY_TASK_ID.csv \
     --part \$SLURM_ARRAY_TASK_ID --parts 12")
     W=$(sbatch --parsable --job-name=windows_rvs --partition=jaguarcluster --array=1-12 \
-        --exclude=jaguar11 --cpus-per-task=4 --mem=32G --time=02:00:00 \
+        --exclude=jaguar11 --cpus-per-task=4 --mem=24G --time=02:00:00 \
         --output=logs/windows_rvs_%A_%a.out --wrap="export OMP_NUM_THREADS=1
 K=\$((SLURM_ARRAY_TASK_ID-1))
 for P in 0 1 2 3; do $PY scripts/shaped_windows.py --src $ROUND --out $SHAPED --forcing-dir $DATA \
