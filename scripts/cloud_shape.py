@@ -1,0 +1,198 @@
+"""cloud_shape.py: how the real buoys sit against their clouds, along and across the drift (L41).
+
+The clouds are round (D026's one start point, D030's random velocity the same size east and
+north) while the real buoys' errors are stretched along the drift and lag behind the centre
+(L41, 13 Oct, 181 held-out buoys). This measures that on any set of truth windows
+(`scripts/truth_windows.py`: a real buoy's rvc cloud, saved every 5 min, and its hourly fixes)
+and fits what would correct it, so the fit is made on the TRAINING buoys and checked on the
+held-out ones.
+
+`measure`, per window and per hour h with a fix (1, 2, 3 h): the cloud's weighted centre c; the
+drift direction u, the unit vector from the last known position to c; the buoy's offset from c
+along u and across it (left of the drift positive); the cloud's own spread along and across;
+and, sampled at the centre every saved frame and integrated from the call to h, the current's
+and the 2 % leeway's displacement along and across u. Also whether the buoy is inside the
+cloud's 90 % ellipse (Gaussian, chi-square 2 dof: a stand-in for the 90 % region, for before
+and after on the same footing).
+
+`fit`, from measure's CSV: the buoy's along offset = b_c x the current's along displacement +
+b_w x the leeway's, no intercept, so the model's current is scaled by 1 + b_c and the leeway is
+2 % x (1 + b_w); 95 % intervals resampling groups. Then the offsets that remain, in units of the
+cloud's spread along and across: the factors the random velocity must take along and across the
+drift for each to come out at 1.
+
+    python scripts/cloud_shape.py measure --windows DIR/train --rows DIR/rows_train.csv \\
+        --forcing-dir DATA --out shape_train.csv [--part K --parts P]
+    python scripts/cloud_shape.py fit --csv shape_train.csv [more.csv ...] --out shape_fit.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from sar.model.drift import LEEWAY_COEFFICIENT
+from sar.rl.windows import load
+from sar.search.sweep import relative_m
+from sar.utils.geo import offset_position
+
+CHI2_90_2DOF = 4.605170185988092      # -2 ln(0.1): the 90 % ellipse of a 2-D Gaussian
+MIN_DRIFT_M = 50.0                    # below this the drift has no direction worth projecting on
+SAMPLE_S = 300.0                      # how often the forcing is sampled along the centre's path
+BOOTSTRAP_SEED, RESAMPLES = 20261018, 2000
+
+
+def _row_key(start, lat, lon) -> tuple:
+    return (str(np.datetime64(str(start), "m")), round(float(lat), 3), round(float(lon) % 360.0, 3))
+
+
+def measure_one(w, forcing, group) -> list[dict]:
+    """One window file's rows: one per hour with a fix inside the saved cloud."""
+    rows = []
+    lkp_lat, lkp_lon = w.lkp
+    weight = np.asarray(w.weight, dtype=float) / float(np.sum(w.weight))
+    east, north = relative_m(w.lat, w.lon, lkp_lat, lkp_lon)          # (F, N) metres from the LKP
+    centres = np.column_stack([east @ weight, north @ weight])        # (F, 2)
+    # The current and the 2 % leeway at the centre every SAMPLE_S from the call. A windows file
+    # keeps frames only from the first arrival on, so before it the centre is taken straight
+    # from the last known position at t = 0 to the first frame kept.
+    t_all = np.concatenate([[0.0], np.asarray(w.t_s, dtype=float)])
+    c_all = np.vstack([[0.0, 0.0], centres])
+    grid = np.arange(0.0, t_all[-1] + 1e-6, SAMPLE_S)
+    path = np.column_stack([np.interp(grid, t_all, c_all[:, 0]), np.interp(grid, t_all, c_all[:, 1])])
+    c_lat, c_lon = offset_position(lkp_lat, lkp_lon, path[:, 0], path[:, 1])
+    times = w.start + (grid * 1e6).astype("timedelta64[us]")
+    cur, lee = np.empty((len(grid), 2)), np.empty((len(grid), 2))
+    for j, t in enumerate(times):
+        current, wind = forcing.sample([float(c_lat[j])], [float(c_lon[j]) % 360.0], t)
+        cur[j], lee[j] = current[0], LEEWAY_COEFFICIENT * wind[0]
+    for h_s, b_lat, b_lon in zip(w.truth_t_s, w.truth_lat, w.truth_lon):
+        if h_s <= 0 or h_s > w.t_s[-1] + 1e-6:
+            continue
+        k = int(np.argmin(np.abs(w.t_s - h_s)))
+        if abs(w.t_s[k] - h_s) > 1.0:
+            continue
+        D = centres[k]
+        dist = float(np.hypot(*D))
+        upto = grid <= h_s + 1e-6
+        if dist < MIN_DRIFT_M or not (np.isfinite(cur[upto]).all() and np.isfinite(lee[upto]).all()):
+            continue
+        u = D / dist
+        v = np.array([-u[1], u[0]])                                   # left of the drift
+        off = np.array(relative_m(b_lat, b_lon, lkp_lat, lkp_lon)) - D
+        pe, pn = east[k] - D[0], north[k] - D[1]
+        pa, pc = pe * u[0] + pn * u[1], pe * v[0] + pn * v[1]
+        cov = np.cov(np.vstack([pe, pn]), aweights=weight)
+        m2 = float(off @ np.linalg.solve(cov, off))
+        C = np.trapezoid(cur[upto], grid[upto], axis=0)
+        L = np.trapezoid(lee[upto], grid[upto], axis=0)
+        rows.append({
+            "name": w.name, "group": group, "hour": round(h_s / 3600.0),
+            "drift_m": dist, "along_m": float(off @ u), "across_m": float(off @ v),
+            "sd_along_m": float(np.sqrt(weight @ pa ** 2)),
+            "sd_across_m": float(np.sqrt(weight @ pc ** 2)), "mahalanobis2": m2,
+            "inside90": bool(m2 <= CHI2_90_2DOF),
+            "current_along_m": float(C @ u), "current_across_m": float(C @ v),
+            "leeway_along_m": float(L @ u), "leeway_across_m": float(L @ v),
+        })
+    return rows
+
+
+def measure(windows_dir, rows_csv, forcing_dir, out, part: int, parts: int) -> Path:
+    from sar.pipeline.gridded import ForcingGapError, GriddedForcing
+
+    table = pd.read_csv(rows_csv)
+    groups = {_row_key(r.start, r.lat, r.lon): int(r.group) for r in table.itertuples()}
+    files = sorted(Path(windows_dir).glob("windows_*.npz"))[part::parts]
+    rows = []
+    for path in files:
+        w = load(path)
+        if w.truth_t_s is None:
+            continue
+        group = groups.get(_row_key(w.start, w.lkp[0], w.lkp[1]), -1)
+        end = w.start + np.timedelta64(int(w.t_s[-1]), "s")
+        try:
+            with GriddedForcing.from_dir(forcing_dir, w.start, end) as forcing:
+                rows += measure_one(w, forcing, group)
+        except ForcingGapError as err:
+            print(f"{path.name}: skipped, {err}")
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(out, index=False)
+    print(f"{len(files)} files -> {len(rows)} rows: {out}")
+    return out
+
+
+def _fit_lag(f: pd.DataFrame) -> np.ndarray:
+    X = f[["current_along_m", "leeway_along_m"]].to_numpy()
+    return np.linalg.lstsq(X, f["along_m"].to_numpy(), rcond=None)[0]
+
+
+def _shape(f: pd.DataFrame, b) -> dict:
+    resid = f["along_m"] - (b[0] * f["current_along_m"] + b[1] * f["leeway_along_m"])
+    out = {}
+    for h, g in f.assign(resid=resid).groupby("hour"):
+        out[int(h)] = {"rms_along_units": float(np.sqrt(np.mean((g["resid"] / g["sd_along_m"]) ** 2))),
+                       "rms_across_units": float(np.sqrt(np.mean((g["across_m"] / g["sd_across_m"]) ** 2))),
+                       "rms_along_units_before": float(np.sqrt(np.mean((g["along_m"] / g["sd_along_m"]) ** 2))),
+                       "mean_along_m_before": float(g["along_m"].mean()),
+                       "mean_along_m_after": float(g["resid"].mean()),
+                       "inside90_before": float(g["inside90"].mean()), "rows": int(len(g))}
+    return out
+
+
+def fit(csvs, out) -> dict:
+    f = pd.concat([pd.read_csv(c) for c in csvs], ignore_index=True)
+    f = f[f["group"] >= 0]
+    b = _fit_lag(f)
+    rng = np.random.default_rng(BOOTSTRAP_SEED)
+    groups = f["group"].unique()
+    by = {g: part for g, part in f.groupby("group")}
+    draws = []
+    for _ in range(RESAMPLES):
+        pick = rng.choice(groups, size=groups.size, replace=True)
+        draws.append(_fit_lag(pd.concat([by[g] for g in pick])))
+    lo, hi = np.percentile(np.array(draws), [2.5, 97.5], axis=0)
+    shape = _shape(f, b)
+    along = float(np.mean([s["rms_along_units"] for s in shape.values()]))
+    across = float(np.mean([s["rms_across_units"] for s in shape.values()]))
+    result = {
+        "rows": int(len(f)), "groups": int(groups.size), "windows": int(f["name"].nunique()),
+        "b_current": float(b[0]), "b_current_ci": [float(lo[0]), float(hi[0])],
+        "b_leeway": float(b[1]), "b_leeway_ci": [float(lo[1]), float(hi[1])],
+        "current_scale": 1.0 + float(b[0]),
+        "leeway": LEEWAY_COEFFICIENT * (1.0 + float(b[1])),
+        "sigma_u_factor_along": along, "sigma_u_factor_across": across,
+        "by_hour": shape,
+    }
+    Path(out).write_text(json.dumps(result, indent=1))
+    print(json.dumps({k: v for k, v in result.items() if k != "by_hour"}, indent=1))
+    return result
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    m = sub.add_parser("measure")
+    m.add_argument("--windows", required=True)
+    m.add_argument("--rows", required=True)
+    m.add_argument("--forcing-dir", required=True)
+    m.add_argument("--out", required=True)
+    m.add_argument("--part", type=int, default=0)
+    m.add_argument("--parts", type=int, default=1)
+    f = sub.add_parser("fit")
+    f.add_argument("--csv", nargs="+", required=True)
+    f.add_argument("--out", required=True)
+    args = parser.parse_args(argv)
+    if args.command == "measure":
+        measure(args.windows, args.rows, args.forcing_dir, args.out, args.part, args.parts)
+    else:
+        fit(args.csv, args.out)
+
+
+if __name__ == "__main__":
+    main()
