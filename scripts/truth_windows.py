@@ -23,6 +23,7 @@ forcing has a gap (D011) is skipped and said so.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -46,11 +47,12 @@ def select(csv, out: Path, per_group: int, val_per_group: int, val_every: int) -
     return parts
 
 
-def build(forcing_dir, out: Path, part: int, parts: int, arrivals_min, particles: int) -> None:
+def build(forcing_dir, out: Path, part: int, parts: int, arrivals_min, particles: int,
+          shape: dict | None = None, roles=("train", "validation")) -> None:
     from sar.pipeline.gridded import ForcingGapError, GriddedForcing
 
     arrivals = [60.0 * m for m in arrivals_min]
-    for role in ("train", "validation"):
+    for role in roles:
         rows = pd.read_csv(out / f"rows_{role}.csv").iloc[part::parts]
         for _, row in rows.iterrows():
             run = {"lat": float(row["lat"]), "lon": float(row["lon"]), "start": str(row["start"]),
@@ -62,7 +64,7 @@ def build(forcing_dir, out: Path, part: int, parts: int, arrivals_min, particles
             end = start + np.timedelta64(int(max(arrivals) + WINDOW_S), "s")
             try:
                 with GriddedForcing.from_dir(forcing_dir, start, end) as forcing:
-                    windows = build_truth(row, forcing, arrivals, particles)
+                    windows = build_truth(row, forcing, arrivals, particles, shape=shape)
             except (ForcingGapError, ValueError, FileNotFoundError) as error:
                 print(f"{row['scenario']}: skipped, {error}", flush=True)
                 continue
@@ -87,11 +89,16 @@ def main(argv=None) -> None:
     b.add_argument("--parts", type=int, default=1)
     b.add_argument("--arrival-min", type=int, nargs="+", default=[30, 60, 120, 180])
     b.add_argument("--particles", type=int, default=5000)
+    b.add_argument("--shape-json", help="the cloud-shape correction (cloud_shape.py fit, L41): "
+                   "current_scale, wind_scale, along, across")
+    b.add_argument("--roles", nargs="+", default=["train", "validation"])
     args = parser.parse_args(argv)
     if args.cmd == "select":
         select(args.csv, args.out, args.per_group, args.val_per_group, args.val_every)
     else:
-        build(args.forcing_dir, args.out, args.part, args.parts, args.arrival_min, args.particles)
+        shape = json.loads(Path(args.shape_json).read_text()) if args.shape_json else None
+        build(args.forcing_dir, args.out, args.part, args.parts, args.arrival_min, args.particles,
+              shape, args.roles)
 
 
 if __name__ == "__main__":

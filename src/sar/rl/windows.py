@@ -13,6 +13,7 @@ import numpy as np
 from sar.model.position import BY_CURRENT
 from sar.pipeline.ensemble import (Ensemble, parse_run_name, read_csv, resolve_sigma_u,
                                    run_ensemble, run_name)
+from sar.pipeline.forcing import ScaledForcing
 from sar.pipeline.gridded import GriddedForcing
 from sar.search.datum import marker_track
 from sar.search.episode import STEPS
@@ -138,22 +139,33 @@ def build(ensemble: Ensemble, run: dict, forcing, arrivals_s) -> SearchWindows:
                          np.array(m_lat), np.array(m_lon), np.array(bearings))
 
 
-def build_truth(row, forcing, arrivals_s, particles: int, save_every_s: float = 300.0) -> SearchWindows:
+def shaped(forcing, shape: dict | None):
+    """The forcing a shaped cloud reads, and its (along, across) factors; unchanged for None."""
+    if not shape:
+        return forcing, None
+    scaled = ScaledForcing(forcing, shape.get("current_scale", 1.0), shape.get("wind_scale", 1.0))
+    return scaled, (float(shape.get("along", 1.0)), float(shape.get("across", 1.0)))
+
+
+def build_truth(row, forcing, arrivals_s, particles: int, save_every_s: float = 300.0,
+                shape: dict | None = None) -> SearchWindows:
     """A real buoy's start as training windows: its rvc cloud, cut like `build`, and its own track.
 
     The cloud is the benchmark's (`sar.search.scenario.search_window`, noise rvc: the random
     velocity sized by the current at the start, D033) at the row's seed, saved every
     `save_every_s` and joined linearly (`frames_at`). The buoy's fixes, the start and every
     hour that has one (TRUTH_HOURS), go with it, so an agent can be paid for finding it.
+    `shape` ({current_scale, wind_scale, along, across}) is the cloud-shape correction (L41).
     """
     start = np.datetime64(str(row["start"]), "us")
     lat, lon, seed = float(row["lat"]), float(row["lon"]), int(row["seed"])
     arrivals = sorted(float(a) for a in arrivals_s)
     duration = arrivals[-1] + WINDOW_S
     sigma_u, _ = resolve_sigma_u(BY_CURRENT, forcing, lat, lon, start)
+    forcing, factors = shaped(forcing, shape)
     ensemble = run_ensemble(forcing, particles, start, lat, lon, duration, STEP_S,
                             datum_sigma_km=0.0, sigma=0.0, seed=seed, save_every=save_every_s,
-                            sigma_u=sigma_u)
+                            sigma_u=sigma_u, shape=factors)
     run = {"lat": lat, "lon": lon, "start": str(row["start"]), "particles": int(particles),
            "timestep": STEP_S, "duration": duration, "seed": seed,
            "datum_lat": lat, "datum_lon": lon}
