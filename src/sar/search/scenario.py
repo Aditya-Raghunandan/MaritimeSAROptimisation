@@ -44,6 +44,7 @@ import pandas as pd
 from sar.model.drift import LEEWAY_COEFFICIENT
 from sar.model.position import CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H, DEFAULT_SIGMA
 from sar.pipeline.ensemble import Ensemble, resolve_sigma_u, run_ensemble, synthetic_cloud
+from sar.pipeline.forcing import ScaledForcing
 from sar.pipeline.gridded import GriddedForcing
 from sar.search.datum import marker_track
 from sar.search.episode import STEPS, SearchEpisode
@@ -143,7 +144,8 @@ def drift_bearing(forcing, lat: float, lon: float, time,
 
 def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
                   arrival_s: float, sigma_u: float | str = CALIBRATED_SIGMA_U,
-                  steps: int = STEPS, sigma: float = DEFAULT_SIGMA) -> SearchSetup:
+                  steps: int = STEPS, sigma: float = DEFAULT_SIGMA, current_scale: float = 1.0,
+                  wind_scale: float = 1.0, shape=None) -> SearchSetup:
     """A scenario's cloud through the search window, every minute, and its marker.
 
     The scenario's own run again (one start point, D026; its seed), kept at every step and
@@ -153,11 +155,18 @@ def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
 
     sigma_u = "by-current" sizes the random velocity by the model's current at the start
     point at the call (D033): the scenario's own LKP and time, what a forecaster has.
+
+    `current_scale`, `wind_scale` and `shape` are the cloud-shape correction (L41, the noise
+    model rvs): the water the cloud, datum, marker and drift bearing all read is the forcing's
+    scaled (`ScaledForcing`), and the random velocity is stretched along the drift. sigma_u is
+    still sized by the unscaled current at the start, as D033 was fitted.
     """
     a = check_arrival(arrival_s, steps)
     sigma_u, speed = resolve_sigma_u(sigma_u, forcing, lat, lon, start)
+    if current_scale != 1.0 or wind_scale != 1.0:
+        forcing = ScaledForcing(forcing, current_scale, wind_scale)
     run = run_ensemble(forcing, particles, start, lat, lon, (a + steps) * STEP_S, STEP_S,
-                       datum_sigma_km=0.0, seed=seed, sigma=sigma, sigma_u=sigma_u)
+                       datum_sigma_km=0.0, seed=seed, sigma=sigma, sigma_u=sigma_u, shape=shape)
     cut = slice(a, a + steps + 1)
     window = Ensemble(run.times[cut], run.lat[cut], run.lon[cut], run.weight, run.beached[cut])
     datum = centroid(window.lat[0], window.lon[0], window.weight)
@@ -191,7 +200,7 @@ def truth_track(row, arrival_s: float) -> MarkerTrack:
 
 def scenario_search(row, forcing, arrival_s: float, particles: int,
                     sigma_u: float | str = CALIBRATED_SIGMA_U, steps: int = STEPS,
-                    sigma: float = DEFAULT_SIGMA) -> SearchSetup:
+                    sigma: float = DEFAULT_SIGMA, **shape) -> SearchSetup:
     """A row of the scenario table, ready to search: cloud, marker, and the buoy as target.
 
     `forcing` is a backend, or a data root holding raw/hycom_* and raw/era5_*.
@@ -202,7 +211,7 @@ def scenario_search(row, forcing, arrival_s: float, particles: int,
         end = start + np.timedelta64(int((a + steps) * STEP_S), "s")
         forcing = GriddedForcing.from_dir(forcing, start, end)
     setup = search_window(forcing, start, float(row["lat"]), float(row["lon"]),
-                          int(row["seed"]), particles, arrival_s, sigma_u, steps, sigma)
+                          int(row["seed"]), particles, arrival_s, sigma_u, steps, sigma, **shape)
     return replace(setup, target=truth_track(row, setup.arrival_s))
 
 

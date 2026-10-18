@@ -28,6 +28,7 @@ from sar.model.position import (
     as_position,
     calculate_position,
     evolve_velocity_error,
+    shape_velocity_error,
     start_velocity_error,
     velocity_memory,
 )
@@ -80,7 +81,7 @@ class DriftPipeline:
 
     def __init__(self, forcing, timestep: float, leeway: float = LEEWAY_COEFFICIENT,
                  sigma: float = DEFAULT_SIGMA, seed=None, sigma_u=DEFAULT_SIGMA_U,
-                 memory_time_s: float = MEMORY_TIME_S):
+                 memory_time_s: float = MEMORY_TIME_S, shape=None):
         # timestep has no default: every error in a run is linear in it, so a run must state it.
         if not np.isfinite(timestep) or timestep <= 0.0:
             raise ValueError(f"timestep must be a positive number of seconds, got {timestep}")
@@ -100,6 +101,12 @@ class DriftPipeline:
         self.sigma = float(sigma)
         self.sigma_u = values.ravel().copy() if per_particle else float(sigma_u)
         self.memory_time_s = float(memory_time_s)
+        # (along, across): the random velocity stretched along each particle's drift (L41).
+        if shape is not None:
+            shape = (float(shape[0]), float(shape[1]))
+            if not all(np.isfinite(shape)) or min(shape) < 0.0:
+                raise ValueError(f"shape must be two non-negative factors, got {shape}")
+        self.shape = shape
         self.seed = seed
         self.rng = np.random.default_rng(seed)
 
@@ -152,6 +159,8 @@ class DriftPipeline:
         """
         current, wind = self.forcing.sample(positions[:, 0], positions[:, 1], time)
         drift = calculate_drift(wind, current, self.leeway)
+        if velocity_error is not None and self.shape is not None:
+            velocity_error = shape_velocity_error(velocity_error, drift, *self.shape)
         moving = drift if velocity_error is None else drift + velocity_error
         moved = calculate_position(positions, moving, self.timestep, self.sigma, self.rng)
         # D016: where the forcing is NaN the particle is beached, frozen in place with its mass.
@@ -197,6 +206,7 @@ class DriftPipeline:
                             {"per_particle": True, "min": float(np.min(self.sigma_u)),
                              "max": float(np.max(self.sigma_u))}),
                 "memory_time_s": self.memory_time_s,
+                "shape": self.shape,
                 "seed": self.seed,
                 "forcing": self.forcing.describe()}
 

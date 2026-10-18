@@ -104,7 +104,7 @@ def spawn_positions(lat, lon, n, datum_sigma_km, rng) -> np.ndarray:
 
 def run_ensemble(forcing, particles, start, lat, lon, duration, timestep, datum_sigma_km,
                  sigma=DEFAULT_SIGMA, seed=None, save_every=None, forcing_log=None,
-                 sigma_u=DEFAULT_SIGMA_U, memory_time_s=MEMORY_TIME_S) -> Ensemble:
+                 sigma_u=DEFAULT_SIGMA_U, memory_time_s=MEMORY_TIME_S, shape=None) -> Ensemble:
     """One DriftPipeline over the spawned cloud, keeping every save_every seconds and the end.
 
     sigma is a random walk and sigma_u a random velocity with memory (D030); one of them.
@@ -115,7 +115,7 @@ def run_ensemble(forcing, particles, start, lat, lon, duration, timestep, datum_
     starts = spawn_positions(lat, lon, particles, datum_sigma_km,
                              np.random.default_rng(datum_seq))
     pipeline = DriftPipeline(forcing, timestep, sigma=sigma, seed=kick_seq, sigma_u=sigma_u,
-                             memory_time_s=memory_time_s)
+                             memory_time_s=memory_time_s, shape=shape)
     n_steps = pipeline.step_count(duration)
     stride = save_stride(save_every, pipeline.timestep)
 

@@ -186,6 +186,30 @@ def evolve_velocity_error(velocity_error, timestep: float = INTEGRATION_STEP_SEC
     return a * u + np.sqrt(1.0 - a * a) * sigma_u * noise
 
 
+def shape_velocity_error(velocity_error, drift, along: float, across: float) -> np.ndarray:
+    """The velocity error stretched by `along` along each particle's drift and by `across` across it.
+
+    THE CLOUD'S SHAPE (vault L41, 18 Oct). With the same sigma_u east and north the cloud is
+    round, while real buoys' errors are larger along the drift than across it. The error u
+    itself stays the isotropic Markov process of D030; only the part it adds to the motion is
+    split into its component along the particle's own drift direction and the one across, and
+    each is scaled. The memory is a day, far longer than a search, so a drift that turns slowly
+    carries its stretch round with it. Where a particle has no drift direction (zero or NaN),
+    its error is left as it is.
+    """
+    u = np.asarray(velocity_error, dtype=float)
+    d = np.asarray(drift, dtype=float)
+    speed = np.hypot(d[..., 0], d[..., 1])
+    still = ~(speed > 0.0)
+    e = d / np.where(still, 1.0, speed)[..., None]
+    a = u[..., 0] * e[..., 0] + u[..., 1] * e[..., 1]            # along the drift
+    c = -u[..., 0] * e[..., 1] + u[..., 1] * e[..., 0]           # across, to the left of it
+    out = np.stack([along * a * e[..., 0] - across * c * e[..., 1],
+                    along * a * e[..., 1] + across * c * e[..., 0]], axis=-1)
+    out[still] = u[still]
+    return out
+
+
 def calculate_position(position, drift, timestep: float = INTEGRATION_STEP_SECONDS,
                        sigma: float = DEFAULT_SIGMA, rng=None, out=None):
     """The position one step later, [lat, lon] in degrees, longitude wrapped to 0 to 360."""
