@@ -1,0 +1,21 @@
+{
+  "spec": {
+    "lat0": 26.431320559540325,
+    "dlat": 0.0017966223499820337,
+    "nlat": 77,
+    "lon0": -78.93660751429258,
+    "dlon": 0.0020075393813491003,
+    "nlon": 76
+  },
+  "lost": 0,
+  "beached_mass": 0.0,
+  "centroid_lat": 26.500034716924446,
+  "centroid_lon": -78.86245623668731,
+  "sd_north_km": 1.9965353621711954,
+  "sd_east_km": 1.9999298484291614,
+  "spread_km": 1.9982333260955731,
+  "area90_km2": 51.8,
+  "csv": "data/processed/derived/ensemble_2650N07900W_20190601T0600_N10000_dt60s_T48h_seed20260923.csv",
+  "time": "2019-06-01T08:00:00.000000",
+  "figure": "figures/report/ensemble_2650N07900W_20190601T0600_N10000_dt60s_T48h_seed20260923_at2h_cell200m.png"
+}

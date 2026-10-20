@@ -1,0 +1,5 @@
+25.1629;-80.0647;florida-current
+30.1599;-79.8213;gulf-stream-off-jacksonville
+25.4645;-75.5972;bahamas-off-eleuthera
+34.8649;-71.6963;ring-zone-south-of-the-stream
+29.0705;-68.8835;sargasso-eddy-field
