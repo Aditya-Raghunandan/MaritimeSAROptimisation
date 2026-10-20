@@ -278,3 +278,10 @@ def test_a_row_across_a_forcing_gap_is_skipped_and_says_why(tmp_path, monkeypatc
 def test_the_batch_jobs_commit_wins(monkeypatch):
     monkeypatch.setenv("SAR_COMMIT", "abc123")
     assert score.git_commit() == "abc123"
+
+
+def test_a_second_process_accepts_its_own_experiment_with_a_tuple_in_it(tmp_path):
+    # rvs's shape is a tuple, which reads back from the manifest as a list (19 Oct).
+    settings = {"noise": {"rvs": {"shape": (0.891, 0.851)}}, "commit": "abc"}
+    score.claim(tmp_path, settings)
+    assert score.claim(tmp_path, settings)["noise"]["rvs"]["shape"] == [0.891, 0.851]

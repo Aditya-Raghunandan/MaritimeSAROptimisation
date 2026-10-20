@@ -318,10 +318,14 @@ def claim(out: Path, settings: dict) -> dict:
         held = json.loads(path.read_text())
     finally:
         tmp.unlink(missing_ok=True)
+    # Compared as they read back from JSON: a tuple in the settings is a list in the manifest,
+    # and rvs's (along, across) made every process but the first refuse its own experiment
+    # (jobs 60114-60115, 19 Oct: 1 of 55 scenarios and 4 of 181 buoys scored).
+    settings = json.loads(json.dumps(settings))
     differ = sorted(k for k in settings if held.get(k) != settings[k])
     if differ:
         raise ValueError(f"{out} already holds an experiment with different {', '.join(differ)}"
-                         f" ({'; '.join(f'{k}: {held.get(k)!r} there, {settings[k]!r} here' for k in differ if k == 'commit')})"
+                         f" ({'; '.join(f'{k}: {held.get(k)!r} there, {settings[k]!r} here' for k in differ)})"
                          f"; use a new folder")
     return held
 
