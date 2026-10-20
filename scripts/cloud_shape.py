@@ -130,6 +130,36 @@ def measure(windows_dir, rows_csv, forcing_dir, out, part: int, parts: int) -> P
     return out
 
 
+def start_currents(rows_csv, forcing_dir, out, part: int, parts: int) -> Path:
+    """Each truth row's model current at its start (D033's s): what a forecaster has at the call."""
+    from sar.pipeline.ensemble import start_current_ms
+    from sar.rl.windows import WINDOW_S, windows_name
+    from sar.search.platform import STEP_S
+    from sar.pipeline.gridded import ForcingGapError, GriddedForcing
+
+    rows = pd.read_csv(rows_csv).iloc[part::parts]
+    arrivals, particles = [60.0 * m for m in (30, 60, 120, 180)], 5000     # as the truth windows were built
+    found = []
+    for r in rows.itertuples():
+        start = np.datetime64(str(r.start), "us")
+        try:
+            with GriddedForcing.from_dir(forcing_dir, start, start) as forcing:
+                s = start_current_ms(forcing, float(r.lat), float(r.lon), start)
+        except (ForcingGapError, ValueError, FileNotFoundError) as err:
+            print(f"{r.scenario}: skipped, {err}", flush=True)
+            continue
+        # The windows file's own name (scripts/truth_windows.py build), so this joins measure's rows.
+        run = {"lat": float(r.lat), "lon": float(r.lon), "start": str(r.start), "particles": particles,
+               "timestep": STEP_S, "duration": max(arrivals) + WINDOW_S, "seed": int(r.seed)}
+        found.append({"name": windows_name(run, arrivals), "scenario": r.scenario,
+                      "group": int(r.group), "start_current_ms": float(s)})
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(found).to_csv(out, index=False)
+    print(f"{len(found)} rows -> {out}", flush=True)
+    return out
+
+
 def _fit_lag(f: pd.DataFrame) -> np.ndarray:
     X = f[["current_along_m", "leeway_along_m"]].to_numpy()
     return np.linalg.lstsq(X, f["along_m"].to_numpy(), rcond=None)[0]
@@ -208,6 +238,12 @@ def main(argv=None):
     m.add_argument("--out", required=True)
     m.add_argument("--part", type=int, default=0)
     m.add_argument("--parts", type=int, default=1)
+    s = sub.add_parser("start-current")
+    s.add_argument("--rows", required=True)
+    s.add_argument("--forcing-dir", required=True)
+    s.add_argument("--out", required=True)
+    s.add_argument("--part", type=int, default=0)
+    s.add_argument("--parts", type=int, default=1)
     f = sub.add_parser("fit")
     f.add_argument("--csv", nargs="+", required=True)
     f.add_argument("--out", required=True)
@@ -217,6 +253,10 @@ def main(argv=None):
         # On the cluster the interpreter finished its work and then never exited, its forcing
         # readers' threads still alive (job 59970, 18 Oct), so a shell waiting on it hung. The
         # CSV is written and closed by now.
+        sys.stdout.flush()
+        os._exit(0)
+    elif args.command == "start-current":
+        start_currents(args.rows, args.forcing_dir, args.out, args.part, args.parts)
         sys.stdout.flush()
         os._exit(0)
     else:
