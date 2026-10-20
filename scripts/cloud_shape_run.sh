@@ -64,11 +64,14 @@ train)
         --learning-rate 0.0003 --ent-coef 0.005 --clip-range 0.2 --reward-decay 0 --eval-decay 0
         --gamma 1.0 --policy mlp --batch-size 256 --n-epochs 10 --target-kl 0.03 --torch-threads 1
         --out "$RUNS")
-    A=$(SAR_PYTHON="$RL_PY" sbatch --parsable --job-name=tele_shape --exclusive --exclude=jaguar11 \
-        scripts/train_ppo.sbatch --windows "$SHAPED" --seed 1 --speeds 45 60 90 "${COMMON[@]}" --name tele_shape)
-    B=$(SAR_PYTHON="$RL_PY" sbatch --parsable --job-name=tele2_seed2 --exclusive --exclude=jaguar11 \
-        scripts/train_ppo.sbatch --windows "$ROUND" --seed 2 "${COMMON[@]}" --name tele2_seed2)
-    echo "training: Telemachus S on the shaped clouds $A; Telemachus 2 seed 2 on the round ones $B"
+    A=$(SAR_PYTHON="$RL_PY" sbatch --parsable --job-name="$RUN_NAME" --exclusive --exclude=jaguar11 \
+        scripts/train_ppo.sbatch --windows "$SHAPED" --seed 1 --speeds 45 60 90 "${COMMON[@]}" --name "$RUN_NAME")
+    echo "training: Telemachus S's recipe on the $NOISE_NAME clouds, $A"
+    if [ "$CONTROL" = 1 ]; then
+        B=$(SAR_PYTHON="$RL_PY" sbatch --parsable --job-name=tele2_seed2 --exclusive --exclude=jaguar11 \
+            scripts/train_ppo.sbatch --windows "$ROUND" --seed 2 "${COMMON[@]}" --name tele2_seed2)
+        echo "control: Telemachus 2 seed 2 on the round clouds, $B"
+    fi
     score() {   # name, after-job, noise, ppo model, telemachus model
         local r55="$DATA/derived/results/scenarios55_N10000_$1" rval="$DATA/derived/results/truthval_N10000_$1"
         local env=(SAR_PYTHON="$PY" NOISE="$3" SEARCHERS="expanding-square parallel greedy ppo telemachus"
@@ -84,8 +87,8 @@ train)
             --wrap="set -e; export PYTHONPATH=src; $PY scripts/score_scenarios.py summary $r55; $PY scripts/score_scenarios.py summary $rval"
         echo "   $1: the 55 $s55, held-out $sval"
     }
-    score d032d033_rvs "$A" rvs "$TS_MODEL" "$RUNS/tele_shape/best_model.zip"
-    score d032d033_seed2 "$B" rvc "$T2_MODEL" "$RUNS/tele2_seed2/best_model.zip"
+    score "d032d033_${NOISE_NAME}_$TAG" "$A" "$NOISE_NAME" "$TS_MODEL" "$RUNS/$RUN_NAME/best_model.zip"
+    [ "$CONTROL" != 1 ] || score d032d033_seed2 "$B" rvc "$T2_MODEL" "$RUNS/tele2_seed2/best_model.zip"
     ;;
 *) echo "usage: bash scripts/cloud_shape_run.sh prepare|train"; exit 1 ;;
 esac
