@@ -63,3 +63,10 @@ def test_the_shape_by_the_current_is_round_in_still_water_and_long_in_fast():
     a1, c1 = shape_for_current(1.0, rule)
     assert a1 / c1 > 2.0
     assert shape_for_current(5.0, rule) == shape_for_current(1.658, rule)   # D033's cap
+
+
+def test_a_table_keeps_its_last_shape_and_d033s_size_past_its_ends():
+    from sar.model.position import shape_for_current
+    rule = {"table_s": [0.1, 1.0], "table_along": [0.17, 0.53], "table_across": [0.17, 0.36]}
+    assert shape_for_current(2.0, rule) == shape_for_current(1.0, rule)
+    assert shape_for_current(0.0, rule) == shape_for_current(0.1, rule)

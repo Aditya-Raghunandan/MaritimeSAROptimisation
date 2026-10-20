@@ -198,6 +198,15 @@ def shape_for_current(speed_ms, rule: dict, size_rule: dict = SIGMA_U_RULE) -> t
     """
     s = min(float(speed_ms), size_rule["cap_speed_ms"])
     base = sigma_u_for_current(speed_ms, size_rule)
+    if "table_s" in rule:     # a table by speed (D035 as fitted): straight between
+        # Past the ends the factors over D033 stay as at the end, not the sigmas: D033 was
+        # calibrated on fast starts the truth buoys barely reach, so beyond the last band the
+        # size stays D033's and only the shape is carried on.
+        at = float(np.clip(s, rule["table_s"][0], rule["table_s"][-1]))
+        base = sigma_u_for_current(at, size_rule)
+        along = float(np.interp(at, rule["table_s"], rule["table_along"])) / base
+        across = float(np.interp(at, rule["table_s"], rule["table_across"])) / base
+        return along, across
     along = float(np.hypot(rule["a_along"], rule["b_along"] * s)) / base
     across = float(np.hypot(rule["a_across"], rule["b_across"] * s)) / base
     return along, across

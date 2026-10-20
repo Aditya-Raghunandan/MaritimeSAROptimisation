@@ -236,33 +236,69 @@ def _needed(f: pd.DataFrame, scale: float) -> tuple[np.ndarray, np.ndarray]:
     return np.abs(a.to_numpy()), np.abs((f["across_m"] / f["sd_across_m"]).to_numpy())
 
 
-def _rule_from_bins(f: pd.DataFrame, scale: float, bins: int) -> dict:
-    """Per speed bin and axis, the sigma that puts 90 % of the bin inside; then sqrt(a^2 + (b s)^2)
-    through those points (least squares on sigma^2 against s^2, weighted by rows, a and b >= 0)."""
+SPEED_EDGES = (0.0, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.55, 0.8, 99.0)   # finer where the shape is
+MIN_BIN_ROWS = 60
+
+
+def _rule_from_bins(f: pd.DataFrame, scale: float) -> dict:
+    """Per speed bin and axis, the sigma that puts 90 % of the bin inside; then one floor a shared by
+    both axes and a current part per axis, sigma_axis = sqrt(a^2 + (b_axis s)^2): least squares on
+    sigma^2, relative, weighted by rows. The floor is shared because the error that does not grow with the
+    current has no reason to know the current's direction, and slow water is round (20 Oct)."""
     from sar.model.position import SIGMA_U_RULE, sigma_u_for_current
 
     cap = SIGMA_U_RULE["cap_speed_ms"]
-    edges = np.unique(np.quantile(f["start_current_ms"], np.linspace(0, 1, bins + 1)))
-    f = f.assign(bin=np.clip(np.searchsorted(edges, f["start_current_ms"], side="right") - 1, 0, len(edges) - 2))
+    k = np.clip(np.searchsorted(SPEED_EDGES, f["start_current_ms"], side="right") - 1, 0,
+                len(SPEED_EDGES) - 2)
     pts = []
-    for _, g in f.groupby("bin"):
-        a, c = _needed(g, scale)
+    for _, g in f.assign(bin=k).groupby("bin"):
+        if len(g) < MIN_BIN_ROWS:
+            continue
+        al, ac = _needed(g, scale)
         s = float(np.median(np.minimum(g["start_current_ms"], cap)))
         base = sigma_u_for_current(s)
-        pts.append((s, len(g), base * np.quantile(a, 0.9) / Z90, base * np.quantile(c, 0.9) / Z90))
+        pts.append((s, len(g), base * np.quantile(al, 0.9) / Z90, base * np.quantile(ac, 0.9) / Z90))
     pts = np.array(pts)
-    out = {}
-    for name, col in (("along", 2), ("across", 3)):
-        X = np.column_stack([np.ones(len(pts)), pts[:, 0] ** 2]) * np.sqrt(pts[:, 1])[:, None]
-        y = pts[:, col] ** 2 * np.sqrt(pts[:, 1])
-        a2, b2 = np.linalg.lstsq(X, y, rcond=None)[0]
-        out[f"a_{name}"], out[f"b_{name}"] = float(np.sqrt(max(a2, 0.0))), float(np.sqrt(max(b2, 0.0)))
-    out["bins"] = [{"s": float(s), "rows": int(n), "sigma_along": float(sa), "sigma_across": float(sc)}
-                   for s, n, sa, sc in pts]
-    return out
+    n, s2 = pts[:, 1], pts[:, 0] ** 2
+    need = np.concatenate([pts[:, 2] ** 2, pts[:, 3] ** 2])
+    # Relative error, weighted by rows: on sigma^2 itself the fast bins' large values pulled the
+    # floor down and slow water was covered 85 % (20 Oct).
+    w = np.sqrt(np.concatenate([n, n])) / need
+    X = np.vstack([np.column_stack([np.ones_like(s2), s2, 0 * s2]),
+                   np.column_stack([np.ones_like(s2), 0 * s2, s2])]) * w[:, None]
+    y = need * w
+    a2, ba2, bc2 = np.linalg.lstsq(X, y, rcond=None)[0]
+    a = float(np.sqrt(max(a2, 0.0)))
+    return {"a_along": a, "b_along": float(np.sqrt(max(ba2, 0.0))), "a_across": a,
+            "b_across": float(np.sqrt(max(bc2, 0.0))),
+            "bins": [{"s": float(s), "rows": int(m), "sigma_along": float(sa), "sigma_across": float(sc)}
+                     for s, m, sa, sc in pts]}
 
 
-def fit_rule(csvs, s0_csvs, out, bins: int = 6) -> dict:
+def _isotonic(y, w) -> np.ndarray:
+    """Weighted pool-adjacent-violators: the closest non-decreasing sequence."""
+    blocks = [[float(v), float(x), 1] for v, x in zip(y, w)]          # value, weight, count
+    i = 0
+    while i < len(blocks) - 1:
+        if blocks[i][0] > blocks[i + 1][0]:
+            v0, w0, c0 = blocks[i]
+            v1, w1, c1 = blocks.pop(i + 1)
+            blocks[i] = [(v0 * w0 + v1 * w1) / (w0 + w1), w0 + w1, c0 + c1]
+            i = max(i - 1, 0)
+        else:
+            i += 1
+    return np.concatenate([[v] * c for v, _, c in blocks])
+
+
+def _table(bins: list[dict]) -> dict:
+    """The table rule: each bin's 90 % sigma per axis, made non-decreasing in speed."""
+    s = np.array([b["s"] for b in bins]); n = np.array([b["rows"] for b in bins], dtype=float)
+    return {"table_s": s.tolist(),
+            "table_along": _isotonic([b["sigma_along"] for b in bins], n).tolist(),
+            "table_across": _isotonic([b["sigma_across"] for b in bins], n).tolist()}
+
+
+def fit_rule(csvs, s0_csvs, out) -> dict:
     """D035: the shape by the current. Joins measure's rows to each window's start current."""
     from sar.model.position import shape_for_current
 
@@ -270,18 +306,21 @@ def fit_rule(csvs, s0_csvs, out, bins: int = 6) -> dict:
     s0 = pd.concat([pd.read_csv(c) for c in s0_csvs], ignore_index=True)[["name", "start_current_ms"]]
     f = f[f["group"] >= 0].merge(s0.drop_duplicates("name"), on="name")
     scale = 1.0 + _fit_one(f)
-    rule = _rule_from_bins(f, scale, bins)
+    rule = _rule_from_bins(f, scale)
     rng = np.random.default_rng(BOOTSTRAP_SEED)
     groups = f["group"].unique()
     by = {g: part for g, part in f.groupby("group")}
     draws = []
     for _ in range(500):
         part = pd.concat([by[g] for g in rng.choice(groups, size=groups.size, replace=True)])
-        r = _rule_from_bins(part, 1.0 + _fit_one(part), bins)
-        draws.append([r["a_along"], r["b_along"], r["a_across"], r["b_across"]])
+        r = _rule_from_bins(part, 1.0 + _fit_one(part))
+        draws.append([r["a_along"], r["b_along"], r["a_across"], r["b_across"], r["b_along"] - r["b_across"]])
     lo, hi = np.percentile(np.array(draws), [2.5, 97.5], axis=0)
-    keys = ("a_along", "b_along", "a_across", "b_across")
-    rule_only = {k: rule[k] for k in keys}
+    keys = ("a_along", "b_along", "a_across", "b_across", "b_along_minus_b_across")
+    curve = {k: rule[k] for k in keys[:4]}
+    # The rule taken forward is the table: one curve cannot cover slow and fast water at once
+    # (on sigma^2 slow water got 85 %, on relative error fast water 78 %, 20 Oct).
+    rule_only = _table(rule["bins"])
     # The check on the same rows: per axis and per bin, the share inside the new cloud's central 90 %.
     a, c = _needed(f, scale)
     fa, fc = np.array([shape_for_current(s, rule_only) for s in f["start_current_ms"]]).T
@@ -290,8 +329,9 @@ def fit_rule(csvs, s0_csvs, out, bins: int = 6) -> dict:
                            "ellipse": (a / fa) ** 2 + (c / fc) ** 2 <= CHI2_90_2DOF})
              .groupby("band", observed=True).mean().round(3))
     result = {"rows": int(len(f)), "windows": int(f["name"].nunique()), "groups": int(groups.size),
-              "current_scale": scale, "wind_scale": scale, "rule": rule_only,
+              "current_scale": scale, "wind_scale": scale, "rule": rule_only, "curve": curve,
               "rule_ci": {k: [float(l), float(h)] for k, l, h in zip(keys, lo, hi)},
+              "fraction_of_draws_stretched": float(np.mean(np.array(draws)[:, 4] > 0)),
               "bins": rule["bins"], "check_by_band": check.reset_index().astype({"band": str}).to_dict("records")}
     Path(out).write_text(json.dumps(result, indent=1))
     print(json.dumps({k: v for k, v in result.items() if k != "bins"}, indent=1))
@@ -317,7 +357,6 @@ def main(argv=None):
     r = sub.add_parser("fit-rule", help="D035: per-axis sigma by the start current")
     r.add_argument("--csv", nargs="+", required=True)
     r.add_argument("--s0", nargs="+", required=True)
-    r.add_argument("--bins", type=int, default=6)
     r.add_argument("--out", required=True)
     f = sub.add_parser("fit")
     f.add_argument("--csv", nargs="+", required=True)
@@ -331,7 +370,7 @@ def main(argv=None):
         sys.stdout.flush()
         os._exit(0)
     elif args.command == "fit-rule":
-        fit_rule(args.csv, args.s0, args.out, args.bins)
+        fit_rule(args.csv, args.s0, args.out)
     elif args.command == "start-current":
         start_currents(args.rows, args.forcing_dir, args.out, args.part, args.parts)
         sys.stdout.flush()
