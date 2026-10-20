@@ -154,6 +154,8 @@ def start_currents(rows_csv, forcing_dir, out, part: int, parts: int) -> Path:
         found.append({"name": windows_name(run, arrivals), "scenario": r.scenario,
                       "group": int(r.group), "start_current_ms": float(s)})
     out = Path(out)
+    if parts > 1:                                   # one file per part: OUT/part.csv -> OUT/part7.csv
+        out = out.with_name(f"{out.stem}{part}{out.suffix}")
     out.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(found).to_csv(out, index=False)
     print(f"{len(found)} rows -> {out}", flush=True)
