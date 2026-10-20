@@ -41,8 +41,8 @@ def remake(path: Path, forcing_dir, out: Path, shape: dict) -> Path | None:
     arrivals = [float(a) for a in old.arrivals_s]
     end = start + np.timedelta64(int(duration), "s")
     with GriddedForcing.from_dir(forcing_dir, start, end) as raw:
-        sigma_u, _ = resolve_sigma_u(BY_CURRENT, raw, lat, lon, start)
-        forcing, factors = shaped(raw, shape)
+        sigma_u, speed = resolve_sigma_u(BY_CURRENT, raw, lat, lon, start)
+        forcing, factors = shaped(raw, shape, speed)
         ensemble = run_ensemble(forcing, int(p["particles"]), start, lat, lon, duration, STEP_S,
                                 datum_sigma_km=0.0, sigma=0.0, seed=old.seed, save_every=300.0,
                                 sigma_u=sigma_u, shape=factors)

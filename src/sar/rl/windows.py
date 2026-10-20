@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sar.model.position import BY_CURRENT
+from sar.model.position import BY_CURRENT, shape_for_current
 from sar.pipeline.ensemble import (Ensemble, parse_run_name, read_csv, resolve_sigma_u,
                                    run_ensemble, run_name)
 from sar.pipeline.forcing import ScaledForcing
@@ -139,11 +139,18 @@ def build(ensemble: Ensemble, run: dict, forcing, arrivals_s) -> SearchWindows:
                          np.array(m_lat), np.array(m_lon), np.array(bearings))
 
 
-def shaped(forcing, shape: dict | None):
-    """The forcing a shaped cloud reads, and its (along, across) factors; unchanged for None."""
+def shaped(forcing, shape: dict | None, speed_ms: float | None = None):
+    """The forcing a shaped cloud reads, and its (along, across) factors; unchanged for None.
+
+    `shape` has fixed "along"/"across" factors (D034), or a "rule" sizing each axis by the
+    current at the start, `speed_ms` (D035)."""
     if not shape:
         return forcing, None
     scaled = ScaledForcing(forcing, shape.get("current_scale", 1.0), shape.get("wind_scale", 1.0))
+    if "rule" in shape:
+        if speed_ms is None:
+            raise ValueError("a shape by the current needs the current at the start")
+        return scaled, shape_for_current(speed_ms, shape["rule"])
     return scaled, (float(shape.get("along", 1.0)), float(shape.get("across", 1.0)))
 
 
@@ -161,8 +168,8 @@ def build_truth(row, forcing, arrivals_s, particles: int, save_every_s: float = 
     lat, lon, seed = float(row["lat"]), float(row["lon"]), int(row["seed"])
     arrivals = sorted(float(a) for a in arrivals_s)
     duration = arrivals[-1] + WINDOW_S
-    sigma_u, _ = resolve_sigma_u(BY_CURRENT, forcing, lat, lon, start)
-    forcing, factors = shaped(forcing, shape)
+    sigma_u, speed = resolve_sigma_u(BY_CURRENT, forcing, lat, lon, start)
+    forcing, factors = shaped(forcing, shape, speed)
     ensemble = run_ensemble(forcing, particles, start, lat, lon, duration, STEP_S,
                             datum_sigma_km=0.0, sigma=0.0, seed=seed, save_every=save_every_s,
                             sigma_u=sigma_u, shape=factors)

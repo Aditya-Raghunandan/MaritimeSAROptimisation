@@ -53,3 +53,13 @@ def test_the_cloud_comes_out_stretched_along_the_drift():
     assert re / rn == pytest.approx(1.0, abs=0.05)
     assert se / sn == pytest.approx(3.0, rel=0.05)                 # 1.5 / 0.5, east is along
     assert np.mean(shaped.lon[-1]) == pytest.approx(np.mean(round_.lon[-1]), abs=1e-3)
+
+
+def test_the_shape_by_the_current_is_round_in_still_water_and_long_in_fast():
+    from sar.model.position import shape_for_current
+    rule = {"a_along": 0.17, "b_along": 0.6, "a_across": 0.17, "b_across": 0.2}
+    a0, c0 = shape_for_current(0.0, rule)
+    assert a0 == pytest.approx(c0)
+    a1, c1 = shape_for_current(1.0, rule)
+    assert a1 / c1 > 2.0
+    assert shape_for_current(5.0, rule) == shape_for_current(1.658, rule)   # D033's cap

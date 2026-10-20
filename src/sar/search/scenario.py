@@ -42,7 +42,8 @@ import numpy as np
 import pandas as pd
 
 from sar.model.drift import LEEWAY_COEFFICIENT
-from sar.model.position import CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H, DEFAULT_SIGMA
+from sar.model.position import (CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H, DEFAULT_SIGMA,
+                                shape_for_current)
 from sar.pipeline.ensemble import Ensemble, resolve_sigma_u, run_ensemble, synthetic_cloud
 from sar.pipeline.forcing import ScaledForcing
 from sar.pipeline.gridded import GriddedForcing
@@ -163,6 +164,10 @@ def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
     """
     a = check_arrival(arrival_s, steps)
     sigma_u, speed = resolve_sigma_u(sigma_u, forcing, lat, lon, start)
+    if isinstance(shape, dict):                      # D035: the shape by the current at the start
+        if speed is None:
+            raise ValueError("a shape by the current needs sigma_u sized by the current (D033)")
+        shape = shape_for_current(speed, shape)
     if current_scale != 1.0 or wind_scale != 1.0:
         forcing = ScaledForcing(forcing, current_scale, wind_scale)
     run = run_ensemble(forcing, particles, start, lat, lon, (a + steps) * STEP_S, STEP_S,

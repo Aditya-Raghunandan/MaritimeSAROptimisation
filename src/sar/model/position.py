@@ -186,6 +186,23 @@ def evolve_velocity_error(velocity_error, timestep: float = INTEGRATION_STEP_SEC
     return a * u + np.sqrt(1.0 - a * a) * sigma_u * noise
 
 
+def shape_for_current(speed_ms, rule: dict, size_rule: dict = SIGMA_U_RULE) -> tuple[float, float]:
+    """The (along, across) factors on sigma_u for a cloud whose start sits in a current of this speed.
+
+    THE SHAPE BY THE CURRENT (vault D035, 20 Oct). D033 sizes the error as a floor plus a part that
+    grows with the current. Fitted per axis on the training truth buoys, the part that grows with
+    the current lies mostly along the drift (a speed error) and less across it (a direction
+    error), so each axis gets its own rule: sigma = sqrt(a^2 + (b s)^2), s capped as in D033. The
+    factors are those over D033's isotropic sigma_u at the same s, so the cloud is near round in
+    slow water and stretched along the flow in fast water.
+    """
+    s = min(float(speed_ms), size_rule["cap_speed_ms"])
+    base = sigma_u_for_current(speed_ms, size_rule)
+    along = float(np.hypot(rule["a_along"], rule["b_along"] * s)) / base
+    across = float(np.hypot(rule["a_across"], rule["b_across"] * s)) / base
+    return along, across
+
+
 def shape_velocity_error(velocity_error, drift, along: float, across: float) -> np.ndarray:
     """The velocity error stretched by `along` along each particle's drift and by `across` across it.
 

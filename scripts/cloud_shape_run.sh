@@ -26,6 +26,9 @@ RL_PY="${RL_PY:-/home/26p67/envs/sar-rl/bin/python}"
 # file or folder was deleted and made again seconds before, saw the old one (18 Oct: clouds
 # built with the superseded factors, and rows skipped as already built).
 TAG="${TAG:-q90}"
+NOISE_NAME="${NOISE_NAME:-rvs}"        # the benchmark's noise model the new clouds are (rvs D034, rvsc D035)
+RUN_NAME="${RUN_NAME:-tele_shape}"     # the new agent's run folder
+CONTROL="${CONTROL:-1}"                # 1: also train Telemachus 2 seed 2 on the round clouds
 SHAPE="${SHAPE:-$DATA/derived/shape/shape_$TAG.json}"
 ROUND="$DATA/derived/rl/windows_arr30-60-120-180"
 SHAPED="$DATA/derived/rl/windows_rvs_${TAG}_arr30-60-120-180"
@@ -51,7 +54,7 @@ $PY scripts/cloud_shape.py measure --windows $TRUTH_RVS/validation --rows $TRUTH
     echo "held-out clouds $V -> measured $M; practice clouds $W -> $SHAPED"
     ;;
 train)
-    for d in "$RUNS/tele_shape" "$RUNS/tele2_seed2"; do
+    for d in "$RUNS/$RUN_NAME"; do
         [ ! -e "$d" ] || { echo "$d exists: one folder is one experiment"; exit 1; }
     done
     [ "$(ls "$SHAPED" | wc -l)" -eq "$(ls "$ROUND" | wc -l)" ] || { echo "the shaped practice clouds are not all there"; exit 1; }

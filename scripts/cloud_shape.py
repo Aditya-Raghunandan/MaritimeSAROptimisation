@@ -230,6 +230,74 @@ def fit(csvs, out) -> dict:
     return result
 
 
+def _needed(f: pd.DataFrame, scale: float) -> tuple[np.ndarray, np.ndarray]:
+    """Per row, the offset left after the drift scale, along and across, in the round cloud's sd."""
+    a = (f["along_m"] - (scale - 1.0) * (f["current_along_m"] + f["leeway_along_m"])) / f["sd_along_m"]
+    return np.abs(a.to_numpy()), np.abs((f["across_m"] / f["sd_across_m"]).to_numpy())
+
+
+def _rule_from_bins(f: pd.DataFrame, scale: float, bins: int) -> dict:
+    """Per speed bin and axis, the sigma that puts 90 % of the bin inside; then sqrt(a^2 + (b s)^2)
+    through those points (least squares on sigma^2 against s^2, weighted by rows, a and b >= 0)."""
+    from sar.model.position import SIGMA_U_RULE, sigma_u_for_current
+
+    cap = SIGMA_U_RULE["cap_speed_ms"]
+    edges = np.unique(np.quantile(f["start_current_ms"], np.linspace(0, 1, bins + 1)))
+    f = f.assign(bin=np.clip(np.searchsorted(edges, f["start_current_ms"], side="right") - 1, 0, len(edges) - 2))
+    pts = []
+    for _, g in f.groupby("bin"):
+        a, c = _needed(g, scale)
+        s = float(np.median(np.minimum(g["start_current_ms"], cap)))
+        base = sigma_u_for_current(s)
+        pts.append((s, len(g), base * np.quantile(a, 0.9) / Z90, base * np.quantile(c, 0.9) / Z90))
+    pts = np.array(pts)
+    out = {}
+    for name, col in (("along", 2), ("across", 3)):
+        X = np.column_stack([np.ones(len(pts)), pts[:, 0] ** 2]) * np.sqrt(pts[:, 1])[:, None]
+        y = pts[:, col] ** 2 * np.sqrt(pts[:, 1])
+        a2, b2 = np.linalg.lstsq(X, y, rcond=None)[0]
+        out[f"a_{name}"], out[f"b_{name}"] = float(np.sqrt(max(a2, 0.0))), float(np.sqrt(max(b2, 0.0)))
+    out["bins"] = [{"s": float(s), "rows": int(n), "sigma_along": float(sa), "sigma_across": float(sc)}
+                   for s, n, sa, sc in pts]
+    return out
+
+
+def fit_rule(csvs, s0_csvs, out, bins: int = 6) -> dict:
+    """D035: the shape by the current. Joins measure's rows to each window's start current."""
+    from sar.model.position import shape_for_current
+
+    f = pd.concat([pd.read_csv(c) for c in csvs], ignore_index=True)
+    s0 = pd.concat([pd.read_csv(c) for c in s0_csvs], ignore_index=True)[["name", "start_current_ms"]]
+    f = f[f["group"] >= 0].merge(s0.drop_duplicates("name"), on="name")
+    scale = 1.0 + _fit_one(f)
+    rule = _rule_from_bins(f, scale, bins)
+    rng = np.random.default_rng(BOOTSTRAP_SEED)
+    groups = f["group"].unique()
+    by = {g: part for g, part in f.groupby("group")}
+    draws = []
+    for _ in range(500):
+        part = pd.concat([by[g] for g in rng.choice(groups, size=groups.size, replace=True)])
+        r = _rule_from_bins(part, 1.0 + _fit_one(part), bins)
+        draws.append([r["a_along"], r["b_along"], r["a_across"], r["b_across"]])
+    lo, hi = np.percentile(np.array(draws), [2.5, 97.5], axis=0)
+    keys = ("a_along", "b_along", "a_across", "b_across")
+    rule_only = {k: rule[k] for k in keys}
+    # The check on the same rows: per axis and per bin, the share inside the new cloud's central 90 %.
+    a, c = _needed(f, scale)
+    fa, fc = np.array([shape_for_current(s, rule_only) for s in f["start_current_ms"]]).T
+    band = pd.cut(f["start_current_ms"], [0, 0.3, 1.0, 99])
+    check = (pd.DataFrame({"band": band, "along": a <= Z90 * fa, "across": c <= Z90 * fc,
+                           "ellipse": (a / fa) ** 2 + (c / fc) ** 2 <= CHI2_90_2DOF})
+             .groupby("band", observed=True).mean().round(3))
+    result = {"rows": int(len(f)), "windows": int(f["name"].nunique()), "groups": int(groups.size),
+              "current_scale": scale, "wind_scale": scale, "rule": rule_only,
+              "rule_ci": {k: [float(l), float(h)] for k, l, h in zip(keys, lo, hi)},
+              "bins": rule["bins"], "check_by_band": check.reset_index().astype({"band": str}).to_dict("records")}
+    Path(out).write_text(json.dumps(result, indent=1))
+    print(json.dumps({k: v for k, v in result.items() if k != "bins"}, indent=1))
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -246,6 +314,11 @@ def main(argv=None):
     s.add_argument("--out", required=True)
     s.add_argument("--part", type=int, default=0)
     s.add_argument("--parts", type=int, default=1)
+    r = sub.add_parser("fit-rule", help="D035: per-axis sigma by the start current")
+    r.add_argument("--csv", nargs="+", required=True)
+    r.add_argument("--s0", nargs="+", required=True)
+    r.add_argument("--bins", type=int, default=6)
+    r.add_argument("--out", required=True)
     f = sub.add_parser("fit")
     f.add_argument("--csv", nargs="+", required=True)
     f.add_argument("--out", required=True)
@@ -257,6 +330,8 @@ def main(argv=None):
         # CSV is written and closed by now.
         sys.stdout.flush()
         os._exit(0)
+    elif args.command == "fit-rule":
+        fit_rule(args.csv, args.s0, args.out, args.bins)
     elif args.command == "start-current":
         start_currents(args.rows, args.forcing_dir, args.out, args.part, args.parts)
         sys.stdout.flush()
