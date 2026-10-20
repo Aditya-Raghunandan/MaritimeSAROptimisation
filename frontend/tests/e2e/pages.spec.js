@@ -15,22 +15,51 @@ import { expect, test } from '@playwright/test';
   flown by the D032 helicopter that turns at 7 deg/s. scenarios/v1 beside it is the older
   format, flown by the helicopter that turned at once; one test hides v2 to check the site
   still plays from a data root that only has v1.
+
+  v3 (the trained agent's flight beside the six) is not a fixture on disk: `agent: true` serves
+  it as v2 with the Sector's flight renamed "ppo". It checks the wiring for a seventh searcher,
+  so its flight only has to differ from greedy's, which plays the AI where there is no agent.
 */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, 'fixtures');
 const LAPTOP = { width: 1366, height: 768 };
 
-async function serveFixture(page, { hide = null } = {}) {
+/** v2's file as v3 would hold it: the Sector's flight and rows renamed as the agent's. The 2 h
+ * window is also listed as a 30 min one (served from the same files), so the game's default
+ * arrival, which the trained model flies, has a window (v4 has 15 min to 3 h). */
+function asV3(rel, body) {
+  if (!rel.endsWith('.json')) return body;
+  const j = JSON.parse(body);
+  if (j.scenarios) j.searchers = [...j.searchers, 'ppo'];
+  if (j.scenarios) {
+    j.scenarios = j.scenarios.map((s) => ({
+      ...s, windows: [...s.windows, ...s.windows.filter((w) => w.endsWith('_2h')).map((w) => w.replace('_2h', '_0.5h'))],
+    }));
+  }
+  if (j.flights) j.flights.ppo = { ...j.flights.sector, layout: 'e2e: the Sector, as the agent' };
+  for (const key of ['scenarios55', 'dev']) {
+    if (Array.isArray(j[key])) {
+      j[key] = [...j[key], ...j[key].filter((r) => r.searcher === 'sector').map((r) => ({ ...r, searcher: 'ppo' }))];
+      j[key] = [...j[key], ...j[key].filter((r) => r.arrival_h === 2).map((r) => ({ ...r, arrival_h: 0.5 }))];
+    }
+  }
+  return Buffer.from(JSON.stringify(j));
+}
+
+async function serveFixture(page, { hide = null, agent = false } = {}) {
   await page.route('**/e2e.invalid/**', async (route) => {
     const url = new URL(route.request().url());
-    const rel = normalize(url.pathname.replace(/^\/archive\/?/, '')).replace(/^(\.\.[/\\])+/, '');
+    let rel = normalize(url.pathname.replace(/^\/archive\/?/, '')).replace(/^(\.\.[/\\])+/, '');
     if (hide && url.pathname.includes(hide)) {
       await route.fulfill({ status: 404, body: '' });
       return;
     }
+    const v3 = /^scenarios[/\\]v3[/\\]/.test(rel);
+    if (v3 && agent) rel = rel.replace(/^scenarios([/\\])v3/, 'scenarios$1v2').replace(/_0\.5h\.(json|f32)$/, '_2h.$1');
     try {
-      const body = await readFile(join(FIXTURES, rel));
+      let body = await readFile(join(FIXTURES, rel));
+      if (v3 && agent) body = asV3(rel, body);
       await route.fulfill({
         status: 200,
         contentType: rel.endsWith('.json') ? 'application/json' : 'application/octet-stream',
@@ -77,6 +106,32 @@ async function painted(page, selector) {
     for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n += 1;
     return n;
   }, selector);
+}
+
+/**
+ * A pretend controller, in the standard layout Chrome gave the stand's PS5 pad (14 Oct). Returns
+ * press(name) and stick(x, y) to work it.
+ */
+async function fakePad(page) {
+  await page.addInitScript(() => {
+    const pad = {
+      id: 'Test pad (STANDARD GAMEPAD)', index: 0, connected: true, mapping: 'standard', timestamp: 0,
+      axes: [0, 0, 0, 0], buttons: Array.from({ length: 18 }, () => ({ pressed: false, touched: false, value: 0 })),
+    };
+    window.testPad = pad;
+    Object.defineProperty(Navigator.prototype, 'getGamepads', { configurable: true, value: () => [pad, null, null, null] });
+  });
+  const BUTTON = { cross: 0, circle: 1, triangle: 3, up: 12, down: 13, left: 14, right: 15 };
+  const set = (i, on) => page.evaluate(([b, v]) => { Object.assign(window.testPad.buttons[b], { pressed: v, value: v ? 1 : 0 }); }, [i, on]);
+  return {
+    async press(name) {
+      await set(BUTTON[name], true);
+      await page.waitForTimeout(100);
+      await set(BUTTON[name], false);
+      await page.waitForTimeout(100);
+    },
+    stick: (x, y) => page.evaluate(([a, b]) => { window.testPad.axes[0] = a; window.testPad.axes[1] = b; }, [x, y]),
+  };
 }
 
 async function fixtureFlight(noise, searcher, version = 'v2') {
@@ -127,6 +182,36 @@ test.describe('the scenario page', () => {
     expect(errors).toEqual([]);
   });
 
+  test('lists the trained AI only when the files carry it, and replays its flight', async ({ page }) => {
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('bench.html');
+    await expect(page.locator('#paper')).not.toHaveText('–');
+    await expect(page.locator('#searchers input')).toHaveCount(7);   // six and "fly it yourself"
+    await expect(page.locator('input[value=ppo]')).toHaveCount(0);
+    await expect(page.locator('#searchers')).not.toContainText('coming');
+    expect(errors).toEqual([]);
+  });
+
+  test('replays the trained AI\'s flight to the paper\'s number', async ({ page }) => {
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    await page.goto('bench.html');
+    await expect(page.locator('#paper')).not.toHaveText('–');
+    await expect(page.locator('#searchers input')).toHaveCount(8);
+    await expect(page.locator('#searchers')).toContainText('Telemachus');
+    await page.locator('input[value=ppo]').check();
+    const want = await fixtureFlight('rvc', 'sector');
+    await expect(page.locator('#paper')).toHaveText(`${(100 * want.pos).toFixed(1)} %`);
+    await page.locator('#time').evaluate((el) => {
+      el.value = '2700';
+      el.dispatchEvent(new Event('input'));
+    });
+    await expect(page.locator('#pos')).toHaveText(`${(100 * want.pos).toFixed(1)} %`);
+    await expectFits(page);
+    expect(errors).toEqual([]);
+  });
+
   test('flies by hand', async ({ page }) => {
     const errors = collectErrors(page);
     await serveFixture(page);
@@ -152,7 +237,7 @@ test.describe('the open-day game', () => {
     await expect(page.locator('#attract')).toHaveClass(/on/);
     await expectFits(page);
 
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.fill('#name', 'E2E');
     await expectFits(page);
@@ -166,15 +251,153 @@ test.describe('the open-day game', () => {
     await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
     await page.keyboard.up('ArrowRight');
     await expectFits(page);
+    await expect(page.locator('#panels .panel')).toHaveCount(7);         // every searcher the window carries, and you
 
     await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
     await expectFits(page);
     const cg = await fixtureFlight('rvc', 'expanding-square');
-    await expect(page.locator('#scoreTable tr')).toHaveCount(4);
+    await expect(page.locator('#scoreTable .sr')).toHaveCount(7);          // you and the fixture's six searchers
     await expect(page.locator('#scoreTable')).toContainText(`${(100 * cg.pos).toFixed(1)} %`);
     await expect(page.locator('#verdict')).not.toBeEmpty();
     await expect(page.locator('#boardNow')).toContainText('E2E');
     await expect(page.locator('#benchTable tr')).toHaveCount(7);
+    // Points are scored against the cloud's size, and the page says so in numbers.
+    await expect(page.locator('#pointsWhy')).toContainText(/covered \d+ km²/);
+    await expect(page.locator('#pointsWhy')).not.toContainText(/1\d\d %/);
+    await expect(page.locator('#aiWords')).toContainText('greedy');
+    expect(errors).toEqual([]);
+  });
+
+  test('three missions, then the real search: each one plays, and each fits the laptop', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=20');
+    await page.click('#startBtn');
+    await expect(page.locator('#tut')).toHaveClass(/on/);
+    await expect(page.locator('#tutTitle')).toHaveText('Go with the flow');
+    await expect(page.locator('#tutResult')).toContainText('2 hours', { timeout: 15_000 });
+    await expectFits(page);
+    await page.click('text=Fly the helicopter');
+    await expect(page.locator('#tutTitle')).toHaveText('Catch the drifting buoy');
+    await expect(page.locator('#tutMap .scene-heli')).toBeVisible();
+    await page.click('#tutSkip');
+    await expect(page.locator('#tutTitle')).toHaveText('Read the sea between the dots');
+    await expect(page.locator('#tutText')).toContainText('click to drop the buoy', { timeout: 15_000 });
+    await page.mouse.move(760, 400);
+    await expect(page.locator('#tutMap .tut-weight')).toHaveCount(4);
+    await page.mouse.click(760, 420);
+    await expect(page.locator('#tutResult')).toContainText('from our forecast', { timeout: 15_000 });
+    await expectFits(page);
+    await page.click('text=Mission 3');
+    await expect(page.locator('#tutTitle')).toHaveText('10,000 guesses');
+    await expect(page.locator('#tutResult')).toContainText('Too sure of itself', { timeout: 15_000 });
+    await expect(page.locator('text=Now the real search')).toHaveCount(0);
+    await page.locator('#tutSigma').fill('66');
+    await expect(page.locator('#tutResult')).toContainText('Just right');
+    await expectFits(page);
+    await page.click('text=Now the real search');
+    await expect(page.locator('#pick')).toHaveClass(/on/);
+    expect(errors).toEqual([]);
+  });
+
+  test('the video plays on demand, stays put when the mouse moves, and its button closes it', async ({ page }) => {
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=20');
+    await page.click('#demoBtn');
+    await expect(page.locator('#demo')).toHaveClass(/on/);
+    await page.mouse.move(300, 300);
+    await page.mouse.move(320, 330);
+    await expect(page.locator('#demo')).toHaveClass(/on/);
+    await expectFits(page);
+    await page.click('#demoClose');
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    await page.click('#demoBtn');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    expect(errors.filter((e) => !/media|video|webm|mp4/i.test(e))).toEqual([]);
+  });
+
+  test('from an hour on the computer flies greedy, even where the files carry the model\'s flight', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    await page.goto('game.html?speed=20');
+    await page.click('#searchBtn');
+    await page.click('#surprise');
+    await expect(page.locator('#arrivalSeg button[aria-pressed=true]')).toHaveText('30 min');
+    await page.locator('#arrivalSeg button', { hasText: '2 h' }).click();
+    await expect(page.locator('#arrivalNote')).toContainText('greedy');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowRight');
+    await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
+    await page.keyboard.up('ArrowRight');
+    await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
+    const greedy = await fixtureFlight('rvc', 'greedy');
+    await expect(page.locator('#scoreTable .sr.ai')).toContainText(`${(100 * greedy.pos).toFixed(1)} %`);
+    await expect(page.locator('#aiWords')).toContainText('within 45 minutes');
+    await expect(page.locator('#benchNote')).toContainText('2 h after the call');
+    await expectFits(page);
+    expect(errors).toEqual([]);
+  });
+
+  test('emails the result: the numbers, Telemachus by name and a picture of the flights', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    let posted = null;
+    await page.route('**/mailer.e2e.invalid/**', async (route) => {
+      if (route.request().method() === 'POST') posted = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+    });
+    await page.goto('game.html?speed=20');
+    await page.click('#searchBtn');
+    await page.click('#surprise');
+    await page.fill('#name', 'Mail');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowRight');
+    await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
+    await page.keyboard.up('ArrowRight');
+    await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
+    await expect(page.locator('#mailForm')).toBeVisible();
+    await expectFits(page);
+    await page.fill('#mailTo', 'player@example.com');
+    await page.click('#mailBtn');
+    await expect(page.locator('#mailNote')).toContainText('Sent!');
+    expect(posted.email).toBe('player@example.com');
+    expect(posted.name).toBe('Mail');
+    expect(posted.ai.name).toBe('Telemachus');
+    const agent = await fixtureFlight('rvc', 'sector');
+    expect(posted.ai.pos).toBeCloseTo(agent.pos, 9);
+    expect(posted.points).toBeGreaterThanOrEqual(0);
+    expect(posted.areaKm2).toBeGreaterThan(0);
+    expect(posted.image).toMatch(/^data:image\/jpeg;base64,/);
+    expect(posted.image.length).toBeLessThan(900_000);
+    expect(errors).toEqual([]);
+  });
+
+  test('the ML model is the trained agent where the files carry its flight', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page, { agent: true });
+    await page.goto('game.html?speed=20');
+    await page.click('#searchBtn');
+    await page.click('#surprise');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowRight');
+    await expect(page.locator('#reveal')).toHaveClass(/on/, { timeout: 20_000 });
+    await page.keyboard.up('ArrowRight');
+    await expect(page.locator('#results')).toHaveClass(/on/, { timeout: 20_000 });
+    const agent = await fixtureFlight('rvc', 'sector');
+    await expect(page.locator('#scoreTable .sr.ai')).toContainText(`${(100 * agent.pos).toFixed(1)} %`);
+    await expect(page.locator('#aiWords')).toContainText('machine-learning model');
+    await expect(page.locator('#benchTable')).toContainText('Telemachus');
+    await expect(page.locator('#benchTable tr')).toHaveCount(8);
+    await expectFits(page);
     expect(errors).toEqual([]);
   });
 
@@ -183,11 +406,15 @@ test.describe('the open-day game', () => {
     const errors = collectErrors(page);
     await serveFixture(page);
     await page.goto('game.html?speed=4');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.click('#goBtn');
     await expect(page.locator('#fly')).toHaveClass(/on/);
     await expect(page.locator('#hint')).toContainText(/mouse/);
+    await expect(page.locator('#hint')).toContainText('cannot stop or turn on the spot');
+    // The helicopter is drawn as one, its rotor and searchlight included.
+    await expect(page.locator('#flyMap .scene-heli svg rect')).not.toHaveCount(0);
+    await expect(page.locator('#flyMap .scene-heli svg linearGradient')).toHaveCount(1);
     const box = await page.locator('#flyMap').boundingBox();
     // Click well to one side to take off, then hold the pointer there.
     await page.mouse.move(box.x + box.width * 0.15, box.y + box.height * 0.5);
@@ -202,12 +429,165 @@ test.describe('the open-day game', () => {
     expect(errors).toEqual([]);
   });
 
+  test('ends the search early on its button, and says so', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=4');
+    await page.click('#searchBtn');
+    await page.click('#surprise');
+    await page.fill('#name', 'Quitter');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await expect(page.locator('#endBtn')).toBeHidden();             // not before take-off
+    await page.keyboard.down('ArrowUp');
+    await expect(page.locator('#endBtn')).toBeVisible();
+    await expect(page.locator('#hudTime')).not.toHaveText(/^4[45]:/, { timeout: 10_000 });
+    await page.keyboard.up('ArrowUp');
+    await expectFits(page);
+    await page.click('#endBtn');
+    await expect(page.locator('#reveal')).toHaveClass(/on/);
+    await expect(page.locator('#revealNote')).toContainText('You ended your search with');
+    await page.click('#skipBtn');
+    await expect(page.locator('#results')).toHaveClass(/on/);
+    await expect(page.locator('#verdictWhy')).toContainText('left on the clock');
+    await expect(page.locator('#boardNow')).toContainText('Quitter');
+    expect(errors).toEqual([]);
+  });
+
+  test('a controller alone plays it: menus, take-off, steering, ending the search, the results', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    const pad = await fakePad(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=20');
+    await expect(page.locator('#startBtn')).toBeEnabled();
+    await pad.press('cross');                                     // the first touch only shows the highlight
+    await expect(page.locator('#startBtn')).toHaveClass(/pad-focus/);
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    await expect(page.locator('#padChip')).toBeVisible();
+    await pad.press('right');
+    await expect(page.locator('#searchBtn')).toHaveClass(/pad-focus/);
+    await pad.press('cross');
+    await expect(page.locator('#pick')).toHaveClass(/on/);
+    await expect(page.locator('#surprise')).toHaveClass(/pad-focus/);
+    await pad.press('cross');                                     // a buoy, and the highlight moves to Fly
+    await expect(page.locator('#goBtn')).toHaveClass(/pad-focus/);
+    await pad.press('up');
+    await expect(page.locator('.namerow .pad-focus')).toHaveCount(1);
+    await pad.press('cross');                                     // a name with no keyboard
+    await expect(page.locator('#name')).not.toHaveValue('');
+    await pad.press('down');
+    await expect(page.locator('#goBtn')).toHaveClass(/pad-focus/);
+    await pad.press('cross');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await expect(page.locator('#hint')).toContainText('Controller');
+    await pad.press('cross');                                     // take off
+    await expect(page.locator('#endBtn')).toBeVisible();
+    await pad.stick(1, 0);
+    await expect(page.locator('#hudTime')).not.toHaveText(/^4[45]:/, { timeout: 10_000 });
+    await pad.stick(0, 0);
+    await pad.press('triangle');                                  // end the search
+    await expect(page.locator('#reveal')).toHaveClass(/on/);
+    await pad.press('cross');                                     // skip the replay
+    await expect(page.locator('#results')).toHaveClass(/on/);
+    await expect(page.locator('#againBtn')).toHaveClass(/pad-focus/);
+    await expect(page.locator('#verdictWhy')).toContainText('left on the clock');
+    await pad.press('cross');
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    expect(errors).toEqual([]);
+  });
+
+  test('a controller plays the missions: ○ skips, the stick moves the buoy, ✕ drops it, the d-pad slides the slider', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    const pad = await fakePad(page);
+    await serveFixture(page);
+    await page.goto('game.html?speed=20');
+    await expect(page.locator('#startBtn')).toBeEnabled();
+    await pad.press('cross');
+    await pad.press('cross');
+    await expect(page.locator('#tut')).toHaveClass(/on/);
+    await expect(page.locator('text=Fly the helicopter')).toHaveClass(/pad-focus/, { timeout: 15_000 });
+    await pad.press('cross');
+    await expect(page.locator('#tutTitle')).toHaveText('Catch the drifting buoy');
+    await pad.press('circle');                                    // skip, even with the stick flying
+    await expect(page.locator('#tutTitle')).toHaveText('Read the sea between the dots');
+    await expect(page.locator('#tutText')).toContainText('click to drop the buoy', { timeout: 15_000 });
+    const before = await page.locator('#tutMap .tut-weight').first().textContent();
+    await pad.stick(-1, 0.6);
+    await expect.poll(() => page.locator('#tutMap .tut-weight').first().textContent()).not.toBe(before);
+    await pad.stick(0, 0);
+    await pad.press('cross');                                     // drop it
+    await expect(page.locator('#tutResult')).toContainText('from our forecast', { timeout: 15_000 });
+    await expect(page.locator('text=Mission 3')).toHaveClass(/pad-focus/);
+    await pad.press('cross');
+    await expect(page.locator('#tutTitle')).toHaveText('10,000 guesses');
+    await expect(page.locator('#tutSigma')).toHaveClass(/pad-focus/, { timeout: 15_000 });
+    for (let k = 0; k < 30 && !(await page.locator('#tutResult').textContent()).includes('Just right'); k += 1) await pad.press('right');
+    await expect(page.locator('#tutResult')).toContainText('Just right');
+    await expect(page.locator('#tutSigma')).toHaveClass(/pad-focus/);   // the new button did not take it
+    expect(errors).toEqual([]);
+  });
+
+  test('the results stay up until someone presses a button; the start screen still falls back to the video', async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = collectErrors(page);
+    await page.clock.install();
+    await serveFixture(page);
+    await page.goto('game.html?speed=20&kiosk=1');
+    await page.click('#searchBtn');
+    await page.click('#surprise');
+    await page.fill('#name', 'Reader');
+    await page.click('#goBtn');
+    await expect(page.locator('#fly')).toHaveClass(/on/);
+    await page.keyboard.down('ArrowUp');
+    await expect(page.locator('#endBtn')).toBeVisible();
+    await page.keyboard.up('ArrowUp');
+    await page.click('#endBtn');
+    await page.click('#skipBtn');
+    await expect(page.locator('#results')).toHaveClass(/on/);
+    await expect(page.locator('#boardNow li.me')).toContainText('Reader');
+    await expect(page.locator('#boardYou')).toContainText('First on the board');
+    await expect(page.locator('#againBtn')).toHaveText('Next player');
+    await expectFits(page);
+    // Nobody touches it for five minutes: it used to be the video after ~20 s.
+    await page.clock.fastForward('05:00');
+    await expect(page.locator('#results')).toHaveClass(/on/);
+    await page.click('#againBtn');
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    await page.clock.fastForward('01:00');
+    await expect(page.locator('#demo')).toHaveClass(/on/);
+    expect(errors.filter((e) => !/media|video|webm|mp4/i.test(e))).toEqual([]);
+  });
+
+  test('the start buttons wait for the buoys, and the kiosk has no links off the game', async ({ page }) => {
+    const errors = collectErrors(page);
+    let release;
+    const held = new Promise((r) => { release = r; });
+    await serveFixture(page);
+    // Registered last, so asked first: hold the list of buoys back, then hand it on.
+    await page.route(/scenarios\/v\d\/index\.json/, async (route) => { await held; await route.fallback(); });
+    await page.goto('game.html?kiosk=1');
+    await expect(page.locator('#attract')).toHaveClass(/on/);
+    await expect(page.locator('#startBtn')).toBeDisabled();
+    await expect(page.locator('#searchBtn')).toBeDisabled();
+    await expect(page.locator('#status')).toHaveText('loading the buoys…');
+    await expect(page.locator('header nav')).toBeHidden();
+    release();
+    await expect(page.locator('#searchBtn')).toBeEnabled();
+    await expect(page.locator('#status')).toHaveText('');
+    await page.click('#searchBtn');
+    await expect(page.locator('#pick')).toHaveClass(/on/);
+    expect(errors).toEqual([]);
+  });
+
   test('still plays from a data root that only has the older v1 bundles', async ({ page }) => {
     test.setTimeout(60_000);
     const errors = collectErrors(page);
     await serveFixture(page, { hide: '/scenarios/v2/' });
     await page.goto('game.html?speed=20');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.click('#goBtn');
     await expect(page.locator('#fly')).toHaveClass(/on/);
@@ -224,7 +604,7 @@ test.describe('the open-day game', () => {
     const errors = collectErrors(page);
     await serveFixture(page);
     await page.goto('game.html');
-    await page.click('#startBtn');
+    await page.click('#searchBtn');
     await page.click('#surprise');
     await page.click('[data-mode=currents]');
     await page.click('#goBtn');

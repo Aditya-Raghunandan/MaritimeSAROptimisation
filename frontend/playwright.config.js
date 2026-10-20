@@ -76,6 +76,8 @@ export default defineConfig({
     env: {
       VITE_BASE: '/MaritimeSAROptimisation/',
       VITE_DATA_BASE: 'https://e2e.invalid/archive',
+      // The mailer is never reached either: the email test answers it with page.route().
+      VITE_MAILER_URL: 'https://mailer.e2e.invalid/send',
     },
   },
 });

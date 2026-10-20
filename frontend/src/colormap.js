@@ -84,6 +84,17 @@ export const ICE = [
   [104, 180, 232], [165, 214, 245], [228, 243, 252],
 ];
 
+/**
+ * ICE_GLOW: the probability map's "ice" since 15 Oct. ICE starts at the navy of the game's sea
+ * (sea.js, #0a3358), so the cloud's outer half vanished into it ("hard to see, especially the
+ * ice", Aditya). This one keeps the one-hue idea but runs teal to cyan to white, every step
+ * lighter than the last, and stands off a dark blue background from its first colour. ICE stays
+ * as it was for anything else that names it.
+ */
+export const ICE_GLOW = [
+  [0, 92, 120], [0, 140, 170], [20, 185, 215], [90, 220, 240], [170, 240, 252], [240, 252, 255],
+];
+
 /** Named ramps, so a layer can be handed one by name from its manifest. */
 export const RAMPS = { viridis: VIRIDIS, magma: MAGMA, inferno: INFERNO, ice: ICE };
 

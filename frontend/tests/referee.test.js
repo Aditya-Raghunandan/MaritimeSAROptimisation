@@ -30,6 +30,32 @@ function replay(name, set = 'flights') {
   return ep;
 }
 
+describe('a helicopter that changes speed (Telemachus S)', () => {
+  const kt = 1852 / 3600;
+  it('turns at the rate a 30 degree bank gives at the new speed', () => {
+    const ep = new Episode(cloud(), track(golden.marker));
+    ep.setSpeed(45 * kt);
+    expect(ep.turnRateDegS).toBeCloseTo(2 * TURN_RATE_DEG_S, 9);
+    ep.setSpeed(SEARCH_SPEED_MS);
+    expect(ep.turnRateDegS).toBeCloseTo(TURN_RATE_DEG_S, 12);
+  });
+
+  it('flies a slow, tight turn only after being told the speed', () => {
+    const slow = new Episode(cloud(), track(golden.marker));
+    slow.setSpeed(45 * kt);
+    const tight = slow.waypointsFor(90);        // a quarter turn at 14 deg/s, then straight
+    const fast = new Episode(cloud(), track(golden.marker));
+    expect(() => fast.fly(tight)).toThrow();
+    expect(() => slow.fly(tight)).not.toThrow();
+    expect(slow.distance).toBeCloseTo(45 * kt * 60, 9);
+  });
+
+  it('is refused by a helicopter that turns at once', () => {
+    const ep = new Episode(cloud(), track(golden.marker), { turnRateDegS: Infinity });
+    expect(() => ep.setSpeed(45 * kt)).toThrow(RangeError);
+  });
+});
+
 describe('the referee holds the same numbers as Python', () => {
   it('has the same constants', () => {
     expect(SEARCH_SPEED_MS).toBeCloseTo(golden.constants.speed_ms, 12);

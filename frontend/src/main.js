@@ -1312,10 +1312,14 @@ async function start() {
     selectedDrifter = buoy;
     drifterLayer.select(buoy.id);
     drifterPanel.select(buoy.id);
-    const span = spanCovering(buoy.startMs, buoy.endMs, SPANS.map((s) => s.seconds));
+    // A scenario found by name (S10) goes to its call and the 6 h the game and the paper use,
+    // not to the start of the buoy's whole record, which can be months earlier.
+    const from = buoy.callMs ?? buoy.startMs;
+    const to = buoy.callMs ? buoy.callMs + 6 * 3600 * 1000 : buoy.endMs;
+    const span = spanCovering(from, to, SPANS.map((s) => s.seconds));
     // The moment and its window move together, or the tier switch inside
     // `applySpan` clamps the moment back into the old window (Clock.jumpTo).
-    clock.jumpTo(new Date(buoy.startMs), span);
+    clock.jumpTo(new Date(from), span);
     if (spanSelect) spanSelect.value = String(span ?? '');
     try {
       await queueSpan(span, { quiet: true });
@@ -1324,7 +1328,9 @@ async function start() {
       return;
     }
     syncDrifters();
-    setStatus(`Buoy ${buoy.id}: first seen ${day(buoy.startMs)}. Press play to follow it.`);
+    setStatus(buoy.scenario
+      ? `Scenario ${buoy.scenario}, buoy ${buoy.id}: the call, ${new Date(buoy.callMs).toISOString().slice(0, 16).replace('T', ' ')} UTC. Press play to follow it.`
+      : `Buoy ${buoy.id}: first seen ${day(buoy.startMs)}. Press play to follow it.`);
   }
 
   /*

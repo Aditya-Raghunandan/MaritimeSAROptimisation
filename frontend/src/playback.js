@@ -105,7 +105,9 @@ export class RecordedFlight extends Flight {
   /** Fly every minute that has finished by t seconds after arrival. */
   advanceTo(t) {
     while (!this.ep.done && (this.ep.k + 1) * STEP_S <= t + 1e-9) {
-      this.ep.fly(this.steps[this.ep.k]);
+      const step = this.steps[this.ep.k];
+      if (step.speedMs) this.ep.setSpeed(step.speedMs);   // Telemachus S picks its speed each minute
+      this.ep.fly(step);
     }
   }
 
@@ -165,6 +167,7 @@ export class PlayerFlight extends Flight {
     this.offset = [0, 0];
     this.pending = { tS: [], eastM: [], northM: [], headingDeg: [] };
     this.headings = { tS: [], headingDeg: [] };
+    this.endS = Infinity;              // when the player ended the search, if they did (stop)
   }
 
   get turnRateDegS() { return this.ep.turnRateDegS; }
@@ -174,9 +177,21 @@ export class PlayerFlight extends Flight {
     this.command = normalise(headingDeg);
   }
 
+  /** The last moment it searches: the window's end, or where the player stopped it. */
+  get until() { return Math.min(this.duration, this.endS); }
+
+  /**
+   * End the search early (the game's "End the search" button): the minute in progress is
+   * flown out on the command held, so the referee scores it whole, and nothing after it.
+   */
+  stop() {
+    this.advanceTo(Math.min(this.duration, Math.ceil(this.t / STEP_S - 1e-9) * STEP_S));
+    this.endS = this.t;
+  }
+
   /** Fly on to t seconds after arrival, one held command per SAMPLE_S. */
   advanceTo(t) {
-    const end = Math.min(t, this.duration);
+    const end = Math.min(t, this.until);
     while (this.t + SAMPLE_S <= end + 1e-9 && !this.ep.done) {
       this.headings.tS.push(this.t);
       this.headings.headingDeg.push(this.command);
@@ -203,7 +218,7 @@ export class PlayerFlight extends Flight {
 
   /** Where it is and which way it points at t >= this.t: on its turn, if it is turning. */
   pose(t) {
-    const ahead = Math.max(0, Math.min(t, this.duration) - this.t);
+    const ahead = Math.max(0, Math.min(t, this.until) - this.t);
     if (ahead <= 0) return { offset: this.offset, heading: this.heading };
     const p = steerTo(this.offset[0], this.offset[1], this.heading, this.command, ahead,
       this.ep.speedMs, this.turnRateDegS);
@@ -228,7 +243,7 @@ export class PlayerFlight extends Flight {
       return [at, ...this.ground(at, [this.pending.eastM[i], this.pending.northM[i]])];
     });
     // The arc from the last held command to t, piece by piece, so a turn is drawn as one.
-    const ahead = Math.min(t, this.duration) - this.t;
+    const ahead = Math.min(t, this.until) - this.t;
     if (ahead > 0) {
       const p = steerTo(this.offset[0], this.offset[1], this.heading, this.command, ahead,
         this.ep.speedMs, this.turnRateDegS);
@@ -246,6 +261,7 @@ export class PlayerFlight extends Flight {
    */
   preview(t, seconds = 30) {
     const { offset, heading } = this.pose(t);
+    if (t >= this.until) return [this.ground(t, offset)];
     const p = steerTo(offset[0], offset[1], heading, this.command, seconds, this.ep.speedMs,
       this.turnRateDegS);
     return [this.ground(t, offset), ...p.tS.map((_, i) => this.ground(t, [p.eastM[i], p.northM[i]]))];

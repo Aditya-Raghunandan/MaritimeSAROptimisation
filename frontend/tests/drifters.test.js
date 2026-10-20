@@ -101,6 +101,23 @@ describe('searchBuoys', () => {
     expect(searchBuoys(more, '2021-03').map((e) => e.id)).toEqual(['NEW', 'OLD']);
   });
 
+  it('finds a scenario\'s buoy by the scenario\'s name, marked with its call', () => {
+    const scenarios = { S05: ['300234061391930', '2019-02-14T09:00'], S10: ['300534061605940', '2021-03-12T15:00'] };
+    const [hit] = searchBuoys(index, 'S10', scenarios);
+    expect(hit.id).toBe('300534061605940');
+    expect(hit.scenario).toBe('S10');
+    expect(hit.callMs).toBe(Date.parse('2021-03-12T15:00Z'));
+    expect(searchBuoys(index, 's5', scenarios).map((e) => e.scenario)).toEqual(['S05']);
+    expect(searchBuoys(index, 'scenarios', scenarios).map((e) => e.scenario)).toEqual(['S05', 'S10']);
+    expect(searchBuoys(index, 'S99', scenarios)).toEqual([]);
+  });
+
+  it('knows all 55 scenarios\' buoys', async () => {
+    const { SCENARIO_BUOYS } = await import('../src/scenarioBuoys.js');
+    expect(Object.keys(SCENARIO_BUOYS)).toHaveLength(55);
+    expect(SCENARIO_BUOYS.S10).toEqual(['300234062953270', '2022-03-25T15:00']);
+  });
+
   it('an empty query finds nothing rather than everything', () => {
     expect(searchBuoys(index, '   ')).toEqual([]);
   });

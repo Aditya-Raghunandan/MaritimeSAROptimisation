@@ -1,0 +1,15 @@
+{
+  "name": "triangle-mailer",
+  "private": true,
+  "description": "Emails a Survive the Triangle player their result. See README.md.",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/email.test.js",
+    "preview": "node test/preview.js"
+  },
+  "dependencies": {
+    "nodemailer": "^6.9.16"
+  }
+}

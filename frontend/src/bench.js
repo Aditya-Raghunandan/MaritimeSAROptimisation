@@ -20,13 +20,14 @@ import { PlayerFlight, RecordedFlight } from './playback.js';
 import { ProbabilityLegend } from './probabilityLayer.js';
 import { Scene } from './scene.js';
 import {
-  NOISE_INFO, SEARCHER_INFO, bestNoise, loadIndex, loadWindow, noisesOf,
+  NOISE_INFO, SEARCHER_INFO, arrivalLabel, arrivalsOf, bestNoise, loadIndex, loadWindow, noisesOf,
+  searchersOf,
 } from './scenarioData.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 import { esriTiles } from './tiles.js';
 
 const WINDOW_S = 45 * 60;
-const ARRIVALS = [1, 2, 3];
+const ARRIVALS = [0.25, 0.5, 0.75, 1, 2, 3];   // v4 carries all six; older files 1, 2, 3
 const SELF = 'self';
 const $ = (id) => document.getElementById(id);
 
@@ -96,17 +97,18 @@ function segmented(el, options, current, onPick) {
 function drawControls() {
   segmented($('noise'), noisesOf(state.scenario).map((k) => [k, NOISE_INFO[k].label]), state.noise,
     (v) => { state.noise = v; load(); });
-  segmented($('arrival'), ARRIVALS.map((h) => [h, `${h} h`]), state.hours,
+  const have = arrivalsOf(state.scenario, state.noise);
+  segmented($('arrival'), ARRIVALS.filter((h) => !have.length || have.includes(h)).map((h) => [h, arrivalLabel(h)]),
+    state.hours,
     (v) => { state.hours = v; load(); });
   const box = $('searchers');
   box.innerHTML = '';
-  const options = [...Object.entries(SEARCHER_INFO), ['ml', { label: 'ML agent (coming)', colour: '#555' }],
+  const options = [...searchersOf(state.index).map((k) => [k, SEARCHER_INFO[k]]),
     [SELF, { label: 'Fly it yourself', colour: '#fff' }]];
   for (const [key, info] of options) {
     const label = document.createElement('label');
-    if (key === 'ml') label.className = 'off';
-    label.innerHTML = `<input type="radio" name="searcher" value="${key}" ${key === state.searcher ? 'checked' : ''}`
-      + `${key === 'ml' ? ' disabled' : ''}><span class="swatch" style="background:${info.colour}"></span>${info.label}`;
+    label.innerHTML = `<input type="radio" name="searcher" value="${key}" ${key === state.searcher ? 'checked' : ''}>`
+      + `<span class="swatch" style="background:${info.colour}"></span>${info.label}`;
     label.querySelector('input').addEventListener('change', () => { state.searcher = key; start(); });
     box.append(label);
   }
@@ -125,8 +127,10 @@ function drawChart() {
   const minutes = Array.from({ length: 46 }, (_, i) => i);
   const series = [{}];
   const data = [minutes];
-  for (const [key, info] of Object.entries(SEARCHER_INFO)) {
+  for (const key of searchersOf(state.index)) {
+    const info = SEARCHER_INFO[key];
     const f = state.window.flights[key];
+    if (!f) continue;
     data.push(cumulative(f.python.drain_rate).map((v) => 100 * v));
     series.push({ label: info.label, stroke: info.colour, width: key === state.searcher ? 2 : 1, alpha: 0.5 });
   }
