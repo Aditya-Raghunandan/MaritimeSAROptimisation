@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from sar.pipeline.forcing import ConstantForcing
-from sar.search.benchmark import SEARCHERS, recorded, searcher
+from sar.search.benchmark import EXTRA_SEARCHERS, SEARCHERS, recorded, searcher
 from sar.search.episode import SearchEpisode, Turn, Waypoints, run
 from sar.search.scenario import scenario_search
 
@@ -27,7 +27,7 @@ def setup():
     return scenario_search(row(), FORCING, 3600, 400)
 
 
-@pytest.mark.parametrize("name", SEARCHERS)
+@pytest.mark.parametrize("name", SEARCHERS + EXTRA_SEARCHERS)
 def test_a_recorded_flight_replays_to_the_same_score(setup, name):
     policy, _, _ = searcher(name, setup, row(), 1.0)
     flying, steps = recorded(policy)

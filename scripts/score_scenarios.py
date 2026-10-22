@@ -16,8 +16,17 @@ what the referee measured, one JSON line per flight:
 
 THE SEARCHERS. The four Coast Guard patterns, laid out by `sar.search.scenario.
 doctrinal_searcher` exactly as the site lays them; greedy and the random floor
-(`sar.search.greedy`, #49). The random floor's seed is the row's seed and the arrival, so
-both noise models are searched with the same random headings.
+(`sar.search.greedy`, #49). On request, `parallel-skip`: the Parallel Track's own legs flown
+middle first with turns a helicopter can make (`sar.search.patterns.parallel_skip`, 13 Oct).
+The random floor's seed is the row's seed and the arrival, so both noise models are searched
+with the same random headings.
+
+THE TRAINED AGENT. `--searchers ... ppo --ppo-model RUN/best_model.zip` adds the PPO policy
+(`sar.rl`, D005) as a seventh searcher: one of its compass headings a minute, chosen from the
+observation it was trained on (`sar.rl.features.observe`), flown by the same referee and
+helicopter as the rest. The model file's sha256, its run and the commit it was trained at go
+in the manifest, so a folder never mixes two agents. Needs the `rl` extra (stable-baselines3,
+torch); nothing else here imports it.
 
 THE HELICOPTER TURNS AT 7 DEG/S (D032). Every flight is flown by a helicopter that turns
 at most `--turn-rate` degrees a second (default `TURN_RATE_DEG_S`, a 30 degree bank at
@@ -43,6 +52,14 @@ same water (D025), and a long-lived buoy gives many rows. So every number is ave
 each group first and then across groups, and its 95 % interval comes from resampling whole
 groups. `summary` writes flights.parquet and summary.csv beside the rows.
 
+THE CLOUD'S SIZE SETS POS, SO EVERY COMPARISON IS ON THE SAME CLOUD. Each window records
+`area90_km2`, the smallest area holding 90 % of the cloud when the helicopter arrives. Every
+searcher's POS falls with it (r = -0.99 against its log, 12 Oct), so a searcher is only ever
+compared with another on the same cloud: the difference in POS ("pos difference", in points)
+and the ratio ("pos ratio", a geometric mean of POS over the Square's). Points weigh small
+clouds most, where POS is large; the ratio weighs every cloud alike. Both are sliced by the
+cloud's size (AREA_BINS_KM2), so a searcher that only wins on big clouds shows it.
+
     python scripts/score_scenarios.py score --csv scenarios.csv --forcing-dir DATA \\
         --rows 1-55 --noise rv rw --arrival-h 1 2 3 --out DIR
     python scripts/score_scenarios.py summary DIR [--straight-at 0.90]
@@ -64,7 +81,8 @@ import numpy as np
 import pandas as pd
 
 from sar.pipeline.gridded import ForcingGapError, GriddedForcing
-from sar.search.benchmark import BASELINE, GREEDY, NOISE, NOISE_RECORD, SEARCHERS, searcher
+from sar.search.benchmark import (BASELINE, EXTRA_SEARCHERS, GREEDY, NOISE, NOISE_RECORD,
+                                   SEARCHERS, searcher)
 from sar.search.episode import STEPS, run
 from sar.search.platform import STEP_S, TURN_RATE_DEG_S
 from sar.search.scenario import (
@@ -74,15 +92,69 @@ from sar.search.scenario import (
     search_episode,
     straightness,
 )
+from sar.search.sweep import relative_m
 from sar.utils.geo import to_display_longitude
 
 RESAMPLES = 1000
+# The cloud's size at arrival: the smallest area holding 90 % of it, on 250 m cells (D007's
+# episode cell). Every searcher's POS falls with it (r = -0.99 against log size over the 330
+# published v2 windows, 12 Oct), so the summary slices by it. The bins were set on the six
+# searchers' v2 windows (129 / 95 / 106 windows), before any trained agent was scored.
+AREA_SHARE, AREA_CELL_M = 0.9, 250.0
+AREA_BINS_KM2 = (30.0, 60.0)
+# A searcher's POS over the Expanding Square's on the same cloud is taken in logs, so a POS of
+# 0 (the random floor can clear nothing) is held at this before the ratio.
+RATIO_FLOOR = 1e-4
 # Straight against turning: 0.95 is a curve turning through about 60 degrees over the 4 h.
 # The dev median is 0.995, a straight line to half a percent, so it would split straight
 # buoys from straight buoys (7 Oct: 12 % of the 9,538 dev rows are below 0.95).
 STRAIGHT_AT = 0.95
 BOOTSTRAP_SEED = 20261007
 REPO = Path(__file__).resolve().parents[1]
+PPO = "ppo"
+# The second agent (12 Oct, L40: plain POS, gamma 1, a CNN), flown beside the first so the two
+# are scored on the same clouds: --telemachus-model, searcher "telemachus".
+TELEMACHUS = "telemachus"
+
+
+class PPOSearcher:
+    """The trained agent as a benchmark searcher, loaded once: `ppo(setup, row)` is what
+    `sar.search.benchmark.searcher` returns for the others, (policy, None, layout).
+
+    `record` is what the manifest and the site's index keep: which model, byte for byte.
+    """
+
+    def __init__(self, path):
+        from sar.rl.features import SIZE
+        from sar.rl.fly import load_halves, load_policy, load_speeds
+
+        self.path = Path(path).resolve()
+        config = json.loads((self.path.parent / "config.json").read_text())
+        size = config.get("observation", {}).get("size")
+        self.speeds = load_speeds(self.path)
+        if size != SIZE + (1 if self.speeds else 0):
+            raise ValueError(f"{self.path} was trained on a {size}-number observation; "
+                             f"sar.rl.features builds {SIZE}, so it would be flown blind")
+        self.model, self.headings = load_policy(self.path)
+        self.halves = load_halves(self.path)
+        self.record = {"run": self.path.parent.name, "file": self.path.name,
+                       "sha256": sha256(self.path), "headings": self.headings, "halves": self.halves,
+                       "speeds_kt": list(self.speeds),
+                       "trained_commit": config.get("git_commit"),
+                       "trained_arrival_min": config.get("arguments", {}).get("arrival_min")}
+
+    def __call__(self, setup, row):
+        from sar.rl.features import Context
+        from sar.rl.fly import ppo_policy
+
+        context = Context((float(row["lat"]), float(row["lon"])), float(setup.arrival_s),
+                          setup.drift_bearing_deg)
+        every = (f"two of {self.halves} headings a minute, 30 s each" if self.halves
+                 else f"{self.headings} headings every 60 s")
+        if self.speeds:
+            every += f", and a speed each minute from {'/'.join(f'{s:g}' for s in self.speeds)} kt"
+        return (ppo_policy(self.model, self.headings, context, self.halves, self.speeds), None,
+                f"trained agent ({self.record['run']}), {every}")
 
 
 def row_names(spec, table: pd.DataFrame) -> list[str]:
@@ -115,12 +187,31 @@ def _scenario_fields(row) -> dict:
             "straightness_4h": straightness(row) if "lat_4h" in row.index else None}
 
 
+def cloud_area_km2(setup, share: float = AREA_SHARE, cell_m: float = AREA_CELL_M) -> float:
+    """The cloud's size when the helicopter arrives: the smallest area holding `share` of its
+    probability, km², on `cell_m` cells about the marker. The likeliest cells first."""
+    mlat, mlon = setup.marker.at(np.array([0.0]))
+    east, north = relative_m(setup.window.lat[0], setup.window.lon[0], mlat[0], mlon[0])
+    weight = np.asarray(setup.window.weight, dtype=float)
+    ok = np.isfinite(east) & np.isfinite(north) & (weight > 0)
+    cells = np.floor(east[ok] / cell_m).astype(np.int64) * 1_000_003 \
+        + np.floor(north[ok] / cell_m).astype(np.int64)
+    _, inverse = np.unique(cells, return_inverse=True)
+    mass = np.sort(np.bincount(inverse, weights=weight[ok]))[::-1]
+    held = np.cumsum(mass)
+    k = int(np.searchsorted(held, share * held[-1] - 1e-12)) + 1
+    return k * cell_m * cell_m / 1e6
+
+
 def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
               greedy: dict | None = None,
-              turn_rate_deg_s: float = TURN_RATE_DEG_S) -> list[dict]:
+              turn_rate_deg_s: float = TURN_RATE_DEG_S,
+              ppo: PPOSearcher | None = None,
+              telemachus: PPOSearcher | None = None) -> list[dict]:
     """Every (noise, arrival, searcher) flight over one row, as flat dicts.
 
     `forcing` is a backend, or a data root, opened once for the latest arrival's window.
+    `ppo` flies the searcher named "ppo"; `telemachus` the one named "telemachus".
     """
     if isinstance(forcing, (str, Path)):
         start = np.datetime64(str(row["start"]), "us")
@@ -134,8 +225,11 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
             setup = scenario_search(row, forcing, round(hours * 3600.0), particles,
                                     **NOISE[noise])
             beached = float(np.mean(setup.window.beached[-1]))
+            area = cloud_area_km2(setup)
             for name in searchers:
-                policy, first, layout = searcher(name, setup, row, hours, greedy)
+                agent = {PPO: ppo, TELEMACHUS: telemachus}.get(name)
+                policy, first, layout = (agent(setup, row) if agent is not None
+                                         else searcher(name, setup, row, hours, greedy))
                 m = run(policy, search_episode(setup, turn_rate_deg_s))
                 drain = m["removed_per_step"]
                 target = m.get("target") or {}
@@ -158,7 +252,7 @@ def score_row(row, forcing, noises, arrivals_h, searchers, particles: int,
                     "found": target.get("found"), "found_s": target.get("found_s"),
                     "closest_m": target.get("closest_m"),
                     "closest_s": target.get("closest_s"), "gaps": target.get("gaps"),
-                    "beached_share": beached, "distance_m": m["distance_m"],
+                    "beached_share": beached, "area90_km2": area, "distance_m": m["distance_m"],
                     "particles": particles, "drain_rate": drain})
     return flights
 
@@ -194,14 +288,16 @@ def sha256(path) -> str:
 
 
 def experiment(csv, noises, arrivals_h, searchers, particles: int,
-               greedy: dict | None = None, turn_rate_deg_s: float = TURN_RATE_DEG_S) -> dict:
+               greedy: dict | None = None, turn_rate_deg_s: float = TURN_RATE_DEG_S,
+               ppo: PPOSearcher | None = None, telemachus: PPOSearcher | None = None) -> dict:
     """What makes two flights comparable. A folder holds flights from one of these only."""
     return {"commit": git_commit(), "table": Path(csv).name, "table_sha256": sha256(csv),
             "particles": int(particles), "noise": {n: NOISE_RECORD[n] for n in noises},
             "arrival_h": [float(a) for a in arrivals_h], "searchers": list(searchers),
             "greedy": dict(GREEDY if greedy is None else greedy),
             "turn_rate_deg_s": None if math.isinf(turn_rate_deg_s) else float(turn_rate_deg_s),
-            "steps": STEPS, "step_s": STEP_S}
+            "steps": STEPS, "step_s": STEP_S, "ppo": None if ppo is None else ppo.record,
+            **({} if telemachus is None else {TELEMACHUS: telemachus.record})}
 
 
 def claim(out: Path, settings: dict) -> dict:
@@ -222,10 +318,14 @@ def claim(out: Path, settings: dict) -> dict:
         held = json.loads(path.read_text())
     finally:
         tmp.unlink(missing_ok=True)
+    # Compared as they read back from JSON: a tuple in the settings is a list in the manifest,
+    # and rvs's (along, across) made every process but the first refuse its own experiment
+    # (jobs 60114-60115, 19 Oct: 1 of 55 scenarios and 4 of 181 buoys scored).
+    settings = json.loads(json.dumps(settings))
     differ = sorted(k for k in settings if held.get(k) != settings[k])
     if differ:
         raise ValueError(f"{out} already holds an experiment with different {', '.join(differ)}"
-                         f" ({'; '.join(f'{k}: {held.get(k)!r} there, {settings[k]!r} here' for k in differ if k == 'commit')})"
+                         f" ({'; '.join(f'{k}: {held.get(k)!r} there, {settings[k]!r} here' for k in differ)})"
                          f"; use a new folder")
     return held
 
@@ -297,6 +397,13 @@ def slices(f: pd.DataFrame, straight_at: float | None) -> list[tuple[str, pd.Dat
         s = f["straightness_4h"].astype(float)
         out += [(f"path: straight (>= {straight_at:.3f})", f[s >= straight_at]),
                 (f"path: turning (< {straight_at:.3f})", f[s < straight_at])]
+    # The cloud's size at arrival, which sets every searcher's POS (AREA_BINS_KM2).
+    if "area90_km2" in f and f["area90_km2"].notna().any():
+        a = f["area90_km2"].astype(float)
+        lo, hi = AREA_BINS_KM2
+        out += [(f"cloud: < {lo:g} km2", f[a < lo]),
+                (f"cloud: {lo:g}-{hi:g} km2", f[(a >= lo) & (a < hi)]),
+                (f"cloud: >= {hi:g} km2", f[a >= hi])]
     return [(name, part) for name, part in out if len(part)]
 
 
@@ -336,6 +443,18 @@ def summarise(flights: pd.DataFrame, straight_at: float | None = STRAIGHT_AT,
                 rows += [{**r, "slice": name} for r in _tabulate(
                     d.dropna(subset=["diff"]), "pos difference", "diff", keys, rng, resamples,
                     better=True)]
+                # The same pairs as a ratio: how many times the Square's POS on the same cloud.
+                # A difference in points is dominated by small clouds, where POS is large; a
+                # ratio counts a big cloud's 0.15 against 0.12 the same as a small one's 0.75
+                # against 0.60. Averaged in logs (a geometric mean), so 2x and 0.5x cancel.
+                logs = np.log(np.maximum(wide[other], RATIO_FLOOR)
+                              / np.maximum(wide[BASELINE], RATIO_FLOOR))
+                d = wide[["scenario", "group", "noise", "arrival_h"]].assign(
+                    searcher=f"{other} / {BASELINE}", logratio=logs)
+                for r in _tabulate(d.dropna(subset=["logratio"]), "pos ratio", "logratio", keys,
+                                   rng, resamples, better=True):
+                    rows.append({**r, "slice": name, "mean": float(np.exp(r["mean"])),
+                                 "lo": float(np.exp(r["lo"])), "hi": float(np.exp(r["hi"]))})
     cols = ["measure", "slice", "noise", "searcher", "arrival_h", "n_rows", "n_groups",
             "mean", "lo", "hi", "groups_better"]
     out = pd.DataFrame(rows)
@@ -355,7 +474,11 @@ def main(argv=None):
                         "pooled size, the comparison; rw: the old random walk")
     s.add_argument("--arrival-h", nargs="+", type=float, default=[1.0, 2.0, 3.0],
                    help="hours from the call to arrival, whole minutes; default 1 2 3")
-    s.add_argument("--searchers", nargs="+", choices=SEARCHERS, default=list(SEARCHERS))
+    s.add_argument("--searchers", nargs="+", choices=(*SEARCHERS, *EXTRA_SEARCHERS, PPO, TELEMACHUS),
+                   default=list(SEARCHERS))
+    s.add_argument("--ppo-model", help="the trained agent's best_model.zip, for --searchers ppo")
+    s.add_argument("--telemachus-model", help="the second agent's best_model.zip, for --searchers "
+                                              "telemachus")
     s.add_argument("--particles", type=int, default=10_000)
     s.add_argument("--greedy-headings", type=int, default=GREEDY["headings"])
     s.add_argument("--greedy-decide-s", type=float, default=GREEDY["decide_s"],
@@ -388,18 +511,25 @@ def main(argv=None):
               f"-> {folder / 'summary.csv'}")
         return table
 
+    if (PPO in args.searchers) != bool(args.ppo_model):
+        parser.error("--searchers ppo and --ppo-model go together")
+    if (TELEMACHUS in args.searchers) != bool(args.telemachus_model):
+        parser.error("--searchers telemachus and --telemachus-model go together")
+    ppo = PPOSearcher(args.ppo_model) if args.ppo_model else None
+    telemachus = PPOSearcher(args.telemachus_model) if args.telemachus_model else None
     table = read_scenarios(args.csv)
     out = Path(args.out)
     greedy = {"headings": args.greedy_headings, "decide_s": args.greedy_decide_s}
     claim(out, experiment(args.csv, args.noise, args.arrival_h, args.searchers, args.particles,
-                          greedy, args.turn_rate))
+                          greedy, args.turn_rate, ppo, telemachus))
     (out / "flights").mkdir(exist_ok=True)
     for name in row_names(args.rows, table):
         row = table[table["scenario"] == name].iloc[0]
         t0 = time.perf_counter()
         try:
             flights = score_row(row, args.forcing_dir, args.noise, args.arrival_h,
-                                args.searchers, args.particles, greedy, args.turn_rate)
+                                args.searchers, args.particles, greedy, args.turn_rate, ppo,
+                                telemachus)
         except ForcingGapError as err:
             # D011: a scenario that crosses a gap in the forcing is excluded, and says why.
             (out / "flights" / f"{name}.skipped.json").write_text(

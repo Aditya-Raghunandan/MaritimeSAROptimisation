@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("stable_baselines3")
 
 from sar.rl import fly, train
-from sar.rl.env import SearchEnv
+from sar.rl.env import SearchEnv, window_items
 from sar.rl.windows import is_test, load
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -86,6 +86,80 @@ class TestTrain:
         assert data["best"]["reward"] == max(v["reward"] for v in data["validation"])
 
 
+class TestTelemachus2:
+    """The second agent's settings (12 Oct, L40): plain POS, gamma 1, a CNN over the maps."""
+
+    def test_the_cnn_reads_a_batch_of_observations(self):
+        torch = pytest.importorskip("torch")
+        import gymnasium as gym
+        from sar.rl.cnn import SearchCNN
+        from sar.rl.features import SIZE
+        cnn = SearchCNN(gym.spaces.Box(-np.inf, np.inf, (SIZE,), np.float32))
+        out = cnn(torch.zeros(5, SIZE))
+        assert tuple(out.shape) == (5, 256)
+
+    def test_a_cnn_run_on_plain_pos_trains_saves_and_flies(self, windows_dir, tmp_path):
+        run = train._cli(["--windows", str(windows_dir), "--validation-every", "3",
+                          "--arrival-min", "30", "45", "--headings", "8", "--timesteps", "128",
+                          "--envs", "1", "--seed", "1", "--eval-every", "64", "--patience", "0",
+                          "--improve-threshold", "0", *BASELINE_PPO, "--reward-decay", "0",
+                          "--gamma", "1", "--policy", "cnn", "--batch-size", "32", "--target-kl", "0.03",
+                          "--name", "tele_cnn_test", "--out", str(tmp_path)])
+        config = json.loads((run / "config.json").read_text())
+        assert config["reward_decay"] == 0.0 and config["eval_decay"] == 0.0
+        assert config["ppo"]["gamma"] == 1.0 and config["ppo"]["policy"] == "cnn"
+        assert config["ppo"]["batch_size"] == 32 and config["ppo"]["target_kl"] == 0.03
+        model, headings = fly.load_policy(run / "best_model.zip")
+        assert type(model.policy.features_extractor).__name__ == "SearchCNN"
+        path = min(windows_dir.glob("windows_*20190129*.npz"))
+        flights = fly.score_windows([path], [fly.PPO], model, headings, [45])
+        assert 0.0 <= flights.iloc[0]["pos"] <= 1.0
+
+    def test_a_two_headings_a_minute_run_trains_and_the_benchmark_flies_it(self, windows_dir, tmp_path):
+        run = train._cli(["--windows", str(windows_dir), "--validation-every", "3",
+                          "--arrival-min", "45", "--headings", "36", "--timesteps", "64",
+                          "--envs", "1", "--seed", "1", "--eval-every", "64", "--patience", "0",
+                          "--improve-threshold", "0", *BASELINE_PPO, "--reward-decay", "0",
+                          "--gamma", "1", "--halves", "12", "--net-arch", "256", "256",
+                          "--name", "tele2x_test", "--out", str(tmp_path)])
+        model, headings = fly.load_policy(run / "best_model.zip")
+        assert fly.load_halves(run / "best_model.zip") == 12 and model.action_space.n == 144
+        assert model.policy.net_arch == {"pi": [256, 256], "vf": [256, 256]}
+        from sar.rl.features import Context
+        from sar.search.episode import Waypoints, run as fly_run
+        path = min(windows_dir.glob("windows_*20190129*.npz"))
+        windows = load(path)
+        setup = windows.setup(1)
+        policy = fly.ppo_policy(model, headings, Context(windows.lkp, setup.arrival_s,
+                                                         setup.drift_bearing_deg), 12)
+        from sar.search.scenario import search_episode
+        ep = search_episode(setup)
+        assert isinstance(policy(ep), Waypoints)
+        m = fly_run(policy, search_episode(setup))
+        assert 0.0 <= m["pos"] <= 1.0
+
+    def test_the_validation_score_is_pos_when_eval_decay_is_zero(self, windows_dir, tmp_path):
+        run = train._cli(["--windows", str(windows_dir), "--validation-every", "3",
+                          "--arrival-min", "30", "--headings", "8", "--timesteps", "64",
+                          "--envs", "1", "--seed", "1", "--eval-every", "64", "--patience", "0",
+                          "--improve-threshold", "0", *BASELINE_PPO, "--reward-decay", "0.5",
+                          "--eval-decay", "0", "--name", "tele_half_test", "--out", str(tmp_path)])
+        held = np.load(run / "eval" / "evaluations.npz")
+        model, headings = fly.load_policy(run / "best_model.zip")
+        val = train.split(windows_dir, 3)["validation"]
+        env = SearchEnv([str(p) for p in val], headings=headings, arrivals_min=[30], cycle=True)
+        pos = []
+        for _ in range(len(window_items([str(p) for p in val], [30]))):
+            obs, _ = env.reset()
+            done = False
+            while not done:
+                action, _ = model.predict(obs, deterministic=True)
+                obs, _, done, _, info = env.step(action)
+            pos.append(info["pos"])
+        # SB3's Monitor rounds an episode's return to 6 decimals
+        assert held["results"][-1].mean() == pytest.approx(np.mean(pos), abs=1e-6)
+
+
 class TestPlateau:
     def test_a_gain_under_the_threshold_does_not_count(self):
         assert train.plateau([0.5, 0.6, 0.6005, 0.6008, 0.6009], 3, 0.001) == (1, 4)
@@ -129,8 +203,11 @@ class TestFly:
         assert len(ours["steps"]) == len(theirs["steps"]) == 45
 
     def test_a_published_window_rebuilds_to_the_papers_own_scores(self):
-        record = json.loads((FIXTURE / "rv_2h.json").read_text())
-        setup, context = fly.bundle_setup(record, FIXTURE)
+        # A format 2 window (scenarios/v2): flown by D032's helicopter, which turns at 7 deg/s, as
+        # fly_window flies. The v1 fixture's helicopter turned at once, so its scores differ.
+        folder = FIXTURE.parents[1] / "v2" / "S01"
+        record = json.loads((folder / "rv_2h.json").read_text())
+        setup, context = fly.bundle_setup(record, folder)
         row = {"lat": record["lkp"]["lat"], "lon": record["lkp"]["lon"], "seed": 0}
         flights = fly.fly_window(setup, context, row, ["expanding-square", "greedy"])
         for name in ("expanding-square", "greedy"):

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SCENARIO_VERSIONS, aiOf, arrivalLabel, arrivalsOf, searchersOf } from '../src/scenarioData.js';
+import { SCENARIO_VERSIONS, aiOf, arrivalLabel, arrivalsOf, bestNoise, noisesOf, searchersOf } from '../src/scenarioData.js';
 
 describe('which searchers a version carries', () => {
   it('lists the trained agent only when the index says the files have it', () => {
@@ -35,8 +35,14 @@ describe("who plays the computer's side", () => {
     expect(aiOf(all, 2)).toBe('greedy');
   });
 
-  it('looks for v5 first', () => {
-    expect(SCENARIO_VERSIONS[0]).toBe('v5');
+  it('looks for v6 first, then v5', () => {
+    expect(SCENARIO_VERSIONS.slice(0, 2)).toEqual(['v6', 'v5']);
+  });
+
+  it('flies the calibrated cloud where a scenario has it, the older one where not', () => {
+    expect(bestNoise({ windows: ['rvsc_1h', 'rvsc_2h'] })).toBe('rvsc');
+    expect(bestNoise({ windows: ['rvc_1h', 'rv_1h'] })).toBe('rvc');
+    expect(noisesOf({ windows: ['rvc_1h', 'rvsc_1h'] })).toEqual(['rvsc', 'rvc']);
   });
 });
 

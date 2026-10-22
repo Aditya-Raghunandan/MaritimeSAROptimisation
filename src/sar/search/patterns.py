@@ -62,11 +62,17 @@ since D032 the referee flies the drawing with the L1 autopilot (`sar.search.kine
 follow`, docs/ADR006.md), and only a helicopter that turns at once flies these waypoints
 as they are.
 
+ONE THAT IS NOT IN THE MANUAL. `parallel_skip` flies the Parallel Track's own legs in another
+order, the middle first and five legs apart, so every reversal is a U the helicopter can
+make rather than a loop (13 Oct). Same area, same legs; it is this project's, and the
+benchmark names it so (`parallel-skip`).
+
 CLI. One pattern, printed as JSON:
 
     python -m sar.search.patterns expanding-square --first-bearing 45
     python -m sar.search.patterns sector --first-bearing 45 --duration-min 18
     python -m sar.search.patterns parallel --first-bearing 30
+    python -m sar.search.patterns parallel-skip --first-bearing 30
     python -m sar.search.patterns trackline --first-bearing 30 --half-length-m 6000
 """
 
@@ -82,9 +88,11 @@ from sar.search.platform import (
     ON_SCENE_WINDOW_S,
     SEARCH_SPEED_MS,
     SWEEP_WIDTH_M,
+    TURN_RATE_DEG_S,
     expanding_square_spacing_m,
     search_effort_m2,
     sector_radius_m,
+    turn_radius_m,
 )
 from sar.utils.geo import east_north, offset_position
 
@@ -247,6 +255,19 @@ def _point(u, v, along: float, across: float):
     return along * u[0] + across * v[0], along * u[1] + across * v[1]
 
 
+def _parallel_area(length_m, width_m, spacing_m: float, speed_ms: float, duration_s: float):
+    """The Parallel Track's legs: how many, where each lies across, and where they start and end."""
+    side = float(np.sqrt(search_effort_m2(spacing_m, speed_ms, duration_s)))
+    length_m = _check("length_m", side if length_m is None else length_m)
+    width_m = _check("width_m", side if width_m is None else width_m)
+    if length_m < spacing_m or width_m < spacing_m:
+        raise ValueError("a parallel track area must be at least one track spacing each way")
+    # Nearest, not floor: floor left the far strip unflown when the width was 25.98 S.
+    legs = max(1, int(np.floor(width_m / spacing_m + 0.5)))
+    across = [-width_m / 2 + spacing_m / 2 + k * spacing_m for k in range(legs)]
+    return across, -length_m / 2 + spacing_m / 2, length_m / 2 - spacing_m / 2
+
+
 def parallel_track(length_m: float | None = None, width_m: float | None = None,
                    spacing_m: float = SWEEP_WIDTH_M, first_bearing_deg: float = 0.0,
                    speed_ms: float = SEARCH_SPEED_MS,
@@ -259,25 +280,76 @@ def parallel_track(length_m: float | None = None, width_m: float | None = None,
     spacing_m = _check("spacing_m", spacing_m)
     speed_ms = _check("speed_ms", speed_ms)
     duration_s = _check("duration_s", duration_s)
-    side = float(np.sqrt(search_effort_m2(spacing_m, speed_ms, duration_s)))
-    length_m = _check("length_m", side if length_m is None else length_m)
-    width_m = _check("width_m", side if width_m is None else width_m)
-    if length_m < spacing_m or width_m < spacing_m:
-        raise ValueError("a parallel track area must be at least one track spacing each way")
-
+    across, near, far = _parallel_area(length_m, width_m, spacing_m, speed_ms, duration_s)
     u, v = _axes(first_bearing_deg)
-    # Nearest, not floor: floor left the far strip unflown when the width was 25.98 S.
-    legs = max(1, int(np.floor(width_m / spacing_m + 0.5)))
-    near, far = -length_m / 2 + spacing_m / 2, length_m / 2 - spacing_m / 2
 
     def points():
-        for k in range(legs):
-            across = -width_m / 2 + spacing_m / 2 + k * spacing_m
+        for k, off in enumerate(across):
             start, end = (near, far) if k % 2 == 0 else (far, near)
-            yield _point(u, v, start, across)
-            yield _point(u, v, end, across)
+            yield _point(u, v, start, off)
+            yield _point(u, v, end, off)
 
     return _fly("parallel_track", _legs_through(points()), speed_ms, duration_s)
+
+
+def skip_order(legs: int, min_skip: int) -> list[int]:
+    """The order to fly `legs` parallel legs in: the middle first, and turns that are plain U's.
+
+    It starts on the leg nearest the middle (the lower of two). After each leg the next is the
+    unflown leg nearest the middle among those at least `min_skip` legs away, so the helicopter
+    turns into it with a U and not a loop; of two equally central, the nearer, then the lower.
+    When every unflown leg is closer than that, the one nearest the middle, flown with a loop.
+    """
+    if legs < 1 or min_skip < 1:
+        raise ValueError(f"legs and min_skip must be positive, got {legs} and {min_skip}")
+    middle = (legs - 1) / 2.0
+    left = set(range(legs))
+    here = min(left, key=lambda k: (abs(k - middle), k))
+    order = [here]
+    left.remove(here)
+    while left:
+        wide = [k for k in left if abs(k - here) >= min_skip]
+        here = min(wide or left, key=lambda k, h=here: (abs(k - middle), abs(k - h), k))
+        order.append(here)
+        left.remove(here)
+    return order
+
+
+def parallel_skip(length_m: float | None = None, width_m: float | None = None,
+                  spacing_m: float = SWEEP_WIDTH_M, first_bearing_deg: float = 0.0,
+                  speed_ms: float = SEARCH_SPEED_MS, duration_s: float = ON_SCENE_WINDOW_S,
+                  turn_rate_deg_s: float = TURN_RATE_DEG_S) -> Pattern:
+    """The Parallel Track's own legs, flown middle first with turns a helicopter can make.
+
+    Not in the manual; this project's (13 Oct). The rectangle, the legs, their spacing and the
+    axis are `parallel_track`'s exactly; only the order changes (`skip_order`). Two reasons:
+
+      * A helicopter turning at 7 deg/s needs 2r = 757 m to reverse, four spacings. Into the
+        next leg, 185 m over, it flies a loop of about 55 s; into one five legs over, a plain
+        U of about 29 s (Bochtis & Vougioukas 2008 skip tracks for the same reason; vault,
+        2026-10-09 turn probe). `min_skip` is the fewest legs that span 2r.
+      * With real turns no helicopter finishes the 26 legs in the window, so the order also
+        chooses which legs are never flown. Doctrine centres the area on the datum because the
+        target is likeliest there; flying the middle first leaves out the edges, not one side.
+
+    Every leg is flown the opposite way to the one before, so each U-turn joins two ends on the
+    same side of the area. It begins, as the manual's does, by flying from the marker to the
+    start of its first leg.
+    """
+    spacing_m = _check("spacing_m", spacing_m)
+    speed_ms = _check("speed_ms", speed_ms)
+    duration_s = _check("duration_s", duration_s)
+    across, near, far = _parallel_area(length_m, width_m, spacing_m, speed_ms, duration_s)
+    min_skip = max(1, int(np.ceil(2.0 * turn_radius_m(turn_rate_deg_s, speed_ms) / spacing_m)))
+    u, v = _axes(first_bearing_deg)
+
+    def points():
+        for n, k in enumerate(skip_order(len(across), min_skip)):
+            start, end = (near, far) if n % 2 == 0 else (far, near)
+            yield _point(u, v, start, across[k])
+            yield _point(u, v, end, across[k])
+
+    return _fly("parallel_skip", _legs_through(points()), speed_ms, duration_s)
 
 
 def trackline_return(half_length_m: float, spacing_m: float = SWEEP_WIDTH_M,
@@ -311,7 +383,8 @@ def trackline_return(half_length_m: float, spacing_m: float = SWEEP_WIDTH_M,
 
 
 PATTERNS = {"expanding-square": expanding_square, "sector": sector_search,
-            "parallel": parallel_track, "trackline": trackline_return}
+            "parallel": parallel_track, "trackline": trackline_return,
+            "parallel-skip": parallel_skip}
 
 
 def on_ground(pattern: Pattern, marker: MarkerTrack, t):
@@ -383,10 +456,10 @@ def _cli(argv=None) -> dict:
         pattern = expanding_square(spacing, args.first_bearing, args.speed_ms, duration_s)
     elif args.pattern == "sector":
         pattern = sector_search(args.radius_m, args.first_bearing, args.speed_ms, duration_s)
-    elif args.pattern == "parallel":
+    elif args.pattern in ("parallel", "parallel-skip"):
         spacing = expanding_square_spacing_m() if args.spacing_m is None else args.spacing_m
-        pattern = parallel_track(args.length_m, args.width_m, spacing, args.first_bearing,
-                                 args.speed_ms, duration_s)
+        pattern = PATTERNS[args.pattern](args.length_m, args.width_m, spacing, args.first_bearing,
+                                         args.speed_ms, duration_s)
     else:
         spacing = expanding_square_spacing_m() if args.spacing_m is None else args.spacing_m
         half = sector_radius_m() if args.half_length_m is None else args.half_length_m

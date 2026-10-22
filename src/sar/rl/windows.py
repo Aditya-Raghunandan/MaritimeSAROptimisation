@@ -5,18 +5,21 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
 
-from sar.pipeline.ensemble import Ensemble, parse_run_name, read_csv, run_name
+from sar.model.position import BY_CURRENT, shape_for_current
+from sar.pipeline.ensemble import (Ensemble, parse_run_name, read_csv, resolve_sigma_u,
+                                   run_ensemble, run_name)
+from sar.pipeline.forcing import ScaledForcing
 from sar.pipeline.gridded import GriddedForcing
 from sar.search.datum import marker_track
 from sar.search.episode import STEPS
 from sar.search.patterns import MarkerTrack
 from sar.search.platform import STEP_S
-from sar.search.scenario import SearchSetup, centroid, drift_bearing
+from sar.search.scenario import TRUTH_HOURS, SearchSetup, centroid, drift_bearing
 from sar.utils.geo import to_store_longitude
 
 WINDOW_S = STEPS * STEP_S
@@ -40,15 +43,22 @@ class SearchWindows:
     marker_lat: np.ndarray         # (A, STEPS + 1), every STEP_S from the drop
     marker_lon: np.ndarray
     drift_bearing_deg: np.ndarray  # (A,), NaN where the datum has no drift
+    # A real buoy's start only (`build_truth`, 13 Oct): its fixes, seconds since the call.
+    truth_t_s: np.ndarray | None = None
+    truth_lat: np.ndarray | None = None
+    truth_lon: np.ndarray | None = None
 
     def setup(self, k: int) -> SearchSetup:
-        """Window k as the referee takes it: the cloud every minute from arrival, and its marker."""
+        """Window k as the referee takes it: the cloud every minute from arrival, its marker, and
+        the real buoy as the target where the windows carry one."""
         arrival = float(self.arrivals_s[k])
         window = cloud_window(self, arrival)
         marker = MarkerTrack(np.arange(STEPS + 1) * STEP_S, self.marker_lat[k], self.marker_lon[k])
         bearing = float(self.drift_bearing_deg[k])
         datum = centroid(window.lat[0], window.lon[0], window.weight)
-        return SearchSetup(window, marker, None, datum, arrival,
+        target = None if self.truth_t_s is None else MarkerTrack(
+            np.asarray(self.truth_t_s, dtype=float) - arrival, self.truth_lat, self.truth_lon)
+        return SearchSetup(window, marker, target, datum, arrival,
                            None if np.isnan(bearing) else bearing)
 
 
@@ -129,6 +139,51 @@ def build(ensemble: Ensemble, run: dict, forcing, arrivals_s) -> SearchWindows:
                          np.array(m_lat), np.array(m_lon), np.array(bearings))
 
 
+def shaped(forcing, shape: dict | None, speed_ms: float | None = None):
+    """The forcing a shaped cloud reads, and its (along, across) factors; unchanged for None.
+
+    `shape` has fixed "along"/"across" factors (D034), or a "rule" sizing each axis by the
+    current at the start, `speed_ms` (D035)."""
+    if not shape:
+        return forcing, None
+    scaled = ScaledForcing(forcing, shape.get("current_scale", 1.0), shape.get("wind_scale", 1.0))
+    if "rule" in shape:
+        if speed_ms is None:
+            raise ValueError("a shape by the current needs the current at the start")
+        return scaled, shape_for_current(speed_ms, shape["rule"])
+    return scaled, (float(shape.get("along", 1.0)), float(shape.get("across", 1.0)))
+
+
+def build_truth(row, forcing, arrivals_s, particles: int, save_every_s: float = 300.0,
+                shape: dict | None = None) -> SearchWindows:
+    """A real buoy's start as training windows: its rvc cloud, cut like `build`, and its own track.
+
+    The cloud is the benchmark's (`sar.search.scenario.search_window`, noise rvc: the random
+    velocity sized by the current at the start, D033) at the row's seed, saved every
+    `save_every_s` and joined linearly (`frames_at`). The buoy's fixes, the start and every
+    hour that has one (TRUTH_HOURS), go with it, so an agent can be paid for finding it.
+    `shape` ({current_scale, wind_scale, along, across}) is the cloud-shape correction (L41).
+    """
+    start = np.datetime64(str(row["start"]), "us")
+    lat, lon, seed = float(row["lat"]), float(row["lon"]), int(row["seed"])
+    arrivals = sorted(float(a) for a in arrivals_s)
+    duration = arrivals[-1] + WINDOW_S
+    sigma_u, speed = resolve_sigma_u(BY_CURRENT, forcing, lat, lon, start)
+    forcing, factors = shaped(forcing, shape, speed)
+    ensemble = run_ensemble(forcing, particles, start, lat, lon, duration, STEP_S,
+                            datum_sigma_km=0.0, sigma=0.0, seed=seed, save_every=save_every_s,
+                            sigma_u=sigma_u, shape=factors)
+    run = {"lat": lat, "lon": lon, "start": str(row["start"]), "particles": int(particles),
+           "timestep": STEP_S, "duration": duration, "seed": seed,
+           "datum_lat": lat, "datum_lon": lon}
+    windows = build(ensemble, run, forcing, arrivals)
+    hours = [0] + [h for h in TRUTH_HOURS if np.isfinite(float(row[f"lat_{h}h"]))]
+    fix_lat = [lat] + [float(row[f"lat_{h}h"]) for h in hours[1:]]
+    fix_lon = [lon] + [float(row[f"lon_{h}h"]) for h in hours[1:]]
+    return replace(windows, truth_t_s=np.array(hours, dtype=float) * 3600.0,
+                   truth_lat=np.array(fix_lat), truth_lon=to_store_longitude(np.array(fix_lon)))
+
+
 def save(windows: SearchWindows, out) -> Path:
     """Write <out>/<name>.npz, positions in float64 so no particle moves across the strip's edge."""
     path = Path(out) / f"{windows.name}.npz"
@@ -137,17 +192,22 @@ def save(windows: SearchWindows, out) -> Path:
              seed=windows.seed, t_s=windows.t_s, lat=windows.lat, lon=windows.lon,
              beached=windows.beached, weight=windows.weight, arrivals_s=windows.arrivals_s,
              marker_lat=windows.marker_lat, marker_lon=windows.marker_lon,
-             drift_bearing_deg=windows.drift_bearing_deg)
+             drift_bearing_deg=windows.drift_bearing_deg,
+             **({} if windows.truth_t_s is None else
+                {"truth_t_s": windows.truth_t_s, "truth_lat": windows.truth_lat,
+                 "truth_lon": windows.truth_lon}))
     return path
 
 
 def load(path) -> SearchWindows:
     """A windows file back into SearchWindows."""
     with np.load(path) as f:
+        truth = ((f["truth_t_s"], f["truth_lat"], f["truth_lon"]) if "truth_t_s" in f.files
+                 else (None, None, None))
         return SearchWindows(str(f["name"]), np.datetime64(str(f["start"]), "us"),
                              (float(f["lkp"][0]), float(f["lkp"][1])), int(f["seed"]), f["t_s"],
                              f["lat"], f["lon"], f["beached"], f["weight"], f["arrivals_s"],
-                             f["marker_lat"], f["marker_lon"], f["drift_bearing_deg"])
+                             f["marker_lat"], f["marker_lon"], f["drift_bearing_deg"], *truth)
 
 
 def _cli(argv=None) -> Path:

@@ -16,6 +16,8 @@
 #     CSV=$DATA/derived/scenarios/bench_dev_48h.csv PER=25 OUT=... \
 #         sbatch --array=1-96 scripts/score_scenarios.sbatch              # 9,538 rows
 #     SEARCHERS=greedy GREEDY_HEADINGS=8 GREEDY_DECIDE_S=10 OUT=... sbatch ...
+#     SEARCHERS="... random ppo" PPO_MODEL=$DATA/derived/rl/chosen/best_model.zip \
+#         SAR_PYTHON=/home/26p67/envs/sar-bench/bin/python OUT=... sbatch ...   # the trained agent
 #
 # One OUT folder is one experiment: the scorer refuses flights made with other settings.
 
@@ -31,6 +33,11 @@ ARRIVALS="${ARRIVALS:-1 2 3}"
 SEARCHERS="${SEARCHERS:-expanding-square sector parallel trackline greedy random}"
 GREEDY_HEADINGS="${GREEDY_HEADINGS:-36}"
 GREEDY_DECIDE_S="${GREEDY_DECIDE_S:-60}"
+PPO_MODEL="${PPO_MODEL:-}"   # with ppo in SEARCHERS: the trained agent's best_model.zip
+PPO_ARGS=()
+[ -z "$PPO_MODEL" ] || PPO_ARGS=(--ppo-model "$PPO_MODEL")
+TELEMACHUS_MODEL="${TELEMACHUS_MODEL:-}"   # the second agent's best_model.zip
+[ -z "$TELEMACHUS_MODEL" ] || PPO_ARGS+=(--telemachus-model "$TELEMACHUS_MODEL")
 PER="${PER:-1}"
 LAST="${LAST:-$(( $(wc -l < "$CSV") - 1 ))}"
 OUT="${OUT:-$DATA/derived/results/$(basename "$CSV" .csv)_N${N}}"
@@ -47,7 +54,7 @@ for P in 0 1 2 3; do
     PYTHONPATH=src "$PY" scripts/score_scenarios.py score --csv "$CSV" --forcing-dir "$DATA" \
         --rows "$A-$B" --noise $NOISE --arrival-h $ARRIVALS --searchers $SEARCHERS \
         --greedy-headings "$GREEDY_HEADINGS" --greedy-decide-s "$GREEDY_DECIDE_S" \
-        --particles "$N" --out "$OUT" &
+        "${PPO_ARGS[@]}" --particles "$N" --out "$OUT" &
 done
 wait
 echo "task $K done: $OUT"

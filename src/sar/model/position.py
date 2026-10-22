@@ -186,6 +186,56 @@ def evolve_velocity_error(velocity_error, timestep: float = INTEGRATION_STEP_SEC
     return a * u + np.sqrt(1.0 - a * a) * sigma_u * noise
 
 
+def shape_for_current(speed_ms, rule: dict, size_rule: dict = SIGMA_U_RULE) -> tuple[float, float]:
+    """The (along, across) factors on sigma_u for a cloud whose start sits in a current of this speed.
+
+    THE SHAPE BY THE CURRENT (vault D035, 20 Oct). D033 sizes the error as a floor plus a part that
+    grows with the current. Fitted per axis on the training truth buoys, the part that grows with
+    the current lies mostly along the drift (a speed error) and less across it (a direction
+    error), so each axis gets its own rule: sigma = sqrt(a^2 + (b s)^2), s capped as in D033. The
+    factors are those over D033's isotropic sigma_u at the same s, so the cloud is near round in
+    slow water and stretched along the flow in fast water.
+    """
+    s = min(float(speed_ms), size_rule["cap_speed_ms"])
+    base = sigma_u_for_current(speed_ms, size_rule)
+    if "table_s" in rule:     # a table by speed (D035 as fitted): straight between
+        # Past the ends the factors over D033 stay as at the end, not the sigmas: D033 was
+        # calibrated on fast starts the truth buoys barely reach, so beyond the last band the
+        # size stays D033's and only the shape is carried on.
+        at = float(np.clip(s, rule["table_s"][0], rule["table_s"][-1]))
+        base = sigma_u_for_current(at, size_rule)
+        along = float(np.interp(at, rule["table_s"], rule["table_along"])) / base
+        across = float(np.interp(at, rule["table_s"], rule["table_across"])) / base
+        return along, across
+    along = float(np.hypot(rule["a_along"], rule["b_along"] * s)) / base
+    across = float(np.hypot(rule["a_across"], rule["b_across"] * s)) / base
+    return along, across
+
+
+def shape_velocity_error(velocity_error, drift, along: float, across: float) -> np.ndarray:
+    """The velocity error stretched by `along` along each particle's drift and by `across` across it.
+
+    THE CLOUD'S SHAPE (vault L41, 18 Oct). With the same sigma_u east and north the cloud is
+    round, while real buoys' errors are larger along the drift than across it. The error u
+    itself stays the isotropic Markov process of D030; only the part it adds to the motion is
+    split into its component along the particle's own drift direction and the one across, and
+    each is scaled. The memory is a day, far longer than a search, so a drift that turns slowly
+    carries its stretch round with it. Where a particle has no drift direction (zero or NaN),
+    its error is left as it is.
+    """
+    u = np.asarray(velocity_error, dtype=float)
+    d = np.asarray(drift, dtype=float)
+    speed = np.hypot(d[..., 0], d[..., 1])
+    still = ~(speed > 0.0)
+    e = d / np.where(still, 1.0, speed)[..., None]
+    a = u[..., 0] * e[..., 0] + u[..., 1] * e[..., 1]            # along the drift
+    c = -u[..., 0] * e[..., 1] + u[..., 1] * e[..., 0]           # across, to the left of it
+    out = np.stack([along * a * e[..., 0] - across * c * e[..., 1],
+                    along * a * e[..., 1] + across * c * e[..., 0]], axis=-1)
+    out[still] = u[still]
+    return out
+
+
 def calculate_position(position, drift, timestep: float = INTEGRATION_STEP_SECONDS,
                        sigma: float = DEFAULT_SIGMA, rng=None, out=None):
     """The position one step later, [lat, lon] in degrees, longitude wrapped to 0 to 360."""

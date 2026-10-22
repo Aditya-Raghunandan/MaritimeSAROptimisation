@@ -207,6 +207,41 @@ class TestSummary:
         _, t = table
         assert {"all", "water: jet", "water: quiet", "path: straight (>= 0.500)"} <= set(t["slice"])
 
+    def test_a_slice_by_the_clouds_size(self, table):
+        f, t = table
+        assert f["area90_km2"].gt(0).all()
+        assert "cloud: < 30 km2" in set(t["slice"])
+        names = [n for n, _ in score.slices(pd.DataFrame({"area90_km2": [5.0, 45.0, 90.0]}), None)]
+        assert names == ["all", "cloud: < 30 km2", "cloud: 30-60 km2", "cloud: >= 60 km2"]
+
+    def test_the_ratio_to_the_square_is_a_geometric_mean_on_the_same_cloud(self, table):
+        f, t = table
+        got = t[(t["measure"] == "pos ratio") & (t["slice"] == "all") & (t["noise"] == "rv")
+                & (t["searcher"] == "greedy / expanding-square") & (t["arrival_h"] == 1.0)].iloc[0]
+        by = f[(f["noise"] == "rv") & (f["arrival_h"] == 1.0)].pivot(
+            index="scenario", columns="searcher", values="pos")
+        logs = np.log(by["greedy"] / by["expanding-square"])
+        want = np.exp(np.mean([np.mean([logs["S01"], logs["S02"]]), logs["S03"]]))
+        assert got["mean"] == pytest.approx(want)
+        assert got["lo"] <= got["mean"] <= got["hi"]
+
+
+def test_the_clouds_size_is_the_smallest_area_holding_90_percent():
+    from types import SimpleNamespace
+
+    from sar.search.patterns import MarkerTrack
+    from sar.utils.geo import offset_position
+
+    # Ten particles: five in one 250 m cell, four in the next, one far off. 90 % needs two cells.
+    east = np.array([100.0] * 5 + [400.0] * 4 + [5000.0])
+    north = np.array([100.0] * 9 + [5000.0])
+    lat, lon = offset_position(26.5, 281.0, east, north)
+    window = SimpleNamespace(lat=np.stack([lat, lat]), lon=np.stack([lon, lon]),
+                             weight=np.full(10, 0.1))
+    setup = SimpleNamespace(window=window, marker=MarkerTrack.fixed(26.5, 281.0, 2700.0))
+    assert score.cloud_area_km2(setup) == pytest.approx(2 * 0.0625)
+    assert score.cloud_area_km2(setup, share=0.5) == pytest.approx(0.0625)
+
     def test_a_slice_by_the_forecast_current_when_rows_carry_it(self):
         f = pd.DataFrame({"start_current_ms": [0.1, 0.5, 1.4, None], "water": None})
         names = [name for name, _ in score.slices(f, None)]
@@ -243,3 +278,10 @@ def test_a_row_across_a_forcing_gap_is_skipped_and_says_why(tmp_path, monkeypatc
 def test_the_batch_jobs_commit_wins(monkeypatch):
     monkeypatch.setenv("SAR_COMMIT", "abc123")
     assert score.git_commit() == "abc123"
+
+
+def test_a_second_process_accepts_its_own_experiment_with_a_tuple_in_it(tmp_path):
+    # rvs's shape is a tuple, which reads back from the manifest as a list (19 Oct).
+    settings = {"noise": {"rvs": {"shape": (0.891, 0.851)}}, "commit": "abc"}
+    score.claim(tmp_path, settings)
+    assert score.claim(tmp_path, settings)["noise"]["rvs"]["shape"] == [0.891, 0.851]

@@ -6,6 +6,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from sar.search.episode import Waypoints
+from sar.search.kinematics import steer_to
+from sar.search.platform import KNOT_MS, SEARCH_SPEED_MS, STEP_S
 from sar.search.sweep import relative_m
 
 MAP_CELLS, MAP_CELL_M = 32, 1000.0      # project choice: the plan's 32 x 32 map (R5a), 32 km about the marker
@@ -30,14 +33,79 @@ def heading_of(action: int, headings: int) -> float:
     return float(int(action) * 360.0 / headings)
 
 
-def time_left_weight(k: int, steps: int) -> float:
-    """The reward's weight for step k: the share of the window still to come when it starts."""
-    return (steps - int(k)) / steps
+def halves_of(action: int, halves: int) -> tuple[float, float]:
+    """Action a of halves x halves: the heading for the first 30 s and for the second."""
+    first, second = divmod(int(action), halves)
+    return first * 360.0 / halves, second * 360.0 / halves
 
 
-def reward(removed: float, k: int, steps: int) -> float:
-    """Particles found x time remaining, scaled by N x window so a perfect first minute pays 1."""
-    return float(removed) * time_left_weight(k, steps)
+def two_halves(episode, first_deg: float, second_deg: float) -> Waypoints:
+    """One minute flown as two heading commands, 30 s each (Aditya, 12 Oct).
+
+    With one heading a minute the narrowest lane change is a U-turn, two turning circles
+    (760 m) wide. Two commands a minute let the helicopter swing out and hook back, as a pilot
+    (or a player) does, so lanes can lie side by side. Each half turns the short way at the
+    turn rate, as a heading command does (D032), and the referee scores the minute as one step.
+    """
+    half = STEP_S / 2.0
+    east, north = episode.offset
+    a = steer_to(east, north, episode.heading_deg, first_deg, half, episode.speed_ms,
+                 episode.turn_rate_deg_s)
+    b = steer_to(float(a.east_m[-1]), float(a.north_m[-1]), float(a.heading_deg[-1]), second_deg,
+                 half, episode.speed_ms, episode.turn_rate_deg_s)
+    # A first half that ends a few rounding units off the second command (29.999999999999993 deg
+    # against 30) makes the second a ~1e-15 s turn, and 30 + 1e-15 == 30: two waypoints at one
+    # time, which Waypoints refuses (killed t3_find, 13 Oct). Such a point sits where the first
+    # half ended, so it is dropped.
+    keep = half + b.t_s > a.t_s[-1] + 1e-9
+    return Waypoints(np.concatenate((a.t_s, half + b.t_s[keep])),
+                     np.concatenate((a.east_m, b.east_m[keep])),
+                     np.concatenate((a.north_m, b.north_m[keep])),
+                     np.concatenate((a.heading_deg, b.heading_deg[keep])))
+
+
+def actions(headings: int, halves: int = 0, speeds=()) -> int:
+    """How many actions: the headings (or halves x halves), times the speeds if it picks one."""
+    base = int(halves) ** 2 if halves else int(headings)
+    return base * max(1, len(speeds))
+
+
+def split_speed(action: int, headings: int, halves: int = 0, speeds=()) -> tuple[int, float | None]:
+    """Action a as (the heading action, the speed in m/s), or (a, None) without speeds.
+
+    With speeds (knots) the actions are speed-major: the first base actions fly the first speed.
+    """
+    if not speeds:
+        return int(action), None
+    base = int(halves) ** 2 if halves else int(headings)
+    s, rest = divmod(int(action), base)
+    return rest, float(speeds[s]) * KNOT_MS
+
+
+def speed_share(episode) -> float:
+    """The speed now as a share of the 90 kt search speed: what Telemachus S sees of its own speed."""
+    return float(episode.speed_ms / SEARCH_SPEED_MS)
+
+
+def command(episode, action: int, headings: int, halves: int = 0):
+    """What an action asks the referee to fly: a heading, or with `halves`, two 30 s headings."""
+    if halves:
+        return two_halves(episode, *halves_of(action, halves))
+    return heading_of(action, headings)
+
+
+def time_left_weight(k: int, steps: int, decay: float = 1.0) -> float:
+    """The reward's weight for step k: 1 - decay x the share of the window already gone.
+
+    decay 1 is the share still to come (the first agent's reward); 0 pays every minute's finds
+    in full, so the return is the POS the benchmark judges on (L40).
+    """
+    return 1.0 - float(decay) * int(k) / steps
+
+
+def reward(removed: float, k: int, steps: int, decay: float = 1.0) -> float:
+    """Particles found x the time-left weight, scaled by N x window so a perfect first minute pays 1."""
+    return float(removed) * time_left_weight(k, steps, decay)
 
 
 def time_weighted_return(removed_per_step) -> float:

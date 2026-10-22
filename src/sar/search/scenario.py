@@ -42,8 +42,10 @@ import numpy as np
 import pandas as pd
 
 from sar.model.drift import LEEWAY_COEFFICIENT
-from sar.model.position import CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H, DEFAULT_SIGMA
+from sar.model.position import (CALIBRATED_SIGMA_U, CALIBRATION_HORIZON_H, DEFAULT_SIGMA,
+                                shape_for_current)
 from sar.pipeline.ensemble import Ensemble, resolve_sigma_u, run_ensemble, synthetic_cloud
+from sar.pipeline.forcing import ScaledForcing
 from sar.pipeline.gridded import GriddedForcing
 from sar.search.datum import marker_track
 from sar.search.episode import STEPS, SearchEpisode
@@ -51,6 +53,7 @@ from sar.search.patterns import (
     MarkerTrack,
     Pattern,
     expanding_square,
+    parallel_skip,
     parallel_track,
     sector_search,
     trackline_return,
@@ -60,6 +63,7 @@ from sar.search.platform import (
     STEP_S,
     TURN_RATE_DEG_S,
     expanding_square_spacing_m,
+    search_effort_m2,
     sector_radius_m,
 )
 from sar.utils.geo import (
@@ -77,7 +81,9 @@ TRUTH_HOURS = (1, 2, 3, 4, 5, 6)
 
 # The Coast Guard patterns, and the two laid out along the datum line rather than the drift.
 DOCTRINAL = ("expanding-square", "sector", "parallel", "trackline")
-ALONG_THE_DATUM_LINE = ("parallel", "trackline")
+# Laid out by the same rule but not in the manual: the Parallel Track's legs reordered (13 Oct).
+REORDERED = ("parallel-skip",)
+ALONG_THE_DATUM_LINE = ("parallel", "trackline", "parallel-skip")
 
 # A datum line shorter than this has no direction worth flying along (frontend/src/searchRun.js).
 MIN_DATUM_LINE_M = 50.0
@@ -139,7 +145,8 @@ def drift_bearing(forcing, lat: float, lon: float, time,
 
 def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
                   arrival_s: float, sigma_u: float | str = CALIBRATED_SIGMA_U,
-                  steps: int = STEPS, sigma: float = DEFAULT_SIGMA) -> SearchSetup:
+                  steps: int = STEPS, sigma: float = DEFAULT_SIGMA, current_scale: float = 1.0,
+                  wind_scale: float = 1.0, shape=None) -> SearchSetup:
     """A scenario's cloud through the search window, every minute, and its marker.
 
     The scenario's own run again (one start point, D026; its seed), kept at every step and
@@ -149,11 +156,22 @@ def search_window(forcing, start, lat: float, lon: float, seed, particles: int,
 
     sigma_u = "by-current" sizes the random velocity by the model's current at the start
     point at the call (D033): the scenario's own LKP and time, what a forecaster has.
+
+    `current_scale`, `wind_scale` and `shape` are the cloud-shape correction (L41, the noise
+    model rvs): the water the cloud, datum, marker and drift bearing all read is the forcing's
+    scaled (`ScaledForcing`), and the random velocity is stretched along the drift. sigma_u is
+    still sized by the unscaled current at the start, as D033 was fitted.
     """
     a = check_arrival(arrival_s, steps)
     sigma_u, speed = resolve_sigma_u(sigma_u, forcing, lat, lon, start)
+    if isinstance(shape, dict):                      # D035: the shape by the current at the start
+        if speed is None:
+            raise ValueError("a shape by the current needs sigma_u sized by the current (D033)")
+        shape = shape_for_current(speed, shape)
+    if current_scale != 1.0 or wind_scale != 1.0:
+        forcing = ScaledForcing(forcing, current_scale, wind_scale)
     run = run_ensemble(forcing, particles, start, lat, lon, (a + steps) * STEP_S, STEP_S,
-                       datum_sigma_km=0.0, seed=seed, sigma=sigma, sigma_u=sigma_u)
+                       datum_sigma_km=0.0, seed=seed, sigma=sigma, sigma_u=sigma_u, shape=shape)
     cut = slice(a, a + steps + 1)
     window = Ensemble(run.times[cut], run.lat[cut], run.lon[cut], run.weight, run.beached[cut])
     datum = centroid(window.lat[0], window.lon[0], window.weight)
@@ -187,7 +205,7 @@ def truth_track(row, arrival_s: float) -> MarkerTrack:
 
 def scenario_search(row, forcing, arrival_s: float, particles: int,
                     sigma_u: float | str = CALIBRATED_SIGMA_U, steps: int = STEPS,
-                    sigma: float = DEFAULT_SIGMA) -> SearchSetup:
+                    sigma: float = DEFAULT_SIGMA, **shape) -> SearchSetup:
     """A row of the scenario table, ready to search: cloud, marker, and the buoy as target.
 
     `forcing` is a backend, or a data root holding raw/hycom_* and raw/era5_*.
@@ -198,7 +216,7 @@ def scenario_search(row, forcing, arrival_s: float, particles: int,
         end = start + np.timedelta64(int((a + steps) * STEP_S), "s")
         forcing = GriddedForcing.from_dir(forcing, start, end)
     setup = search_window(forcing, start, float(row["lat"]), float(row["lon"]),
-                          int(row["seed"]), particles, arrival_s, sigma_u, steps, sigma)
+                          int(row["seed"]), particles, arrival_s, sigma_u, steps, sigma, **shape)
     return replace(setup, target=truth_track(row, setup.arrival_s))
 
 
@@ -244,13 +262,17 @@ def doctrinal_searcher(name: str, setup: SearchSetup, lkp) -> tuple[Pattern, flo
       * Trackline half-length: the datum line's length, at least a Sector radius, so a
         near-still datum still gets a real line: the buoy may have drifted anywhere from not
         at all to twice as far as predicted (frontend/src/searchRun.js).
+      * The Parallel Track reordered (`parallel-skip`) has the Parallel Track's area, the
+        window's effort square, and the same axis; it is drawn to its last leg, because its
+        wider turns cost less time than the autopilot's loops and it must not run out.
       * The patterns that go on for ever (all but the Parallel Track, whose area is the
         window's) are drawn for DRAWN_WINDOWS windows. The autopilot rounds corners and so
         gets along the drawing faster than the clock (D032); it must not run out of legs.
         A helicopter that turns at once flies only the first window, as before.
     """
-    if name not in DOCTRINAL:
-        raise ValueError(f"{name!r} is not a Coast Guard pattern; one of {', '.join(DOCTRINAL)}")
+    if name not in DOCTRINAL + REORDERED:
+        raise ValueError(f"{name!r} is not a Coast Guard pattern; one of "
+                         f"{', '.join(DOCTRINAL + REORDERED)}")
     drift = setup.drift_bearing_deg
     bearing, why = (0.0, "no drift at the datum; north") if drift is None \
         else (float(drift), "along the drift")
@@ -264,6 +286,9 @@ def doctrinal_searcher(name: str, setup: SearchSetup, lkp) -> tuple[Pattern, flo
         pattern = sector_search(first_bearing_deg=bearing, duration_s=drawn)
     elif name == "parallel":
         pattern = parallel_track(first_bearing_deg=bearing)
+    elif name == "parallel-skip":
+        side = float(np.sqrt(search_effort_m2()))
+        pattern = parallel_skip(side, side, first_bearing_deg=bearing, duration_s=drawn)
     else:
         pattern = trackline_return(max(line_m, sector_radius_m()), first_bearing_deg=bearing,
                                    duration_s=drawn)

@@ -11,8 +11,10 @@ from sar.search.patterns import (
     expanding_square,
     ground_track,
     on_ground,
+    parallel_skip,
     parallel_track,
     sector_search,
+    skip_order,
     trackline_return,
 )
 from sar.search.platform import NM_M, SEARCH_SPEED_MS, SWEEP_WIDTH_M
@@ -232,6 +234,66 @@ class TestParallelTrack:
     def test_too_small_an_area_raises(self):
         with pytest.raises(ValueError, match="one track spacing"):
             parallel_track(100.0, 1000.0, S, 0.0, V, 2700.0)
+
+
+class TestSkipOrder:
+    def test_the_effort_square_is_flown_middle_first_five_legs_apart(self):
+        # Worked by hand: a racetrack about the middle, then outward one side then the other.
+        order = skip_order(26, 5)
+        assert order[:11] == [12, 17, 11, 16, 10, 15, 9, 14, 8, 13, 18]
+        assert sorted(order) == list(range(26))
+        assert all(abs(b - a) >= 5 for a, b in zip(order, order[1:]))
+
+    def test_with_every_leg_too_close_it_takes_the_most_central(self):
+        assert skip_order(3, 5) == [1, 0, 2]
+        assert skip_order(1, 5) == [0]
+
+    def test_a_skip_of_one_flies_out_from_the_middle(self):
+        assert skip_order(5, 1) == [2, 1, 3, 4, 0]
+
+    def test_bad_inputs_raise(self):
+        with pytest.raises(ValueError):
+            skip_order(0, 5)
+        with pytest.raises(ValueError):
+            skip_order(10, 0)
+
+
+def effort_square_skip(**kw):
+    """The benchmark's parallel-skip: the effort square, drawn to its last leg."""
+    return parallel_skip(4810.0, 4810.0, duration_s=5400.0, **kw)
+
+
+class TestParallelSkip:
+    def test_the_same_legs_as_the_parallel_track_in_another_order(self):
+        manual = parallel_track(4810.0, 4810.0, duration_s=9000.0)
+        skip = parallel_skip(4810.0, 4810.0, duration_s=9000.0)
+        ends = lambda p: sorted(zip(np.round(p.east_m[1:], 6), np.round(p.north_m[1:], 6)))  # noqa: E731
+        assert ends(manual) == ends(skip)
+
+    def test_it_starts_on_the_middle_leg_flying_from_the_marker(self):
+        p = parallel_skip(4000.0, 2000.0, S, 30.0, V, 2700.0)
+        a, c = along_across(p, 30.0)
+        assert (p.east_m[0], p.north_m[0]) == (0.0, 0.0)
+        # 11 legs across 2 km from S/2 inside one edge: the middle one is leg 5; near end first.
+        assert (a[1], c[1]) == pytest.approx((-2000 + S / 2, -1000 + S / 2 + 5 * S), abs=1e-6)
+
+    def test_the_turns_span_the_helicopters_turn_diameter(self):
+        # 2r = 757 m at 7.0 deg/s and 90 kt is 4.09 spacings, so the legs are five apart.
+        p = effort_square_skip()
+        _, c = along_across(p, 0.0)
+        hops = np.abs(np.diff(c[1::2]))
+        assert hops[:10] == pytest.approx([5 * S, 6 * S] * 4 + [5 * S, 5 * S], abs=1e-6)
+
+    def test_each_leg_is_flown_the_other_way_to_the_last(self):
+        p = effort_square_skip()
+        a, _ = along_across(p, 0.0)
+        starts = a[1::2][:26]
+        assert np.all(np.sign(starts[:-1]) == -np.sign(starts[1:]))
+
+    def test_a_faster_turn_packs_the_legs_closer(self):
+        p = effort_square_skip(turn_rate_deg_s=20.0)
+        _, c = along_across(p, 0.0)
+        assert np.abs(np.diff(c[1::2]))[0] == pytest.approx(2 * S, abs=1e-6)
 
 
 class TestTracklineReturn:

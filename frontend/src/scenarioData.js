@@ -19,7 +19,10 @@
  * once. v4 (13 Oct) adds the arrivals 15, 30 and 45 min to 1, 2 and 3 h, rvc only, with the
  * second trained model (Telemachus 2) as "ppo". v3 is v2 with a seventh flight, the trained agent ("ppo"), and index.json says which
  * model flew it. v5 (18 Oct) is v4 plus Telemachus S as "telemachus", which picks its speed each
- * minute, so its steps carry `speed_ms`. The newest version that is published is used, so publishing one switches
+ * minute, so its steps carry `speed_ms`. v6 (22 Oct) flies v5's searchers over the cloud
+ * calibrated on real buoys (rvsc, D034 and D035: the whole drift, current and 2 % of the wind,
+ * scaled by 0.695, and the error stretched along fast currents), rvsc only: the paper's final
+ * clouds. The newest version that is published is used, so publishing one switches
  * the site over without a deploy; each window says which helicopter flew it (`turnRateDegS`).
  */
 
@@ -27,7 +30,7 @@ import { cloudFromOffsets } from './referee.js';
 
 export const DATA_BASE = String(import.meta.env.VITE_DATA_BASE ?? './data').replace(/\/$/, '');
 /** Newest first. */
-export const SCENARIO_VERSIONS = ['v5', 'v4', 'v3', 'v2', 'v1'];
+export const SCENARIO_VERSIONS = ['v6', 'v5', 'v4', 'v3', 'v2', 'v1'];
 export const SCENARIO_ROOT = `${DATA_BASE}/scenarios/${SCENARIO_VERSIONS[SCENARIO_VERSIONS.length - 1]}`;
 /** The 3D loops, which do not change with the helicopter. */
 export const SHOWCASE_ROOT = `${DATA_BASE}/scenarios/showcase`;
@@ -86,10 +89,17 @@ export function arrivalLabel(hours) {
 }
 
 /**
- * The drift model's random term, newest first. rvc (D033) sizes the error by the current
- * where the person went in; rv is one size everywhere (D030); rw the old random walk.
+ * The drift model, newest first. rvsc (D034, D035) is rvc recalibrated on 1,448 real drifting
+ * buoys: the forecast drift scaled to where they went, the error stretched along fast currents.
+ * rvc (D033) sizes the error by the current where the person went in; rv is one size
+ * everywhere (D030); rw the old random walk.
  */
 export const NOISE_INFO = {
+  rvsc: {
+    label: 'calibrated on real buoys',
+    note: 'the final drift model: checked against 1,448 real drifting buoys, it moves the cloud 0.7 as far as the '
+      + 'forecast says and stretches it along fast currents, as the real buoys spread',
+  },
   rvc: {
     label: 'sized by the current',
     note: 'the calibrated drift model: errors persist about a day, and are bigger in faster water',
@@ -104,7 +114,7 @@ export function noisesOf(scenario) {
   return Object.keys(NOISE_INFO).filter((n) => have.has(n));
 }
 
-/** The newest drift model a scenario has: rvc when published, else rv. */
+/** The newest drift model a scenario has: rvsc in v6, rvc before, else rv. */
 export function bestNoise(scenario) {
   return noisesOf(scenario)[0] ?? 'rv';
 }

@@ -39,3 +39,34 @@ class ConstantForcing:
         return {"backend": "constant",
                 "current_ms": self.current.tolist(),
                 "wind_ms": self.wind.tolist()}
+
+
+class ScaledForcing:
+    """Another backend's current and wind, each multiplied by a constant (vault L41, 18 Oct).
+
+    The drift model calibrated to the object the benchmark tests on: if the real buoys move
+    slower than the model's water, the current is scaled; if they feel less of the wind than a
+    person's 2 % leeway, the wind the leeway reads is. Everything that reads the forcing for a
+    scenario (the ensemble, the datum, the marker, the drift bearing) then follows the same
+    corrected water. The marker has no leeway, so the wind's scale never moves it.
+    """
+
+    def __init__(self, inner, current_scale: float = 1.0, wind_scale: float = 1.0):
+        for name, value in (("current_scale", current_scale), ("wind_scale", wind_scale)):
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be a non-negative number, got {value}")
+        self.inner = inner
+        self.current_scale = float(current_scale)
+        self.wind_scale = float(wind_scale)
+
+    def sample(self, lats, lons, time) -> tuple[np.ndarray, np.ndarray]:
+        """The inner backend's current and wind, scaled."""
+        current, wind = self.inner.sample(lats, lons, time)
+        return current * self.current_scale, wind * self.wind_scale
+
+    def describe(self) -> dict:
+        return {**self.inner.describe(), "current_scale": self.current_scale,
+                "wind_scale": self.wind_scale}
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)

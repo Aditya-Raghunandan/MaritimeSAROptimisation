@@ -187,6 +187,14 @@ class TestDoctrinalSearcher:
             _, bearing, why = doctrinal_searcher(name, self.setup, self.lkp)
             assert bearing == pytest.approx(45.0, abs=0.05) and why == "along the datum line"
 
+    def test_the_reordered_parallel_track_has_its_area_and_axis_and_outlasts_the_window(self):
+        manual, mb, _ = doctrinal_searcher("parallel", self.setup, self.lkp)
+        skip, sb, why = doctrinal_searcher("parallel-skip", self.setup, self.lkp)
+        assert sb == mb and why == "along the datum line"
+        reach = lambda p: np.max(np.abs(np.array(p.offset_at(p.t_s))))   # noqa: E731
+        assert reach(skip) == pytest.approx(reach(manual), abs=1.0)
+        assert skip.duration_s > 45 * 60.0
+
     def test_a_datum_line_under_50_m_falls_back_to_the_drift(self):
         near = offset_position(*self.setup.datum, 0.0, -40.0)
         _, bearing, why = doctrinal_searcher("parallel", self.setup, near)
