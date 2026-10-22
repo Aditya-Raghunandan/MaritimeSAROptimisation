@@ -33,12 +33,23 @@ Rows are named D0001, D0002, ... in time order, with their own seeds.
 
     python scripts/pick_scenario_buoys.py --data C:/maritime-data \
         --land C:/maritime-data/raw/hycom_<box>_<dates>.nc --every 48h --out <dir>/bench.csv
+
+OPENING THE SEALED SET, --split sealed (D025, 22 Oct). The final test: the same table cut from
+the sealed undrogued buoys, a start every 48 h, rows named Z0001, ... Sealed is opened once,
+after a dated freeze list, so the flag that opens it must name it: --open-sealed "<freeze
+list>", written with the commit and the time to opened.json beside the table, which also
+refuses a second opening. Without the flag, or without --every, the script refuses.
+
+    python scripts/pick_scenario_buoys.py --data DATA --land HYCOM.nc --every 48h \
+        --split sealed --open-sealed "<freeze list>" --out <dir>/bench_sealed_48h.csv
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +60,8 @@ from scipy.spatial import cKDTree
 from sar.fetch.drifters import LAT_N, LAT_S, LON_E, LON_W
 from sar.utils.geo import M_PER_DEG_LAT, to_display_longitude
 from sar.validate.drift_windows import load_tracks, read_split
+
+SPLITS = {"dev": "D", "sealed": "Z"}   # the units a table is cut from, and its rows' prefix
 
 HORIZON_H = 6                      # truth to 6 h: the 4 h search window plus margin
 MAX_START_GAP_H = 1.0
@@ -94,10 +107,13 @@ def stratum(speed):
     return "quiet"
 
 
-def candidates(data, land: cKDTree) -> pd.DataFrame:
-    """Every valid start in every dev undrogued unit, with its truth path."""
+def candidates(data, land: cKDTree, split_name: str = "dev") -> pd.DataFrame:
+    """Every valid start in every undrogued unit of one split (dev, unless the sealed set is
+    being opened), with its truth path."""
+    if split_name not in SPLITS:
+        raise ValueError(f"split must be one of {sorted(SPLITS)}, got {split_name!r}")
     split = read_split(Path(data) / "derived" / "validation_split.csv")
-    units = split[(split["split"] == "dev") & (split["tier"] == "undrogued")]
+    units = split[(split["split"] == split_name) & (split["tier"] == "undrogued")]
     tracks = load_tracks(data)
     by_id = {k: g.sort_values("time") for k, g in tracks.groupby("ID", sort=False)}
     rows = []
@@ -182,7 +198,8 @@ def pick(cands: pd.DataFrame, seed=SEED) -> pd.DataFrame:
     return picked
 
 
-def tile(cands: pd.DataFrame, every_h: float, seed=TILE_SEED, prefix="D") -> pd.DataFrame:
+def tile(cands: pd.DataFrame, every_h: float, seed=TILE_SEED, prefix="D",
+         set_name: str = "dev") -> pd.DataFrame:
     """Every buoy, from its first valid start to its last, a new start every `every_h` hours.
 
     Within a unit the first valid start is taken, then the first valid start at least
@@ -202,9 +219,41 @@ def tile(cands: pd.DataFrame, every_h: float, seed=TILE_SEED, prefix="D") -> pd.
     out = cands.loc[taken].sort_values(["start", "ID"]).reset_index(drop=True)
     width = max(4, len(str(len(out))))
     out.insert(0, "scenario", [f"{prefix}{k + 1:0{width}d}" for k in range(len(out))])
-    out["set"] = "dev"
+    out["set"] = set_name
     out["seed"] = seed + np.arange(len(out))
     return out
+
+
+def check_opening(split_name: str, every, freeze_list) -> None:
+    """Refuse to touch the sealed set unless the run names the freeze list it opens for (D025)."""
+    if split_name == "sealed":
+        if not (freeze_list and str(freeze_list).strip()):
+            raise SystemExit("the sealed set opens once, after a dated freeze list (D025): "
+                             "pass --open-sealed \"<freeze list>\"")
+        if every is None:
+            raise SystemExit("the sealed set is cut as the benchmark table: pass --every 48h")
+    elif freeze_list is not None:
+        raise SystemExit("--open-sealed is for --split sealed only")
+
+
+def record_opening(out: Path, freeze_list: str, table: pd.DataFrame) -> Path:
+    """opened.json beside the table: which freeze list, which commit, when, and what it holds.
+    Refuses if one is there already, because opening is one event."""
+    path = Path(out).parent / "opened.json"
+    if path.exists():
+        raise SystemExit(f"{path} exists: the sealed set has been opened already (D025)")
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+                                cwd=Path(__file__).resolve().parents[1], check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = "unknown"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"freeze_list": freeze_list, "commit": commit,
+                                "opened_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                "table": Path(out).name, "rows": int(len(table)),
+                                "buoys": int(table["ID"].nunique()),
+                                "groups": int(table["group"].nunique())}, indent=1))
+    return path
 
 
 def hours(text: str) -> float:
@@ -222,11 +271,18 @@ def main(argv=None) -> pd.DataFrame:
     a.add_argument("--every", default=None,
                    help="the benchmark table: every buoy, a start this often (48h, 2d); "
                         "default the 55-row scenario table")
+    a.add_argument("--split", choices=sorted(SPLITS), default="dev",
+                   help="the units to cut the table from; sealed needs --every and --open-sealed")
+    a.add_argument("--open-sealed", default=None, metavar="FREEZE_LIST",
+                   help="opens the sealed set (D025): the dated freeze list this run belongs to")
     a.add_argument("--out", required=True)
     args = a.parse_args(argv)
-    cands = candidates(args.data, land_tree(args.land))
+    check_opening(args.split, args.every, args.open_sealed)
+    cands = candidates(args.data, land_tree(args.land), args.split)
     if args.every is not None:
-        tiled = tile(cands, hours(args.every))
+        tiled = tile(cands, hours(args.every), prefix=SPLITS[args.split], set_name=args.split)
+        if args.split == "sealed":
+            record_opening(Path(args.out), args.open_sealed, tiled)
         tiled["start"] = pd.to_datetime(tiled["start"]).dt.strftime("%Y-%m-%dT%H:%M")
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         tiled.to_csv(args.out, index=False, float_format="%.5f", lineterminator="\n")

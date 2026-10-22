@@ -64,3 +64,34 @@ class TestTile:
     def test_names_widen_past_9999(self):
         many = starts("a", np.arange(0, 10_001 * 4, 4))
         assert pick.tile(many, 4)["scenario"].iloc[-1] == "D10001"
+
+
+class TestOpeningSealed:
+    def test_sealed_needs_a_freeze_list(self):
+        with pytest.raises(SystemExit, match="freeze list"):
+            pick.check_opening("sealed", "48h", None)
+        with pytest.raises(SystemExit, match="freeze list"):
+            pick.check_opening("sealed", "48h", "  ")
+
+    def test_sealed_is_only_cut_as_the_benchmark_table(self):
+        with pytest.raises(SystemExit, match="--every"):
+            pick.check_opening("sealed", None, "D025 freeze list")
+
+    def test_the_flag_is_refused_on_dev(self):
+        with pytest.raises(SystemExit, match="sealed only"):
+            pick.check_opening("dev", "48h", "D025 freeze list")
+        pick.check_opening("dev", "48h", None)
+
+    def test_opening_is_recorded_once(self, tmp_path):
+        table = pick.tile(starts("a", range(0, 100)), 48, prefix="Z", set_name="sealed")
+        assert list(table["scenario"]) == ["Z0001", "Z0002", "Z0003"]
+        assert set(table["set"]) == {"sealed"}
+        path = pick.record_opening(tmp_path / "bench_sealed_48h.csv", "D025 freeze list", table)
+        record = __import__("json").loads(path.read_text())
+        assert record["freeze_list"] == "D025 freeze list" and record["rows"] == 3
+        with pytest.raises(SystemExit, match="opened already"):
+            pick.record_opening(tmp_path / "bench_sealed_48h.csv", "again", table)
+
+    def test_an_unknown_split_is_refused(self):
+        with pytest.raises(ValueError, match="split"):
+            pick.candidates("nowhere", None, "holdout-2023")
