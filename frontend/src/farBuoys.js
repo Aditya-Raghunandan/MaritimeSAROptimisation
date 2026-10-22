@@ -10,10 +10,20 @@
  * 17.5 km at 1 h with the nearest of 10,000 particles 12.7 km off. A window above FAR_RATIO is
  * left out; a buoy with no window left is not on the map. The paper's benchmark keeps all 55:
  * this is only what the game lets a visitor pick.
+ *
+ * Measured again 22 Oct on scenarios/v6 (the calibrated cloud, rvsc; `buoy_vs_cloud.py --version
+ * v6 --noise rvsc`): 317 of 330 windows within 2.46 radii. Above 2.5: S10 from 30 min (3.1 to 7.3),
+ * S12 at every arrival (2.83 to 2.86; v6's cloud moves 0.7 as far as the forecast and this buoy
+ * kept pace with the forecast) and S02 at 2 and 3 h (2.51, 2.57).
  */
 
 export const FAR_RATIO = 2.5;
-export const FAR_WINDOWS = { S10: ['rvc_0.5h', 'rvc_0.75h', 'rvc_1h', 'rvc_2h', 'rvc_3h'] };
+export const FAR_WINDOWS = {
+  S02: ['rvsc_2h', 'rvsc_3h'],
+  S10: ['rvc_0.5h', 'rvc_0.75h', 'rvc_1h', 'rvc_2h', 'rvc_3h',
+    'rvsc_0.5h', 'rvsc_0.75h', 'rvsc_1h', 'rvsc_2h', 'rvsc_3h'],
+  S12: ['rvsc_0.25h', 'rvsc_0.5h', 'rvsc_0.75h', 'rvsc_1h', 'rvsc_2h', 'rvsc_3h'],
+};
 
 /** The scenario index with the far windows taken out, and any buoy left with none. */
 export function playable(index, far = FAR_WINDOWS) {
