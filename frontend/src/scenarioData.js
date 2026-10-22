@@ -97,8 +97,8 @@ export function arrivalLabel(hours) {
 export const NOISE_INFO = {
   rvsc: {
     label: 'calibrated on real buoys',
-    note: 'the final drift model: checked against 1,448 real drifting buoys, it moves the cloud 0.7 as far as the '
-      + 'forecast says and stretches it along fast currents, as the real buoys spread',
+    // One line in the bench page's header at 1366 px: a longer note wrapped it (22 Oct).
+    note: 'the final drift model, calibrated on 1,448 real drifting buoys',
   },
   rvc: {
     label: 'sized by the current',

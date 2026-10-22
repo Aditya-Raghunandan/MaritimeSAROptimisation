@@ -17,3 +17,12 @@ it('drops a buoy with no window left', () => {
   const p = playable(index, { ...FAR_WINDOWS, S09: all });
   expect(p.scenarios.map((s) => s.scenario)).toEqual(['S10']);
 });
+
+it('on v6 leaves out S10 from 30 min, all of S12 and S02 from 2 h', () => {
+  const v6 = ['rvsc_0.25h', 'rvsc_0.5h', 'rvsc_0.75h', 'rvsc_1h', 'rvsc_2h', 'rvsc_3h'];
+  const p = playable({ scenarios: ['S02', 'S10', 'S12', 'S13'].map((scenario) => ({ scenario, windows: v6 })) });
+  expect(p.scenarios.map((s) => s.scenario)).toEqual(['S02', 'S10', 'S13']);
+  expect(arrivalsOf(p.scenarios.find((s) => s.scenario === 'S10'), 'rvsc')).toEqual([0.25]);
+  expect(arrivalsOf(p.scenarios.find((s) => s.scenario === 'S02'), 'rvsc')).toEqual([0.25, 0.5, 0.75, 1]);
+  expect(p.scenarios.find((s) => s.scenario === 'S13').windows).toEqual(v6);
+});
