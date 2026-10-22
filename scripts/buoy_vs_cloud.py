@@ -13,6 +13,8 @@ end of the window (45 min after arrival, the moment the game's reveal shows the 
 
 Used 15 Oct to choose which windows the open-day game leaves out (frontend/src/farBuoys.js).
 Needs only the network: python scripts/buoy_vs_cloud.py --out buoy_vs_cloud.csv
+22 Oct: --version and --noise read another release, such as v6 and its rvsc windows.
+    python scripts/buoy_vs_cloud.py --version v6 --noise rvsc --out far_v6.csv
 """
 
 import argparse
@@ -26,7 +28,9 @@ from pathlib import Path
 
 import numpy as np
 
-BASE = "https://huggingface.co/datasets/AdityaRugs/MaritimeSARoperations/resolve/main/scenarios/v4"
+ROOT = "https://huggingface.co/datasets/AdityaRugs/MaritimeSARoperations/resolve/main/scenarios"
+BASE = f"{ROOT}/v4"
+NOISE = "rvc"
 R_EARTH_M = 6371008.8
 M_PER_DEG_LAT = R_EARTH_M * math.pi / 180.0
 WINDOW_S = 45 * 60
@@ -49,7 +53,7 @@ def at(track, t):
 
 
 def measure(scenario, arrival):
-    name = f"rvc_{arrival}h"
+    name = f"{NOISE}_{arrival}h"
     meta = json.loads(get(f"{BASE}/{scenario}/{name}.json"))
     frames, n = meta["frames"], meta["particles"]
     frame_bytes = n * 2 * 4
@@ -75,10 +79,14 @@ def measure(scenario, arrival):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default="buoy_vs_cloud.csv", help="the CSV to write")
+    parser.add_argument("--version", default="v4", help="the release under scenarios/, such as v6")
+    parser.add_argument("--noise", default="rvc", help="the windows' drift model, such as rvsc")
     args = parser.parse_args()
+    global BASE, NOISE
+    BASE, NOISE = f"{ROOT}/{args.version}", args.noise
     index = json.loads(get(f"{BASE}/index.json"))
     jobs = [(s["scenario"], a) for s in index["scenarios"] for a in ARRIVALS
-            if f"rvc_{a}h" in s["windows"]]
+            if f"{NOISE}_{a}h" in s["windows"]]
     with ThreadPoolExecutor(8) as pool:
         rows = list(pool.map(lambda j: measure(*j), jobs))
     out = Path(args.out)
