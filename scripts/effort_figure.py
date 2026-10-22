@@ -48,13 +48,14 @@ KS = (1, 2, 3, 4)
 INK, INK_2, MUTED, GRID, SURFACE = "#0b0b0b", "#52514e", "#8a8984", "#e4e3df", "#fcfcfb"
 REACH = "#d9d8d3"                                   # the out-of-reach fill
 # Categorical slots 1-5 of the validated palette, in fixed order (dataviz palette.md), each with a
-# marker so identity never rests on colour alone.
-SEARCHERS = {"ppo": ("Telemachus S (ML)", "#2a78d6", "o"),
-             "parallel": ("Parallel Track", "#eb6834", "s"),
-             "expanding-square": ("Expanding Square", "#1baf7a", "^"),
-             "greedy": ("Greedy (reads the map)", "#eda100", "D"),
-             "telemachus": ("Telemachus 2 (ML)", "#e87ba4", "v")}
-WIDE, FLEET = ("one helicopter, k× the sweep width", "#6250d6", "o"), ("k helicopters", "#008300", "s")
+# marker and a dash pattern, so identity never rests on colour: the paper prints in greyscale.
+SEARCHERS = {"ppo": ("Telemachus S (ML)", "#2a78d6", "o", "-"),
+             "parallel": ("Parallel Track", "#eb6834", "s", (0, (5, 2))),
+             "expanding-square": ("Expanding Square", "#1baf7a", "^", (0, (1, 1.4))),
+             "greedy": ("Greedy (reads the map)", "#eda100", "D", (0, (5, 1.5, 1, 1.5))),
+             "telemachus": ("Telemachus 2 (ML)", "#e87ba4", "v", (0, (2.5, 1.5)))}
+WIDE = ("one helicopter, k× the sweep width", "#6250d6", "o", "-")
+FLEET = ("k helicopters", "#008300", "s", (0, (1, 1.2)))
 
 
 def group_mean(d: pd.DataFrame, column: str) -> float:
@@ -118,7 +119,7 @@ def panel_a(ax, df, rng, drawn):
 
     _style(ax)
     ax.set_xscale("log")
-    ticks = [0.25, 0.5, 1, 2, 4, 10]
+    ticks = [0.1, 0.25, 0.5, 1, 2, 4, 10]
     ax.set_xticks(ticks, [f"{t:g}" for t in ticks])
     ax.minorticks_off()
     ax.set_ylim(0, 1.02)
@@ -137,23 +138,22 @@ def panel_a(ax, df, rng, drawn):
     drawn["A_ceiling"], drawn["A_ceiling_split"] = ceil.to_dict("records"), split.to_dict("records")
     handles = [Patch(color=REACH, label="out of reach of one sortie"),
                Line2D([], [], color=INK, linewidth=2.2, label="ceiling: the most any searcher could clear")]
-    for key, (name, colour, marker) in SEARCHERS.items():
+    for key, (name, colour, marker, dash) in SEARCHERS.items():
         if key not in df:
             continue
         s = binned(df, key, rng)
         if key in ("ppo", "parallel"):
             ax.fill_between(s["c"], s["lo"], s["hi"], color=colour, alpha=0.14, linewidth=0)
-        line, = ax.plot(s["c"], s["mean"], color=colour, linewidth=1.5 if key in ("ppo", "parallel") else 1.0,
-                        marker=marker, markersize=3.2, markeredgecolor=SURFACE, markeredgewidth=0.7,
-                        label=name, zorder=5 if key == "ppo" else 3)
+        line, = ax.plot(s["c"], s["mean"], color=colour, linewidth=1.5 if key in ("ppo", "parallel") else 1.1,
+                        linestyle=dash, marker=marker, markersize=3.2, markeredgecolor=SURFACE,
+                        markeredgewidth=0.7, label=name, zorder=5 if key == "ppo" else 3)
         handles.append(line)
         drawn[f"A_{key}"] = s.to_dict("records")
-    ax.legend(handles=handles, loc="lower right", fontsize=6.3, frameon=False, handlelength=1.5,
-              borderaxespad=0.2, labelspacing=0.3)
-    ax.text(0.27, 0.985, "the cloud outgrows one\nsortie's 23.15 km² sweep", transform=ax.get_xaxis_transform(),
-            ha="left", va="top", fontsize=6.3, color=INK_2)
-    ax.annotate("C = 1", (1.0, 0.02), xytext=(-3, 0), textcoords="offset points", fontsize=6.3,
-                color=INK_2, ha="right")
+    # The legend sits in the out-of-reach corner, which no line crosses.
+    ax.legend(handles=handles, loc="upper left", fontsize=6.3, frameon=False, handlelength=2.4,
+              borderaxespad=0.3, labelspacing=0.3)
+    ax.annotate("C = 1: the cloud is as big\nas one sortie can sweep", (1.0, 0.03), xytext=(4, 0),
+                textcoords="offset points", fontsize=6.2, color=INK_2, ha="left", va="bottom")
     ax.set_xlabel("coverage factor C = one sortie's sweep ÷ the cloud's 90 % area", fontsize=7, color=INK_2)
     ax.set_ylabel("probability cleared (POS)", fontsize=7.5)
     ax.set_title("A  One helicopter, 45 min: the ceiling, and five searchers under it",
@@ -219,13 +219,13 @@ def panel_c(axes, df, fleet, numbers_by_h, rng, drawn):
                     linestyle="none", zorder=6, label="Telemachus S, one helicopter")
         if fleet is not None:
             f = fleet[fleet["arrival_h"] == h]
-            for name, (label, colour, marker) in (("wide", WIDE), ("fleet", FLEET)):
+            for name, (label, colour, marker, dash) in (("wide", WIDE), ("fleet", FLEET)):
                 cols = ["k1_pos"] + [f"{name}{k}_pos" for k in KS[1:]]
                 means = [group_mean(f, c) for c in cols]
                 cis = [interval(f, c, rng) for c in cols]
                 ax.fill_between(KS, [c[0] for c in cis], [c[1] for c in cis], color=colour, alpha=0.12,
                                 linewidth=0)
-                ax.plot(KS, means, color=colour, linewidth=1.6, marker=marker, markersize=3.5,
+                ax.plot(KS, means, color=colour, linewidth=1.6, linestyle=dash, marker=marker, markersize=3.5,
                         markeredgecolor=SURFACE, markeredgewidth=0.7, label=label, zorder=4)
                 drawn[f"C_{h}_{name}"] = dict(zip(KS, means))
             gap = (group_mean(f, "wide4_pos") - group_mean(f, "fleet4_pos")) * 100
