@@ -95,3 +95,13 @@ def test_a_teleporting_helicopter_loses_to_a_cloud_that_spreads():
 def test_area90_matches_the_benchmarks_rule_on_one_cell():
     east, north, w = np.array([10.0, 20.0, 600.0]), np.array([10.0, 30.0, 600.0]), np.array([0.5, 0.45, 0.05])
     assert ceiling.area_km2(east, north, w) == pytest.approx(0.0625)
+
+
+def test_more_effort_clears_more_of_a_big_cloud_and_no_more_than_all_of_it():
+    east, north, w = _cloud(3000, 3000, n=50_000)
+    ok = np.ones(w.size, dtype=bool)
+    clouds = [(east, north, w, ok)] * (ceiling.STEPS + 1)
+    one, two, four = (ceiling.teleport(clouds, A * k) for k in (1, 2, 4))
+    assert one < two < four <= 1.0 + 1e-9
+    assert ceiling.effort_key("teleport", 1.0) == "teleport"
+    assert ceiling.effort_key("teleport_split", 2.0) == "teleport_split_x2"

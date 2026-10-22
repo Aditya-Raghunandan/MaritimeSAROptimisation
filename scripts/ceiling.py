@@ -47,7 +47,14 @@ THE SAME CLOUDS AS THE BENCHMARK. Each row's cloud is rebuilt at its own seed
 area90_km2 recomputed; the summary checks it against the benchmark's flights.parquet, which
 proves the cloud is the one that was flown.
 
+MORE EFFORT (22 Oct). `--efforts 1 2 4` also gives the teleport ceiling with the budget
+doubled and quadrupled (`teleport_x2`, `teleport_x4`): a longer endurance, a second aircraft, or
+drones, as sweep. What more effort could buy on the same cloud, which no better searcher can.
+`--lean` skips the rectangles (the costly part), for a whole benchmark table; `--noise` picks the
+drift model the clouds are built with, as the scorer's.
+
     python scripts/ceiling.py run --csv scenarios.csv --forcing-dir DATA --rows 1-14 --out DIR
+    python scripts/ceiling.py run ... --noise rvsc --efforts 1 2 4 --lean --out DIR
     python scripts/ceiling.py summary DIR --flights RESULTS/flights.parquet
 """
 
@@ -212,11 +219,27 @@ def frames(setup):
         yield east, north, weight, np.isfinite(east) & np.isfinite(north) & (weight > 0)
 
 
-def window_ceiling(setup, parallel_bearing_deg: float) -> dict:
+def effort_key(name: str, effort: float) -> str:
+    """teleport at one window's budget; teleport_x2 at twice it."""
+    return name if effort == 1 else f"{name}_x{effort:g}"
+
+
+def window_ceiling(setup, parallel_bearing_deg: float, efforts=(1.0,), lean: bool = False) -> dict:
     full = list(frames(setup))
     clouds = [(e[ok], n[ok], w[ok]) for e, n, w, ok in full]
     by_frame = [any_shape(*f) for f in clouds]
     k = int(np.argmax(by_frame))
+    more = {}
+    for effort in efforts:
+        if effort != 1:
+            more[effort_key("teleport", effort)] = teleport(full, BUDGET_M2 * effort)
+            more[effort_key("teleport_split", effort)] = teleport(full, BUDGET_M2 * effort, split=True)
+    if lean:
+        return {"total_mass": float(np.sum(setup.window.weight)),
+                "area90_km2": area_km2(*clouds[0]), "any_by_frame": by_frame,
+                "any_max": by_frame[k], "any_max_frame": k,
+                "any_max_split": any_shape_split(*clouds[k]),
+                "teleport": teleport(full), "teleport_split": teleport(full, split=True), **more}
     rect_max, rect_mid = best_rectangle(*clouds[k]), best_rectangle(*clouds[MID])
     return {"total_mass": float(np.sum(setup.window.weight)),
             "area90_km2": area_km2(*clouds[0]),
@@ -231,10 +254,11 @@ def window_ceiling(setup, parallel_bearing_deg: float) -> dict:
             "square_start": square(*clouds[0], parallel_bearing_deg),
             "square_mid": square(*clouds[MID], parallel_bearing_deg),
             "square_end": square(*clouds[-1], parallel_bearing_deg),
-            "square_max": square(*clouds[k], parallel_bearing_deg)}
+            "square_max": square(*clouds[k], parallel_bearing_deg), **more}
 
 
-def run_rows(csv, forcing_dir, rows, arrivals_h, particles: int, out: Path) -> None:
+def run_rows(csv, forcing_dir, rows, arrivals_h, particles: int, out: Path, noise: str = "rvc",
+             efforts=(1.0,), lean: bool = False) -> None:
     from sar.pipeline.gridded import ForcingGapError, GriddedForcing
     from sar.search.benchmark import NOISE
     from sar.search.scenario import doctrinal_searcher, read_scenarios, scenario_search
@@ -251,11 +275,12 @@ def run_rows(csv, forcing_dir, rows, arrivals_h, particles: int, out: Path) -> N
                                               start + np.timedelta64(int(round(longest)), "s"))
             for hours in arrivals_h:
                 setup = scenario_search(row, forcing, round(hours * 3600.0), particles,
-                                        **NOISE["rvc"])
+                                        **NOISE[noise])
                 _, bearing, _ = doctrinal_searcher("parallel", setup,
                                                    (float(row["lat"]), float(row["lon"])))
-                lines.append({"scenario": row["scenario"], "noise": "rvc", "arrival_h": hours,
-                              "particles": particles, **window_ceiling(setup, bearing)})
+                lines.append({"scenario": row["scenario"], "noise": noise, "arrival_h": hours,
+                              "particles": particles,
+                              **window_ceiling(setup, bearing, efforts, lean)})
         except ForcingGapError as gap:
             lines = [{"scenario": row["scenario"], "skipped": str(gap)}]
         (out / f"{row['scenario']}.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
@@ -274,7 +299,7 @@ def summary(folder: Path, flights_path: Path) -> pd.DataFrame:
             for line in p.read_text().splitlines() if line.strip()]
     ceil = pd.DataFrame([r for r in rows if "skipped" not in r])
     flights = pd.read_parquet(flights_path)
-    flights = flights[flights["noise"] == "rvc"]
+    flights = flights[flights["noise"].isin(ceil["noise"].unique())]
     pos = flights.pivot_table(index=["scenario", "arrival_h"], columns="searcher", values="pos")
     about = flights.groupby(["scenario", "arrival_h"])[["group", "area90_km2"]].first()
     df = ceil.merge(about.rename(columns={"area90_km2": "bench_area90_km2"}).reset_index(),
@@ -287,17 +312,19 @@ def summary(folder: Path, flights_path: Path) -> pd.DataFrame:
     for hours, d in df.groupby("arrival_h"):
         line = {"arrival_h": hours, "windows": len(d), "groups": d["group"].nunique(),
                 "ceiling": _group_mean(d, "any_max"),
-                "ceiling_split": _group_mean(d, "any_max_split"),
-                "rect_share": _group_mean(d.assign(r=d["rect_max"] / d["any_max"]), "r"),
-                "square_share": _group_mean(d.assign(r=d["square_max"] / d["any_max"]), "r")}
-        line["teleport"] = _group_mean(d, "teleport")
-        line["teleport_split"] = _group_mean(d, "teleport_split")
-        # The best rectangle's shape, and what choosing the pattern case by case, in hindsight,
-        # would have been worth: the most a searcher that picks or fits a pattern could add.
-        shapes = d["rect_max_shape"]
-        line["rect_aspect_median"] = float(np.median([s["aspect"] for s in shapes]))
-        line["rect_offset_median_m"] = float(np.median(
-            [np.hypot(s["centre_east_m"], s["centre_north_m"]) for s in shapes]))
+                "ceiling_split": _group_mean(d, "any_max_split")}
+        for key in [c for c in d.columns if c.startswith("teleport")]:
+            line[key] = _group_mean(d, key)
+        if "rect_max" in d:
+            line["rect_share"] = _group_mean(d.assign(r=d["rect_max"] / d["any_max"]), "r")
+            line["square_share"] = _group_mean(d.assign(r=d["square_max"] / d["any_max"]), "r")
+            # The best rectangle's shape, and what choosing the pattern case by case, in
+            # hindsight, would have been worth: the most a searcher that picks or fits a pattern
+            # could add.
+            shapes = d["rect_max_shape"]
+            line["rect_aspect_median"] = float(np.median([s["aspect"] for s in shapes]))
+            line["rect_offset_median_m"] = float(np.median(
+                [np.hypot(s["centre_east_m"], s["centre_north_m"]) for s in shapes]))
         patterns = [s for s in ("expanding-square", "sector", "parallel", "trackline") if s in d]
         line["best_pattern_pos"] = _group_mean(d.assign(r=d[patterns].max(axis=1)), "r")
         line["best_searcher_pos"] = _group_mean(d.assign(r=d[searchers].max(axis=1)), "r")
@@ -325,13 +352,18 @@ def main(argv=None):
     r.add_argument("--rows", required=True, help="1-based rows, such as 1-14")
     r.add_argument("--arrival-h", type=float, nargs="+", default=[1.0, 2.0, 3.0])
     r.add_argument("--particles", type=int, default=10_000)
+    r.add_argument("--noise", default="rvc", help="the drift model's noise, as the scorer's --noise")
+    r.add_argument("--efforts", type=float, nargs="+", default=[1.0],
+                   help="budget multiples for the teleport ceiling, such as 1 2 4")
+    r.add_argument("--lean", action="store_true", help="skip the rectangles and squares")
     r.add_argument("--out", type=Path, required=True)
     s = sub.add_parser("summary")
     s.add_argument("folder", type=Path)
     s.add_argument("--flights", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.cmd == "run":
-        run_rows(args.csv, args.forcing_dir, args.rows, args.arrival_h, args.particles, args.out)
+        run_rows(args.csv, args.forcing_dir, args.rows, args.arrival_h, args.particles, args.out,
+                 args.noise, tuple(args.efforts), args.lean)
     else:
         with pd.option_context("display.width", 200, "display.max_columns", 60):
             print(summary(args.folder, args.flights).round(3).T.to_string())

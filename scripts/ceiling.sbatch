@@ -15,6 +15,7 @@
 #
 #     sbatch --array=1-4 scripts/ceiling.sbatch                  # the 55, PER=4
 #     ARRIVALS="0.25 0.5 0.75 1 2 3" N=100000 OUT=... sbatch --array=1-4 scripts/ceiling.sbatch
+#     CSV=... NOISE=rvsc EFFORTS="1 2 4" LEAN=1 PER=8 OUT=... sbatch --array=1-N scripts/ceiling.sbatch
 
 set -euo pipefail
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
@@ -24,6 +25,10 @@ DATA="${SAR_DATA:-/home/26p67/data}"
 CSV="${CSV:-$DATA/derived/scenarios/scenarios.csv}"
 N="${N:-100000}"
 ARRIVALS="${ARRIVALS:-1 2 3}"
+NOISE="${NOISE:-rvc}"
+EFFORTS="${EFFORTS:-1}"
+EXTRA=()
+[ "${LEAN:-0}" = 1 ] && EXTRA=(--lean)
 PER="${PER:-4}"
 LAST="${LAST:-$(( $(wc -l < "$CSV") - 1 ))}"
 OUT="${OUT:?pass OUT, the results folder}"
@@ -35,7 +40,8 @@ for P in 0 1 2 3; do
     [ "$A" -le "$LAST" ] || continue
     [ "$B" -le "$LAST" ] || B=$LAST
     PYTHONPATH=src "$PY" scripts/ceiling.py run --csv "$CSV" --forcing-dir "$DATA" \
-        --rows "$A-$B" --arrival-h $ARRIVALS --particles "$N" --out "$OUT" &
+        --rows "$A-$B" --arrival-h $ARRIVALS --particles "$N" --noise "$NOISE" \
+        --efforts $EFFORTS "${EXTRA[@]}" --out "$OUT" &
 done
 wait
 echo "task $K done: $OUT"
