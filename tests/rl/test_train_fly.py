@@ -203,8 +203,11 @@ class TestFly:
         assert len(ours["steps"]) == len(theirs["steps"]) == 45
 
     def test_a_published_window_rebuilds_to_the_papers_own_scores(self):
-        record = json.loads((FIXTURE / "rv_2h.json").read_text())
-        setup, context = fly.bundle_setup(record, FIXTURE)
+        # A format 2 window (scenarios/v2): flown by D032's helicopter, which turns at 7 deg/s, as
+        # fly_window flies. The v1 fixture's helicopter turned at once, so its scores differ.
+        folder = FIXTURE.parents[1] / "v2" / "S01"
+        record = json.loads((folder / "rv_2h.json").read_text())
+        setup, context = fly.bundle_setup(record, folder)
         row = {"lat": record["lkp"]["lat"], "lon": record["lkp"]["lon"], "seed": 0}
         flights = fly.fly_window(setup, context, row, ["expanding-square", "greedy"])
         for name in ("expanding-square", "greedy"):
