@@ -63,6 +63,10 @@ jobs:
           # unkeyed, because CARTO serves an unkeyed tile with a watermark
           # across it and a watermarked default looks broken.
           VITE_CARTO_KEY: ${{ secrets.CARTO_KEY }}
+          # The game's "email me my result" (mailer/). A repository VARIABLE, not a
+          # secret: it is a public address the browser calls. Unset, the game simply
+          # offers no email. The SMTP account lives only on the mailer's host.
+          VITE_MAILER_URL: ${{ vars.MAILER_URL }}
 
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -20,13 +20,14 @@ import { PlayerFlight, RecordedFlight } from './playback.js';
 import { ProbabilityLegend } from './probabilityLayer.js';
 import { Scene } from './scene.js';
 import {
-  NOISE_INFO, SEARCHER_INFO, bestNoise, loadIndex, loadWindow, noisesOf, searchersOf,
+  NOISE_INFO, SEARCHER_INFO, arrivalLabel, arrivalsOf, bestNoise, loadIndex, loadWindow, noisesOf,
+  searchersOf,
 } from './scenarioData.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
 import { esriTiles } from './tiles.js';
 
 const WINDOW_S = 45 * 60;
-const ARRIVALS = [1, 2, 3];
+const ARRIVALS = [0.25, 0.5, 0.75, 1, 2, 3];   // v4 carries all six; older files 1, 2, 3
 const SELF = 'self';
 const $ = (id) => document.getElementById(id);
 
@@ -96,7 +97,9 @@ function segmented(el, options, current, onPick) {
 function drawControls() {
   segmented($('noise'), noisesOf(state.scenario).map((k) => [k, NOISE_INFO[k].label]), state.noise,
     (v) => { state.noise = v; load(); });
-  segmented($('arrival'), ARRIVALS.map((h) => [h, `${h} h`]), state.hours,
+  const have = arrivalsOf(state.scenario, state.noise);
+  segmented($('arrival'), ARRIVALS.filter((h) => !have.length || have.includes(h)).map((h) => [h, arrivalLabel(h)]),
+    state.hours,
     (v) => { state.hours = v; load(); });
   const box = $('searchers');
   box.innerHTML = '';

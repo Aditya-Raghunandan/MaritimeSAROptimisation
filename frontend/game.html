@@ -6,13 +6,13 @@
     <title>Survive the Triangle</title>
     <style>
       :root {
-        --surface-0: #121211;
-        --surface-1: #1a1a19;
-        --surface-2: #262624;
+        --surface-0: #051321;
+        --surface-1: #0a1f36;
+        --surface-2: #11304f;
         --ink: #ffffff;
-        --ink-2: #c3c2b7;
-        --ink-3: #8a8a80;
-        --line: #3a3a37;
+        --ink-2: #c3d2e0;
+        --ink-3: #8aa2ba;
+        --line: #1d4466;
         --accent: #3987e5;
         --win: #04c951;
         --warm: #eb6834;
@@ -34,6 +34,27 @@
       .screen { display: none; min-height: 0; height: 100%; }
       .screen.on { display: grid; }
       button { font: inherit; color: var(--ink); cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: progress; }
+      body.kiosk header nav { display: none; }
+      /* the sea (sea.js): the dark map's water made see-through and its land green, over our own blue */
+      .sea-land { filter: url(#landOnly); }
+      #pickMap, #flyMap, #tutMap, .panel .map { background: #0a3358 !important; }
+      #pickMap::after, #flyMap::after, #tutMap::after, .panel .map::after {
+        content: ''; position: absolute; inset: 0; z-index: 450; pointer-events: none;
+        box-shadow: inset 0 0 140px 30px rgba(2, 12, 28, 0.55);
+      }
+      /* a controller: the highlight it moves, and the button glyphs it uses */
+      body.pad-mode .pad-focus {
+        outline: 3px solid #ffc24a !important; outline-offset: 3px;
+        box-shadow: 0 0 0 7px #ffc24a2e, 0 0 26px #ffc24acc !important;
+      }
+      .pad-chip { font-size: 12px; font-weight: 700; color: #ffc24a; border: 1px solid #ffc24a66; border-radius: 999px; padding: 2px 10px; }
+      .pad-only { display: none; }
+      body.pad-mode .pad-only { display: inline; }
+      .glyph { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; margin-left: 8px;
+        background: #ffffff1f; font-size: 13px; font-weight: 800; vertical-align: 1px; }
+      .namerow { display: flex; gap: 6px; }
+      .namerow .ghost { padding: 6px 10px; font-size: 16px; }
       .big {
         background: var(--accent); border: 0; border-radius: 10px; padding: 12px 26px;
         font-size: 18px; font-weight: 600;
@@ -42,11 +63,79 @@
       .muted { color: var(--ink-3); }
       .card { background: var(--surface-1); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
 
-      /* attract */
-      #attract { grid-template-columns: 1.3fr 1fr; gap: 24px; padding: 28px 36px; align-items: center; }
-      #attract h2 { font-size: 44px; line-height: 1.05; margin: 0 0 12px; }
-      #attract p { font-size: 17px; color: var(--ink-2); max-width: 38em; }
-      #showcase { width: 100%; max-height: 52vh; border-radius: 12px; background: #000; object-fit: contain; }
+      /* demo: the open-day video in a frame, until someone presses a button (not on a mouse move) */
+      #demo { place-items: center; background: #02060c; padding: 16px; }
+      .demo-frame { width: min(1280px, 100%); display: grid; gap: 10px; }
+      .demo-bar { display: flex; align-items: center; gap: 12px; }
+      .demo-bar b { font-size: 18px; }
+      .demo-bar .big { margin-left: auto; background: #ff5a1f; box-shadow: 0 0 20px #ff5a1f55; animation: pulse 2.4s ease-in-out infinite; }
+      #demoVideo { width: 100%; max-height: calc(100vh - 150px); border-radius: 12px; background: #000; }
+      @keyframes pulse { 50% { box-shadow: 0 0 4px #ff5a1f22; } }
+
+      /* attract: the start screen */
+      #attract {
+        grid-template-columns: 1.25fr 1fr; gap: 28px; padding: 30px 40px; align-items: center;
+        background: #050d1a center 62% / cover no-repeat;
+        box-shadow: inset 0 0 0 100vmax rgba(3, 9, 18, 0.35);
+      }
+      .kicker { font-size: 13px; font-weight: 800; letter-spacing: 0.3em; color: #ffb38a; }
+      .att-title {
+        font-family: 'Segoe UI Black', 'Arial Black', var(--font); font-weight: 900; font-size: clamp(56px, 9vw, 120px);
+        line-height: 0.9; margin: 10px 0 14px; letter-spacing: -0.02em; text-shadow: 0 0 30px #000;
+      }
+      .att-title .vs { color: #ff5a1f; font-size: 0.55em; vertical-align: 0.2em; }
+      .att-title .ai { color: #ff6fb5; text-shadow: 0 0 24px #ff6fb5aa; }
+      .att-lead { font-size: 22px; font-weight: 700; line-height: 1.3; max-width: 30em; margin: 0 0 10px; text-shadow: 0 0 8px #000; }
+      .att-lead b { color: #ff6fb5; }
+      #attract p.small { font-size: 15px; color: var(--ink-2); max-width: 40em; margin: 0 0 16px; text-shadow: 0 0 8px #000; }
+      .att-buttons { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+      .att-buttons .big { background: #ff5a1f; font-size: 20px; padding: 14px 28px; box-shadow: 0 0 24px #ff5a1f66; }
+      .att-side { align-self: end; }
+      .att-side .card { background: #0b1626d9; }
+
+      /* the three missions */
+      #tut { position: relative; grid-template-columns: 1fr; }
+      #tutMap { height: 100%; min-height: 0; background: #1b1b1d; transition: opacity 0.3s; }
+      #tutMap.tut-fade { opacity: 0; }
+      .tut-pin span { display: block; width: 30px; height: 30px; border-radius: 50%; border: 4px solid #ff5a1f;
+        box-shadow: 0 0 18px #ff5a1f, inset 0 0 8px #ff5a1f; animation: tutpin 0.9s ease-in-out infinite; }
+      @keyframes tutpin { 50% { transform: scale(1.5); opacity: 0.55; } }
+      #tutMap.leaflet-container { cursor: crosshair; }
+      .tut-panel {
+        position: absolute; z-index: 600; top: 14px; left: 14px; width: min(460px, 42vw);
+        background: #050d1ae6; border: 1px solid #ff5a1f66; max-height: calc(100% - 28px); overflow: hidden;
+      }
+      .tut-head { display: flex; align-items: center; gap: 10px; font-size: 12px; font-weight: 800; letter-spacing: 0.15em; color: #ffb38a; text-transform: uppercase; }
+      .tut-head b { margin-left: auto; font-size: 20px; letter-spacing: 0; color: #fff; font-variant-numeric: tabular-nums; }
+      .tut-pips { display: inline-flex; gap: 4px; }
+      .tut-pips i { width: 22px; height: 5px; border-radius: 3px; background: #ffffff33; }
+      .tut-pips i.on { background: #ff5a1f; }
+      .tut-panel h3 { font-size: 26px; margin: 6px 0 6px; }
+      .tut-panel p { margin: 0 0 8px; color: var(--ink-2); font-size: 15px; line-height: 1.45; }
+      .tut-result { font-size: 15px; line-height: 1.45; min-height: 1.4em; }
+      .tut-result.ok { color: #7dffb0; }
+      .tut-result.bad { color: #ffb38a; }
+      .tut-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      .tut-controls .big { font-size: 16px; padding: 10px 18px; }
+      .tut-slider { display: grid; gap: 4px; width: 100%; font-size: 13px; color: var(--ink-2); }
+      .tut-slider input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 8px; margin: 8px 0; border-radius: 4px;
+        background: linear-gradient(90deg, #3fd0ff, #ffb000 55%, #ff5a1f); outline: none; cursor: pointer; }
+      .tut-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%;
+        background: #fff; border: 4px solid #ff5a1f; box-shadow: 0 0 10px #000c; }
+      .tut-slider input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 4px solid #ff5a1f; }
+      .tut-slider b { color: #fff; }
+      .tut-corner { position: absolute; z-index: 600; right: 14px; bottom: 18px; display: flex; gap: 8px; }
+      .tut-label { white-space: nowrap; font: italic 600 15px var(--font); color: #bfe4ff; text-shadow: 0 0 4px #000, 0 0 2px #000; }
+      .tut-stream { color: #7fe6ff; }
+      .tut-tri { color: #ff8088; font-style: normal; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+      .tut-arrow-label span, .tut-dot-label, .tut-weight {
+        position: absolute; white-space: nowrap; font-weight: 700; font-size: 14px; text-shadow: 0 0 4px #000, 0 0 3px #000;
+      }
+      .tut-arrow-label span { left: 10px; top: -10px; }
+      .tut-arrow-label.left span { left: auto; right: 10px; }
+      .tut-arrow-label.below span { left: -40px; top: 12px; }
+      .tut-dot-label { left: 20px; top: -3px; color: #fff; }
+      .tut-weight { color: #fff; font-size: 13px; transform: translate(-50%, -50%); }
       .board h3 { margin: 0 0 6px; font-size: 14px; }
       .board ol { margin: 0; padding-left: 22px; }
       .board li { display: flex; justify-content: space-between; gap: 10px; }
@@ -61,6 +150,9 @@
       .modes button { text-align: left; background: var(--surface-2); border: 2px solid var(--line); border-radius: 10px; padding: 10px 12px; }
       .modes button[aria-pressed=true] { border-color: var(--accent); }
       .modes b { display: block; }
+      .seg { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+      .seg button { background: var(--surface-2); border: 2px solid var(--line); border-radius: 8px; padding: 4px 8px; font-size: 13px; }
+      .seg button[aria-pressed=true] { border-color: var(--accent); }
       input[type=text] { font: inherit; color: var(--ink); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
 
       /* fly */
@@ -76,11 +168,17 @@
         background: #000b; padding: 8px 14px; border-radius: 10px; color: #ffcd8d; pointer-events: none;
         max-width: min(720px, calc(100% - 32px)); text-align: center;
       }
+      .hint.intro { font-size: 16px; line-height: 1.45; padding: 14px 20px; color: #f2efe6; border: 1px solid #ffcd8d66; }
+      .hint.intro b { display: block; color: #ffcd8d; font-size: 19px; margin-bottom: 4px; }
+      .end-btn { position: absolute; z-index: 600; top: 14px; right: 14px; font-size: 16px; padding: 10px 18px; background: #000c; border-color: #ffcd8d88; }
 
       /* reveal */
       #reveal { grid-template-rows: auto 1fr; }
       #reveal .bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; }
-      .panels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 0 6px 6px; min-height: 0; }
+      .panels {
+        display: grid; grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+        grid-template-rows: repeat(var(--rows, 2), minmax(0, 1fr)); gap: 6px; padding: 0 6px 6px; min-height: 0;
+      }
       .panel { position: relative; min-height: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
       .panel .map { position: absolute; inset: 0; background: #111; }
       .panel .tag {
@@ -88,42 +186,194 @@
         justify-content: space-between; background: #000a; border-radius: 8px; padding: 6px 10px;
       }
       .panel .tag b { font-variant-numeric: tabular-nums; }
+      .panel .tag { font-size: 13px; padding: 4px 8px; gap: 6px; }
+      .panel .tag span { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .panel .tag i { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+      .panel .tag em { font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: .08em; color: #071629; background: #ffb38a; border-radius: 3px; padding: 0 4px; }
+      .panel.you { border-color: #ffffffaa; }
 
-      /* results */
-      #results { grid-template-columns: 1.1fr 1fr; gap: 18px; padding: 20px 28px; align-content: start; overflow: hidden; }
-      .verdict { font-size: 30px; font-weight: 700; margin: 0 0 6px; }
-      .verdict.win { color: var(--win); }
+      /* results: it stays up until someone presses a button (no video on idle), so the board can be read */
+      #results {
+        position: relative; grid-template-columns: 1.12fr 1fr; gap: 22px; padding: 18px 30px; align-content: start; overflow: hidden;
+        background: radial-gradient(ellipse at 15% 0%, #12305a 0%, #071629 45%, #040b16 100%);
+      }
+      #results .card { background: #0b1d33d9; border-color: #1d4a73; }
+      .res-main, .res-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+      .res-side { gap: 10px; }
+      .res-kicker { font-size: 12px; font-weight: 800; letter-spacing: 0.22em; color: #ffb38a; text-transform: uppercase; }
+      .verdict {
+        font-family: 'Segoe UI Black', 'Arial Black', var(--font); font-weight: 900; font-size: clamp(28px, 3vw, 50px);
+        line-height: 1; margin: 2px 0 0; letter-spacing: -0.01em; text-transform: uppercase;
+      }
+      .verdict .ai { color: #ff6fb5; text-shadow: 0 0 22px #ff6fb588; }
+      .verdict.close { color: #ffc24a; }
+      .verdict.found { color: #7dffb0; text-shadow: 0 0 24px #04c95177; }
+      .verdict.win { color: var(--win); text-shadow: 0 0 26px #04c95199; animation: winpulse 1.6s ease-in-out infinite; }
+      @keyframes winpulse { 50% { text-shadow: 0 0 8px #04c95144; } }
+      .res-why { margin: 0; font-size: 16px; color: #e6edf5; }
       table { border-collapse: collapse; width: 100%; }
       th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
       td.n { text-align: right; font-variant-numeric: tabular-nums; }
-      .explain { color: var(--ink-2); font-size: 13px; }
+      .race th, .bench th { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #8fa6bd; border-color: #1d4a73; }
+      .race td { border-color: #16314d; padding: 9px 8px; font-size: 15px; }
+      .race td.who { white-space: nowrap; font-weight: 600; }
+      .race tr.you td.who { color: #fff; font-weight: 800; }
+      .race td.pos { text-align: right; font-weight: 800; font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .race td.found { font-size: 13px; color: #ffb38a; white-space: nowrap; }
+      .race td.found.yes { color: #7dffb0; }
+      .barcell { width: 40%; }
+      /* every searcher on the player's sea, best first, two to a row */
+      .field { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
+      .field-head { grid-column: 1 / -1; display: flex; justify-content: space-between; font-size: 11px; font-weight: 700;
+        letter-spacing: 0.1em; text-transform: uppercase; color: #8fa6bd; }
+      .field-head b { color: #fff; }
+      #results.tight .res-explain p:first-child, #results.tighter #aiWords { display: none; }
+      .sr { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; column-gap: 8px; row-gap: 2px; align-items: center;
+        padding: 4px 10px; border-radius: 9px; background: #ffffff0a; animation: rise 0.45s ease-out both; }
+      .sr .rk { grid-row: 1 / 3; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+        font-size: 12px; font-weight: 800; background: #ffffff14; color: #c9d6e3; }
+      .sr:nth-child(2) .rk { background: #ffc24a; color: #2b1d00; }
+      .sr .nm { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; font-weight: 600; font-size: 14px; }
+      .sr .nm i { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+      .sr .pc { font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; }
+      .sr .bar { height: 6px; }
+      .sr .fd { font-size: 11.5px; color: #ffb38a; white-space: nowrap; }
+      .sr .fd.yes { color: #7dffb0; }
+      .sr.you { background: #ffffff17; box-shadow: inset 0 0 0 2px #ffffffcc; }
+      .sr.you .nm { font-weight: 800; }
+      @media (max-width: 900px) { .field { grid-template-columns: 1fr; } }
+      .bar { height: 12px; border-radius: 6px; background: #16314d; overflow: hidden; }
+      .bar i { display: block; height: 100%; border-radius: 6px; transform-origin: left; animation: grow 1.1s cubic-bezier(.2,.8,.2,1) both; }
+      .bar.sm { height: 7px; }
+      @keyframes grow { from { transform: scaleX(0); } }
+      .best { font-size: 10px; font-weight: 800; letter-spacing: 0.1em; color: #071629; background: #ffc24a; border-radius: 4px; padding: 1px 5px; margin-left: 6px; vertical-align: 2px; }
+      .explain { color: var(--ink-2); font-size: 13px; margin: 0; }
+      .res-explain { display: grid; gap: 6px; font-size: 13px; color: #b9c6d4; }
+      .res-explain b { color: #fff; }
+      .res-buttons { display: flex; gap: 10px; align-items: center; }
+      .res-buttons .big { background: #ff5a1f; box-shadow: 0 0 22px #ff5a1f66; font-size: 19px; }
+      .mail { padding: 10px 14px; }
+      .mail .mailrow { display: flex; gap: 8px; margin-top: 6px; }
+      .mail input[type=email] { flex: 1; font: inherit; color: var(--ink); background: #071629; border: 1px solid #1d4a73; border-radius: 8px; padding: 8px 10px; }
+      .mail .big { padding: 8px 20px; font-size: 16px; }
+      .mail .note { font-size: 12px; }
+      .mail .note.ok { color: var(--win); }
+      .mail .note.bad { color: var(--warm); }
+      /* your score, then the board */
+      .score-card { display: flex; gap: 16px; align-items: center; padding: 10px 16px; border-color: #ffc24a66 !important; }
+      .points { text-align: center; min-width: 120px; }
+      .points b { display: block; font-family: 'Segoe UI Black', 'Arial Black', var(--font); font-size: 46px; line-height: 1; color: #ffc24a; text-shadow: 0 0 24px #ffc24a55; font-variant-numeric: tabular-nums; }
+      .points span { font-size: 11px; font-weight: 800; letter-spacing: 0.3em; color: #ffc24a; }
+      .rank-line { font-size: 19px; font-weight: 800; margin-bottom: 3px; }
+      .score-card .explain { font-size: 12px; line-height: 1.4; }
+      .lb-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+      .lb-head .res-kicker { color: #ffc24a; }
+      .lb-head span:last-child { color: #8fa6bd; font-size: 13px; }
+      .lb { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+      .lb li {
+        display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 3px 10px 3px 5px;
+        border-radius: 9px; background: #ffffff08; font-size: 15px; animation: rise 0.45s ease-out both; animation-delay: calc(var(--i, 0) * 70ms);
+      }
+      @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+      .lb .rank { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 800; background: #ffffff14; color: #c9d6e3; }
+      .lb li:nth-child(1) .rank { background: #ffc24a; color: #2b1d00; box-shadow: 0 0 12px #ffc24a88; }
+      .lb li:nth-child(2) .rank { background: #d6dee8; color: #1b2430; }
+      .lb li:nth-child(3) .rank { background: #d9895b; color: #2a1406; }
+      .lb li .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+      .lb li .sc { font-weight: 800; font-variant-numeric: tabular-nums; }
+      .lb li.me { background: #ff5a1f2e; box-shadow: inset 0 0 0 2px #ff5a1f; }
+      .lb li.me .nm::after { content: 'YOU'; margin-left: 8px; font-size: 10px; font-weight: 800; letter-spacing: 0.12em; color: #fff; background: #ff5a1f; border-radius: 4px; padding: 1px 5px; vertical-align: 2px; }
+      .lb li.gap { background: none; display: block; text-align: center; color: #8fa6bd; padding: 0; line-height: 1; }
+      .lb li.empty { display: block; color: #8fa6bd; background: none; }
+      .bench td { padding: 2px 6px; font-size: 12.5px; border-color: #16314d; white-space: nowrap; }
+      .bench .pbar { display: flex; align-items: center; gap: 8px; }
+      .bench .pbar .bar { flex: 1; min-width: 60px; }
+      .bench .pbar span { min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
+      .lb-head #benchNote { font-size: 12px; color: #8fa6bd; }
+      .confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 5; }
+      .confetti i { position: absolute; top: -16px; width: 9px; height: 15px; border-radius: 2px; animation: fall linear forwards; }
+      @keyframes fall { to { transform: translateY(105vh) rotate(800deg); } }
+      /* a phone, from the flyer's QR code: one column, and it scrolls */
+      @media (max-width: 900px) {
+        #results { grid-template-columns: 1fr; overflow-y: auto; padding: 16px; }
+        .race td { padding: 8px 4px; }
+        .race td.who, .race td.found { white-space: normal; }
+        .barcell { width: 20%; }
+      }
       .scene-label { position: absolute; left: 16px; top: -3px; white-space: nowrap; font-size: 11px; color: #fff; text-shadow: 0 0 3px #000; }
     </style>
   </head>
   <body>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <filter id="landOnly" color-interpolation-filters="sRGB">
+        <!-- alpha from brightness: the dark map's water (35, 34, 39: luminance 0.135) and the flat
+             grey it sends for some open-sea tiles (~51: 0.20) to 0, its land (65-78: 0.26-0.30)
+             to 1, the coastline's anti-aliasing in between -->
+        <feColorMatrix type="matrix" values="0.80 0    0    0 0.05
+                                             0    1.00 0    0 0.07
+                                             0    0    0.70 0 0.02
+                                             4.68 15.73 1.59 0 -4.62" />
+      </filter>
+    </svg>
     <header>
       <h1>Can you survive the Bermuda Triangle?</h1>
       <span class="muted" id="status"></span>
+      <span class="pad-chip" id="padChip" hidden>🎮 Controller ready · ✕ choose · ○ back</span>
       <nav><a href="./bench.html">the scenarios</a><a href="./index.html">the map</a></nav>
     </header>
 
+    <section class="screen" id="demo">
+      <div class="demo-frame">
+        <div class="demo-bar">
+          <b>Humans vs ML</b><span class="muted">our project in five minutes</span>
+          <button class="big" id="demoPlay">Play the game<span class="glyph pad-only">✕</span></button>
+          <button class="ghost" id="demoClose" aria-label="Close the video">✕ Close</button>
+        </div>
+        <video id="demoVideo" muted playsinline controls></video>
+      </div>
+    </section>
+
     <section class="screen on" id="attract">
       <div>
-        <h2>Someone has fallen into the sea.<br />Can you find them before the AI does?</h2>
-        <p>
-          The ocean carries a person kilometres in a few hours, and nobody knows exactly where.
-          Our drift model turns one splash into 10,000 places they could be. You get one
-          helicopter, a 185 m strip of sea it can see, and 45 minutes. Then the Coast Guard's
-          pattern and the AI search the same sea, and we reveal where the person really was.
+        <div class="kicker">SURVIVE THE BERMUDA TRIANGLE</div>
+        <h2 class="att-title">HUMANS <span class="vs">vs</span> <span class="ai">ML</span></h2>
+        <p class="att-lead">You're lost in the Bermuda Triangle. Can you find yourself before
+          <b>Telemachus</b>, our machine-learning model, does?</p>
+        <p class="small">
+          The ocean carries a person kilometres in a few hours, and nobody knows exactly where. Three
+          one-minute missions show you how we work it out; then you get one helicopter, a 185 m strip of
+          sea it can see, and 45 minutes, against the Coast Guard's pattern and Telemachus on the same
+          sea. Beat both and you win a prize.
         </p>
-        <p class="muted">Beat both the Coast Guard and the AI and you win a prize.</p>
-        <button class="big" id="startBtn">Start</button>
+        <div class="att-buttons">
+          <button class="big" id="startBtn" disabled>Start: 3 missions, then the search</button>
+          <button class="ghost" id="searchBtn" disabled>Skip to the search</button>
+          <button class="ghost" id="demoBtn">▶ Watch the video</button>
+        </div>
+        <p class="small" style="margin:12px 0 0">🎮 Got a controller? Press ✕ on it, then the stick or d-pad and ✕ work every menu.</p>
+      </div>
+      <div class="att-side">
         <div class="boards">
           <div class="card board"><h3>Best with the probability map</h3><ol id="boardMap"></ol></div>
           <div class="card board"><h3>Best with currents only</h3><ol id="boardCurrents"></ol></div>
         </div>
       </div>
-      <video id="showcase" autoplay muted playsinline></video>
+    </section>
+
+    <section class="screen" id="tut">
+      <div id="tutMap"></div>
+      <div class="tut-panel card">
+        <div class="tut-head"><span id="tutStep">Mission 1 of 3</span><span class="tut-pips"><i></i><i></i><i></i></span><b id="tutClock"></b></div>
+        <h3 id="tutTitle"></h3>
+        <p id="tutText"></p>
+        <div id="tutResult" class="tut-result"></div>
+        <div id="tutControls" class="tut-controls"></div>
+      </div>
+      <div class="tut-corner">
+        <button class="ghost" id="tutSkip">Skip this mission<span class="glyph pad-only">○</span></button>
+        <button class="ghost" id="tutSkipAll">Skip to the real search</button>
+      </div>
     </section>
 
     <section class="screen" id="pick">
@@ -137,7 +387,11 @@
             <button data-mode="currents" aria-pressed="false"><b>Currents only (hard)</b><span class="muted">See only how the water flows, like a real pilot.</span></button>
           </div>
         </div>
-        <div><b>3. Your name for the board</b><input type="text" id="name" maxlength="16" placeholder="Player" /></div>
+        <div><b>3. When does the helicopter get there?</b>
+          <div class="seg" id="arrivalSeg"></div>
+          <div class="muted" id="arrivalNote">Sooner is easier: the cloud has had less time to spread.</div>
+        </div>
+        <div><b>4. Your name for the board</b><div class="namerow"><input type="text" id="name" maxlength="16" placeholder="Player" /><button class="ghost" id="nameDice" title="Pick a name for me" aria-label="Pick a name for me">🎲</button></div></div>
         <button class="big" id="goBtn" disabled>Fly</button>
       </aside>
     </section>
@@ -149,40 +403,54 @@
         <div class="card" id="hudPosCard"><b id="hudPos">0 %</b><span class="muted">searched</span></div>
       </div>
       <div class="hint" id="hint">Point with the mouse where you want to fly and click to take off.</div>
+      <button class="ghost end-btn" id="endBtn" hidden>End the search now<span class="glyph pad-only">△</span></button>
     </section>
 
     <section class="screen" id="reveal">
-      <div class="bar"><b>Same sea, same 45 minutes, three searchers.</b><span class="muted" id="revealNote"></span>
-        <button class="ghost" id="skipBtn" style="margin-left:auto">Skip to the results</button></div>
-      <div class="panels">
-        <div class="panel"><div class="map" id="mapYou"></div><div class="tag"><span>You</span><b id="posYou">0 %</b></div></div>
-        <div class="panel"><div class="map" id="mapCg"></div><div class="tag"><span>Coast Guard (Expanding Square)</span><b id="posCg">0 %</b></div></div>
-        <div class="panel"><div class="map" id="mapAi"></div><div class="tag"><span>The AI</span><b id="posAi">0 %</b></div></div>
-      </div>
+      <div class="bar"><b>Same sea, same 45 minutes: you and every searcher we tested.</b><span class="muted" id="revealNote"></span>
+        <button class="ghost" id="skipBtn" style="margin-left:auto">Skip to the results<span class="glyph pad-only">✕</span></button></div>
+      <div class="panels" id="panels"></div>
     </section>
 
     <section class="screen" id="results">
-      <div>
-        <p class="verdict" id="verdict"></p>
-        <p class="explain" id="verdictWhy"></p>
-        <table id="scoreTable"></table>
-        <p class="explain">
-          <b>Searched</b> is the share of all the places the person could be that each helicopter
-          looked at: the paper calls it POS. The person is in exactly one of those places, so if
-          the drift model is right, a search that covers 60 % finds them about 6 times in 10.
-          <span id="aiWords"></span>
-        </p>
-        <div class="row" style="display:flex;gap:10px;margin-top:10px">
+      <div class="res-main">
+        <div>
+          <div class="res-kicker" id="resKicker">The result</div>
+          <h2 class="verdict" id="verdict"></h2>
+        </div>
+        <p class="res-why" id="verdictWhy"></p>
+        <div class="field" id="scoreTable"></div>
+        <div class="res-explain">
+          <p class="explain"><b>Searched</b> is the share of all the places the person could be that each helicopter
+            looked at: the paper calls it POS. The person is in exactly one of those places, so if
+            the drift model is right, a search that covers 60 % finds them about 6 times in 10.</p>
+          <p class="explain" id="aiWords"></p>
+        </div>
+        <form class="card mail" id="mailForm" hidden>
+          <label for="mailTo"><b>Email me my result</b> <span class="muted">· your flight, the scores, and your place on the board</span></label>
+          <div class="mailrow">
+            <input type="email" id="mailTo" placeholder="you@example.com" autocomplete="email" required />
+            <button class="big" id="mailBtn" type="submit">Send</button>
+          </div>
+          <span class="muted note" id="mailNote">We use your address once, to send this, and keep nothing.</span>
+        </form>
+        <div class="res-buttons">
           <button class="big" id="againBtn">Play again</button>
           <button class="ghost" id="exportBtn">Save the board as a file</button>
         </div>
       </div>
-      <div>
-        <div class="card board"><h3 id="boardTitle">The board</h3><ol id="boardNow"></ol></div>
-        <div class="card" style="margin-top:12px">
-          <h3 style="margin:0 0 6px;font-size:14px">Across every buoy we tested</h3>
-          <div class="explain" id="benchNote"></div>
-          <table id="benchTable"></table>
+      <div class="res-side">
+        <div class="card score-card">
+          <div class="points"><b id="pointsBig">0</b><span>POINTS</span></div>
+          <div><div class="rank-line" id="boardYou"></div><p class="explain" id="pointsWhy"></p></div>
+        </div>
+        <div class="card">
+          <div class="lb-head"><span class="res-kicker">Leaderboard</span><span id="boardTitle"></span></div>
+          <ol class="lb" id="boardNow"></ol>
+        </div>
+        <div class="card bench-card">
+          <div class="lb-head"><span class="res-kicker" style="color:#8fd0ff">Every buoy we tested</span><span id="benchNote"></span></div>
+          <table class="bench" id="benchTable"></table>
         </div>
       </div>
     </section>

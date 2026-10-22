@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SCENARIO_VERSIONS, aiOf, searchersOf } from '../src/scenarioData.js';
+import { SCENARIO_VERSIONS, aiOf, arrivalLabel, arrivalsOf, searchersOf } from '../src/scenarioData.js';
 
 describe('which searchers a version carries', () => {
   it('lists the trained agent only when the index says the files have it', () => {
@@ -18,13 +18,37 @@ describe('which searchers a version carries', () => {
   });
 });
 
-describe('who plays the AI', () => {
-  it('is the trained agent where the window has its flight, else greedy', () => {
-    expect(aiOf({ flights: { greedy: {}, ppo: {} } })).toBe('ppo');
-    expect(aiOf({ flights: { greedy: {} } })).toBe('greedy');
+describe("who plays the computer's side", () => {
+  it('is the trained model where the window has its flight and the helicopter arrives by 45 min', () => {
+    const both = { flights: { greedy: {}, ppo: {} } };
+    expect(aiOf(both, 0.25)).toBe('ppo');
+    expect(aiOf(both, 0.75)).toBe('ppo');
+    expect(aiOf(both, 1)).toBe('greedy');
+    expect(aiOf(both, 3)).toBe('greedy');
+    expect(aiOf({ flights: { greedy: {} } }, 0.5)).toBe('greedy');
   });
 
-  it('looks for v3 first', () => {
-    expect(SCENARIO_VERSIONS[0]).toBe('v3');
+  it('is Telemachus S, up to 1 h, where the window carries it', () => {
+    const all = { flights: { greedy: {}, ppo: {}, telemachus: {} } };
+    expect(aiOf(all, 0.25)).toBe('telemachus');
+    expect(aiOf(all, 1)).toBe('telemachus');
+    expect(aiOf(all, 2)).toBe('greedy');
+  });
+
+  it('looks for v5 first', () => {
+    expect(SCENARIO_VERSIONS[0]).toBe('v5');
+  });
+});
+
+describe('arrival times', () => {
+  it('are read from the window names for one drift model, soonest first', () => {
+    const s = { windows: ['rvc_2h', 'rvc_0.25h', 'rv_1h', 'rvc_0.5h', 'rvc_3h'] };
+    expect(arrivalsOf(s, 'rvc')).toEqual([0.25, 0.5, 2, 3]);
+    expect(arrivalsOf(s, 'rv')).toEqual([1]);
+    expect(arrivalsOf({}, 'rvc')).toEqual([]);
+  });
+
+  it('read as people say them', () => {
+    expect([0.25, 0.5, 0.75, 1, 2].map(arrivalLabel)).toEqual(['15 min', '30 min', '45 min', '1 h', '2 h']);
   });
 });

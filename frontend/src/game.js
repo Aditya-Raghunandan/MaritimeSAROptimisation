@@ -3,10 +3,10 @@
  *
  * A visitor picks a real buoy (one of the 55 scenarios), chooses to see the probability map
  * or only the currents, and flies one helicopter for the 45-minute window, the clock
- * compressed so the search takes about 90 seconds. Then the same sea is searched again,
- * side by side, by the Coast Guard's Expanding Square and by the AI, and the real buoy is
- * revealed. The AI is the trained agent where the published files carry its flight (v3), and
- * the greedy search where they do not; the results say which one it was.
+ * compressed so the search takes a minute (or less: "End the search" stops it early). Then the same sea is searched again,
+ * side by side, by the Coast Guard's Expanding Square and by our ML model, and the real buoy is
+ * revealed. The model is Telemachus, Suné's trained agent, where the published files carry its
+ * flight (v3), and the greedy search where they do not; the results say which one it was.
  *
  * FLYING IT. The helicopter turns as the real one does, at most 7 degrees a second (D032),
  * so it swings round on a 379 m curve instead of snapping to a new heading. Three ways to
@@ -26,74 +26,142 @@ import '@fontsource-variable/inter';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { FieldLayer } from './fieldLayer.js';
-import { add, load, nickname, score, top, verdict } from './leaderboard.js';
+import {
+  AREA_CELL_M, add, cloudAreaKm2, load, nickname, par, score, standing, top, verdict,
+} from './leaderboard.js';
+import { densityGrid } from './probabilityMap.js';
+import { trackAt } from './referee.js';
 import { PlayerFlight, RecordedFlight, SAMPLE_S } from './playback.js';
 import { ProbabilityLegend } from './probabilityLayer.js';
+import { drawResultCard } from './resultCard.js';
 import { Scene } from './scene.js';
 import {
   SEARCHER_INFO, SHOWCASE_ROOT, aiOf, bestNoise, display, loadBenchmark, loadField, loadIndex,
+  arrivalLabel,
+  arrivalsOf,
   loadWindow,
+  mlUntilH,
 } from './scenarioData.js';
 import { bearing } from './kinematics.js';
 import { M_PER_DEG_LAT } from './geo.js';
+import { SEARCH_SPEED_MS, TURN_RADIUS_M, TURN_RATE_DEG_S } from './platform.js';
 import { headingFromKeys, keyDirection } from './searchRun.js';
-import { esriTiles } from './tiles.js';
+import { DIRECTIONS, PadEvents, firstPad, nearestThatWay, padHeading, randomName } from './gamepad.js';
+import { addSea } from './sea.js';
+import { playable } from './farBuoys.js';
+import { Tutorial } from './tutorial.js';
 
 // The drift model the game flies over: the newest a scenario has (rvc, sized by the current,
 // D033, once published; rv until then). Chosen per scenario in fly().
-const ARRIVAL_H = 2;
+// How long after the call the helicopter arrives, chosen on the pick screen from what the
+// scenario's files carry. 30 min unless the player picks another (v4 has 15 min to 3 h).
+const DEFAULT_ARRIVAL_H = 0.5;
 const WINDOW_S = 45 * 60;
 // ?speed=10 plays everything ten times faster: for rehearsing the stand and for the tests.
-const SPEED_UP = Math.max(1, Number(new URLSearchParams(window.location.search).get('speed')) || 1);
-const FLY_SPEED = 30 * SPEED_UP;          // 45 minutes in 90 seconds
-const REVEAL_SPEED = 90 * SPEED_UP;       // the side-by-side replay in 30 seconds
+const PARAMS = new URLSearchParams(window.location.search);
+const SPEED_UP = Math.max(1, Number(PARAMS.get('speed')) || 1);
+// ?kiosk=1 is the open-day stand: no links off the game (frontend/tools/kiosk.cmd opens it).
+const KIOSK = PARAMS.has('kiosk');
+// Faster after open-day testers found 90 s long (Aditya, 14 Oct).
+const FLY_SPEED = 45 * SPEED_UP;          // 45 minutes in 60 seconds
+const REVEAL_SPEED = 135 * SPEED_UP;      // the side-by-side replay in 20 seconds
+const REVEAL_HOLD_MS = 5000;              // the real buoy left up this long before the results
 const CG = 'expanding-square';
-// What the results say the AI was, by who flew it (aiOf).
+// What the results say the computer's searcher was, by who flew it (aiOf).
 const AI_WORDS = {
-  ppo: '<b>The AI</b> here is a trained agent: a neural network that learned where to fly by '
-    + 'searching five years of simulated drift, minute by minute, and being paid for every '
-    + 'possible position it found, more for finding it sooner.',
-  greedy: '<b>The AI</b> here is a greedy search that always flies to where the most probability '
-    + 'is left; the trained agent takes its place once its flights are published.',
+  // Telemachus 2 (scenarios/v4): paid plain POS, gamma 1, two headings a minute; the first
+  // Telemachus was also paid for finding it sooner, and these words described it until 14 Oct.
+  ppo: '<b>Telemachus</b> is our machine-learning model: a small neural network trained by '
+    + 'reinforcement learning (PPO). It learned where to fly by searching five years of simulated '
+    + 'drift, choosing a new heading every 30 seconds, rewarded for every possible position its strip passed over.',
+  // Telemachus S (scenarios/v5, 18 Oct): Telemachus 2 that also picks its speed each minute.
+  telemachus: '<b>Telemachus S</b> is our newest machine-learning model: a small neural network trained by '
+    + 'reinforcement learning (PPO) on five years of simulated drift. Every 30 seconds it picks a heading, '
+    + 'and every minute a speed: 90, 60 or 45 knots. Slower turns tighter but covers less sea, so it '
+    + 'mostly flies flat out and slows only for a few minutes over small, fresh clouds.',
+  greedy: '<b>The computer</b> here flies a greedy search, with no learning: always to where the most '
+    + 'probability is left. The trained model takes its place once its flights are published.',
+  // The trained model's flight is there, but the helicopter arrives too late for it (aiOf).
+  late: '<b>The computer</b> here flies a greedy search, with no learning: always to where the most '
+    + 'probability is left. When the helicopter arrives within 45 minutes, our machine-learning '
+    + 'model, Telemachus, flies instead; from an hour on, greedy finds more on our test buoys.',
+  lateS: '<b>The computer</b> here flies a greedy search, with no learning: always to where the most '
+    + 'probability is left. When the helicopter arrives within an hour, our machine-learning '
+    + 'model, Telemachus S, flies instead; later than that, greedy does as well or better on our test buoys.',
 };
+
+/** The words under the results for whoever flew the computer's side of this window. */
+function aiWords(window, hours) {
+  const ai = aiOf(window, hours);
+  if (ai !== 'greedy') return AI_WORDS[ai];
+  if (window?.flights?.telemachus) return AI_WORDS.lateS;
+  return AI_WORDS[window?.flights?.ppo ? 'late' : 'greedy'];
+}
+/** What the computer's searcher is called, by who flew it: Telemachus is the trained model (named
+ * 12 Oct). Machine learning, not "AI" (Suné, 13 Oct); greedy does not learn, so it is not called ML. */
+const AI_NAME = { ppo: 'Telemachus', telemachus: 'Telemachus', greedy: 'the greedy search' };
+const AI_LABEL = { ppo: 'Telemachus (ML model)', telemachus: 'Telemachus S (ML model)', greedy: 'Greedy search (no learning)' };
+// The mailer (mailer/ in this repo): a Vercel function for the public site, or a laptop at the
+// stand. Unset, the game offers no email.
+const MAILER_URL = String(import.meta.env.VITE_MAILER_URL ?? '');
+// The open-day video plays when nobody has touched the stand for a while (Aditya, 12 Oct):
+// on these screens, after this long, counted from the last touch or the last change of screen.
+// Never in the middle of a flight or a replay, and never on the results: the clock used to run
+// on from take-off, so the board vanished ~20 s after it appeared, before anyone had read it.
+// It stays until someone presses a button (Aditya, 14 Oct).
+const IDLE_MS = { attract: 30_000, pick: 45_000, tut: 60_000 };
+const DEMO_VIDEO = String(import.meta.env.VITE_DEMO_VIDEO ?? `${SHOWCASE_ROOT}/openday.mp4`);
 const MODES = { map: 'with the probability map', currents: 'with currents only' };
 const $ = (id) => document.getElementById(id);
 
 const game = {
   index: null, scenario: null, mode: 'map', name: 'Player', window: null, field: null,
   player: null, held: new Set(), t: 0, last: 0, running: false, result: null,
-  input: 'keys', pointer: null, pad: null,
+  input: 'keys', pointer: null, pad: null, hours: DEFAULT_ARRIVAL_H,
 };
 
-const HINT = 'Point with the mouse where you want to fly and click to take off. The helicopter '
-  + 'turns like the real one, 7\u00b0 a second, so plan your turns. '
-  + 'Arrow keys, WASD or a game controller work too.';
+// The real helicopter's numbers (D032), in words for a visitor: why it will not simply go
+// where it is pointed. A tester on 11 Oct did not know it banks round like a plane.
+const SPEED_KMH = Math.round(SEARCH_SPEED_MS * 3.6);
+const TURN_DEG = Math.round(TURN_RATE_DEG_S);
+const U_TURN_S = Math.round(180 / TURN_RATE_DEG_S);
+const CIRCLE_M = Math.round((2 * TURN_RADIUS_M) / 10) * 10;
+const HINT = '<b>Fly it like a real search helicopter.</b> Point with the mouse where you want to '
+  + `go and click to take off. At ${SPEED_KMH}\u00a0km/h it cannot stop or turn on the spot: it banks `
+  + `round at ${TURN_DEG}\u00b0 a second, so a U-turn takes ${U_TURN_S}\u00a0s and swings ${CIRCLE_M}\u00a0m wide. `
+  + 'Point well ahead of it. Arrow keys, WASD or a game controller work too.';
+const PAD_HINT = '<br />🎮 <strong>Controller:</strong> push the stick (or the d-pad) the way to fly, or press ✕ to take off. '
+  + '△ ends the search.';
+const hint = () => HINT + (firstPad() ? PAD_HINT : '');
+/** How far off the asked-for heading it must be before the game says it is still turning. */
+const COACH_OFF_DEG = 25;
 
 /* ---------------------------------------------------------------- steering */
 
-/** The compass heading from the helicopter now to a point on the map, [lat, display lon]. */
-function headingTo(latlng) {
+/** East and north metres from the helicopter now to a point on the map, [lat, display lon]. */
+function offsetTo(latlng) {
   const [lat, lon] = game.player.position(game.t);
   const dLon = latlng.lng - display(lon);
-  const east = dLon * M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180);
-  const north = (latlng.lat - lat) * M_PER_DEG_LAT;
+  return [dLon * M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180), (latlng.lat - lat) * M_PER_DEG_LAT];
+}
+
+/** The compass heading from the helicopter now to a point on the map. */
+function headingTo(latlng) {
+  const [east, north] = offsetTo(latlng);
   return Math.hypot(east, north) < 1 ? null : bearing(east, north);
 }
 
-/** The first connected game controller's stick or d-pad as a heading, or null. */
-function padHeading() {
-  const pads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : [];
-  for (const pad of pads) {
-    if (!pad) continue;
-    const [x = 0, y = 0] = pad.axes;
-    if (Math.hypot(x, y) > 0.45) return bearing(x, -y);
-    const b = (i) => Boolean(pad.buttons[i]?.pressed);
-    const held = new Set([b(12) && 'up', b(13) && 'down', b(14) && 'left', b(15) && 'right'].filter(Boolean));
-    const h = headingFromKeys(held);
-    if (h !== null) return h;
-    if (pad.buttons.some((btn) => btn.pressed)) return undefined;   // pressed, but no direction
+/**
+ * What to tell a player whose helicopter is not yet going where they asked, or null: still
+ * swinging round, or pointed at a spot inside the circle it turns on, which it can only orbit.
+ */
+function coach() {
+  const off = Math.abs(((game.player.command - game.player.headingAt(game.t) + 540) % 360) - 180);
+  if (off <= COACH_OFF_DEG) return null;
+  if (game.input === 'mouse' && game.pointer && Math.hypot(...offsetTo(game.pointer)) < 2 * TURN_RADIUS_M) {
+    return 'Too close to turn to: it circles round that spot. Point further away.';
   }
-  return null;
+  return `Turning, ${TURN_DEG}\u00b0 a second: at search speed a helicopter banks round like a plane.`;
 }
 
 /** What the player is asking for now, from whichever input they used last. */
@@ -101,7 +169,7 @@ function wanted() {
   const pad = padHeading();
   if (pad !== null) {
     game.input = 'pad';
-    return pad ?? null;
+    return pad;
   }
   if (game.input === 'mouse' && game.pointer) return headingTo(game.pointer);
   if (game.input === 'keys') return headingFromKeys(game.held);
@@ -113,10 +181,25 @@ function takeOff() {
   game.running = true;
   game.last = performance.now();
   $('hint').style.display = 'none';
+  $('hint').classList.remove('intro');
+  $('endBtn').hidden = false;
   requestAnimationFrame(flyTick);
 }
 
-/** Before take-off, a controller is only seen by asking it, so ask every frame. */
+/**
+ * "End the search": the player has seen enough. The minute in progress is flown out, so the
+ * referee scores it whole, and the search ends there; the rivals still fly all 45 minutes.
+ */
+function endSearch() {
+  if (!game.running) return;
+  game.running = false;
+  game.player.stop();
+  game.t = game.player.until;
+  reveal();
+}
+
+/** Before take-off, a controller is only seen by asking it, so ask every frame. A stick or the
+ * d-pad takes off this way; ✕ takes off as it is pointing (onPad). */
 function waitForPad() {
   if (!$('fly').classList.contains('on') || game.running || game.t !== 0) return;
   if (padHeading() !== null) {
@@ -127,20 +210,19 @@ function waitForPad() {
   requestAnimationFrame(waitForPad);
 }
 
-function basemap() {
-  return esriTiles('Canvas/World_Dark_Gray_Base', {
-    maxZoom: 16, maxNativeZoom: 16, attribution: 'Esri, HERE, Garmin, &copy; OpenStreetMap contributors',
-  });
-}
-
 function newMap(id, options = {}) {
   // Whole zoom levels: a fractional zoom scales tiles by a non-integer and leaves hairline seams.
   const map = L.map(id, { zoomSnap: 1, attributionControl: false, ...options });
-  basemap().addTo(map);
+  addSea(map, { maxZoom: 16, maxNativeZoom: 16, attribution: 'Esri, HERE, Garmin, &copy; OpenStreetMap contributors' });
   return map;
 }
 
 function show(id) {
+  if (game.screen === 'tut' && id !== 'tut') stopTutorial();
+  if (game.screen === 'demo' && id !== 'demo') $('demoVideo').pause();
+  game.screen = id;
+  touched();
+  setPadFocus(null);
   for (const s of document.querySelectorAll('.screen')) s.classList.toggle('on', s.id === id);
 }
 
@@ -165,15 +247,67 @@ function drawBoards() {
 
 function attract() {
   drawBoards();
-  // The two 3D loops (scripts/render_showcase.py), one after the other.
-  const video = $('showcase');
-  const loops = ['mountain', 'cube'].map((n) => `${SHOWCASE_ROOT}/${n}.webm`);
-  let i = 0;
-  video.loop = false;
-  video.onended = () => { i = (i + 1) % loops.length; video.src = loops[i]; video.play().catch(() => {}); };
-  video.onerror = () => { video.style.visibility = 'hidden'; };
-  video.src = loops[0];
+  $('attract').style.backgroundImage = `url(${import.meta.env.BASE_URL}img/hero.jpg)`;
   show('attract');
+}
+
+/* ---------------------------------------------------------------- the video, when idle */
+
+/**
+ * The open-day video on a loop, full screen. If it cannot be loaded (offline, or not
+ * published yet) the two 3D loops (scripts/render_showcase.py) play instead.
+ */
+function demo() {
+  show('demo');
+  const video = $('demoVideo');
+  if (!video.dataset.ready) {
+    video.dataset.ready = '1';
+    const loops = ['mountain', 'cube'].map((n) => `${SHOWCASE_ROOT}/${n}.webm`);
+    let i = 0;
+    video.loop = true;
+    video.onerror = () => {
+      video.loop = false;
+      video.onerror = null;
+      video.onended = () => { i = (i + 1) % loops.length; video.src = loops[i]; video.play().catch(() => {}); };
+      video.src = loops[0];
+      video.play().catch(() => {});
+    };
+    video.src = DEMO_VIDEO;
+  }
+  video.play().catch(() => {});
+}
+
+// Any input keeps the stand awake; only the video's own buttons (or Esc) close it, so it can
+// be watched, paused and photographed without a stray mouse move ending it.
+let lastInput = performance.now();
+function touched() {
+  lastInput = performance.now();
+}
+
+function watchIdle() {
+  for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']) {
+    window.addEventListener(ev, touched, { passive: true });
+  }
+  setInterval(() => {
+    const limit = IDLE_MS[game.screen];
+    if (limit && performance.now() - lastInput > limit) demo();
+  }, 1000);
+}
+
+/* ---------------------------------------------------------------- the three missions */
+
+let tutorial = null;
+
+function stopTutorial() {
+  tutorial?.stop();
+  tutorial = null;
+}
+
+function missions() {
+  show('tut');
+  stopTutorial();
+  tutorial = new Tutorial({ speedUp: SPEED_UP, onDone: () => pick() });
+  tutorial.start();
 }
 
 /* ---------------------------------------------------------------- pick */
@@ -204,9 +338,30 @@ function pick() {
 function choose(s) {
   game.scenario = s;
   const words = { jet: 'in the Gulf Stream, the fastest water', moderate: 'in moderate current', quiet: 'in quiet water' };
-  $('pickInfo').textContent = `${s.start_utc.replace('T', ' ')} UTC, ${words[s.water] ?? ''}. `
-    + 'The helicopter gets there 2 hours after the call.';
+  $('pickInfo').textContent = `${s.start_utc.replace('T', ' ')} UTC, ${words[s.water] ?? ''}.`;
+  drawArrivals();
   $('goBtn').disabled = false;
+}
+
+/** The arrival buttons for the chosen buoy: only the times its files carry. */
+function drawArrivals() {
+  const have = arrivalsOf(game.scenario, bestNoise(game.scenario));
+  if (!have.includes(game.hours)) {
+    game.hours = have.includes(DEFAULT_ARRIVAL_H) ? DEFAULT_ARRIVAL_H
+      : have.reduce((a, h) => (Math.abs(h - DEFAULT_ARRIVAL_H) < Math.abs(a - DEFAULT_ARRIVAL_H) ? h : a), have[0] ?? 2);
+  }
+  const box = $('arrivalSeg');
+  box.innerHTML = '';
+  for (const h of have) {
+    const b = document.createElement('button');
+    b.textContent = arrivalLabel(h);
+    b.setAttribute('aria-pressed', String(h === game.hours));
+    b.addEventListener('click', () => { game.hours = h; drawArrivals(); });
+    box.append(b);
+  }
+  $('arrivalNote').textContent = game.hours <= mlUntilH(game.index?.searchers?.includes('telemachus'))
+    ? `Arriving ${arrivalLabel(game.hours)} after the call: the cloud is still small, and you are up against Telemachus, our machine-learning model.`
+    : `Arriving ${arrivalLabel(game.hours)} after the call: the cloud has spread, and you are up against the greedy search.`;
 }
 
 /* ---------------------------------------------------------------- fly */
@@ -222,8 +377,8 @@ async function fly() {
   $('goBtn').disabled = true;            // one flight per click, however slow the download
   try {
     game.noise = bestNoise(game.scenario);
-    game.window = await loadWindow(game.scenario.scenario, game.noise, ARRIVAL_H);
-    game.field = await loadField(game.scenario.scenario, ARRIVAL_H, game.index);
+    game.window = await loadWindow(game.scenario.scenario, game.noise, game.hours);
+    game.field = await loadField(game.scenario.scenario, game.hours, game.index);
   } catch (err) {
     $('status').textContent = `could not load this buoy: ${err.message}`;
     $('goBtn').disabled = false;
@@ -255,7 +410,7 @@ async function fly() {
   flyMap.invalidateSize();
   if (flyScene) flyScene.destroy();
   const showCloud = game.mode === 'map';
-  flyScene = new Scene(flyMap, { colour: '#ffffff', showCloud });
+  flyScene = new Scene(flyMap, { colour: '#ffffff', showCloud, heliSize: 60 });
   // The cloud where the search starts, one zoom level out: room round it for the helicopter to
   // turn in. In fast water the cloud then drifts several km, and the camera follows.
   flyScene.setWindow(game.window, { startOnly: true, zoomOut: 1 });
@@ -272,8 +427,10 @@ async function fly() {
   game.t = 0;
   game.running = false;
   game.pointer = null;
+  $('endBtn').hidden = true;
   $('hint').style.display = '';
-  $('hint').textContent = HINT;
+  $('hint').innerHTML = hint();
+  $('hint').classList.add('intro');
   drawFly();
   requestAnimationFrame(waitForPad);
 }
@@ -295,6 +452,17 @@ function drawFly() {
   }
   $('hudTime').textContent = clock(WINDOW_S - game.t);
   $('hudPos').textContent = pct(game.player.metrics().pos);
+  if (game.running) drawCoach(performance.now());
+}
+
+/** The coaching line, kept up a moment after it stops applying so it does not flicker. */
+function drawCoach(now) {
+  const say = coach();
+  if (say) {
+    game.coachUntil = now + 900;
+    if ($('hint').textContent !== say) $('hint').textContent = say;
+  }
+  $('hint').style.display = say || now < (game.coachUntil ?? 0) ? '' : 'none';
 }
 
 function flyTick(now) {
@@ -316,33 +484,73 @@ function flyTick(now) {
 
 /* ---------------------------------------------------------------- reveal */
 
+/** What each searcher is called on a replay panel and in the results: short enough for a quarter of the screen. */
+const SHORT = {
+  'expanding-square': 'Coast Guard (Square)', sector: 'Sector', parallel: 'Parallel Track', trackline: 'Trackline',
+  greedy: 'Greedy (no learning)', ppo: 'Telemachus (ML)', telemachus: 'Telemachus S (ML)', random: 'Random',
+};
+/** After the prize's two rivals, everyone else the window carries, in this order. Where a window
+ * carries Telemachus S, it stands in for Telemachus 2, so the replay stays at eight panels. */
+const REPLAY_ORDER = ['parallel', 'trackline', 'sector', 'greedy', 'telemachus', 'ppo', 'random'];
+/** A replay panel's probability map repaints every this many frames, the panels in turn. */
+const HEAT_EVERY = 4;
+
 let panels = null;
+
+/** One map per searcher, four to a row, synced to the first; rebuilt only when the line-up changes. */
+function buildPanels(field) {
+  const keys = field.map((r) => r.key).join();
+  if (panels?.keys === keys) return panels;
+  if (panels) for (const p of panels.list) p.map.remove();
+  const box = $('panels');
+  box.innerHTML = '';
+  const cols = Math.min(4, field.length);
+  box.style.setProperty('--cols', cols);
+  box.style.setProperty('--rows', Math.ceil(field.length / cols));
+  const list = field.map((r) => {
+    const el = document.createElement('div');
+    el.className = `panel${r.key === 'you' ? ' you' : ''}`;
+    el.innerHTML = `<div class="map"></div><div class="tag"><span title="${r.kind}"><i style="background:${r.colour}"></i>`
+      + `${r.label}</span><b>0 %</b></div>`;
+    box.append(el);
+    return { el, map: newMap(el.querySelector('.map'), { zoomControl: false }), pos: el.querySelector('b') };
+  });
+  const [a, ...rest] = list;
+  for (const p of rest) a.map.on('move', () => p.map.setView(a.map.getCenter(), a.map.getZoom(), { animate: false }));
+  panels = { keys, list };
+  return panels;
+}
 
 function reveal() {
   show('reveal');
-  if (!panels) {
-    panels = ['mapYou', 'mapCg', 'mapAi'].map((id) => newMap(id, { zoomControl: false }));
-    const [a, ...rest] = panels;
-    for (const m of rest) {
-      a.on('move', () => m.setView(a.getCenter(), a.getZoom(), { animate: false }));
-    }
-  }
-  for (const m of panels) m.invalidateSize();
+  loadBenchmark().catch(() => {});     // fetched while the replay plays, so the results open whole
   if (game.scenes) for (const s of game.scenes) s.destroy();
-  const ai = aiOf(game.window);
-  const flights = [
-    rewind(game.player),
-    new RecordedFlight(game.window, CG),
-    new RecordedFlight(game.window, ai),
+  const ai = aiOf(game.window, game.hours);
+  // You, the prize's two rivals (the Coast Guard's pattern and the computer), then every other
+  // searcher the window carries (Aditya, 15 Oct: "compare how all the models did").
+  const older = game.window.flights.telemachus ? 'ppo' : null;   // Telemachus S stands in for Telemachus 2
+  const keys = [CG, ai, ...REPLAY_ORDER.filter((k) => k !== ai && k !== older)].filter((k) => game.window.flights[k]);
+  game.field = [
+    { key: 'you', label: `You (${game.name})`, colour: '#ffffff', kind: 'you', flight: rewind(game.player) },
+    ...keys.map((k) => ({
+      key: k,
+      label: SHORT[k] ?? SEARCHER_INFO[k]?.label ?? k,
+      colour: SEARCHER_INFO[k]?.colour ?? '#8a8a80',
+      kind: SEARCHER_INFO[k]?.kind ?? '',
+      flight: new RecordedFlight(game.window, k),
+    })),
   ];
-  const colours = ['#ffffff', SEARCHER_INFO[CG].colour, SEARCHER_INFO[ai].colour];
-  game.scenes = panels.map((m, i) => {
-    const s = new Scene(m, { colour: colours[i] });
+  buildPanels(game.field);
+  for (const p of panels.list) p.map.invalidateSize();
+  game.scenes = game.field.map((r, i) => {
+    const s = new Scene(panels.list[i].map, { colour: r.colour, heliSize: game.field.length > 4 ? 34 : 46 });
     s.setWindow(game.window, { fit: i === 0 });
     return s;
   });
-  game.flights = flights;
-  $('revealNote').textContent = `${game.scenario.water} water, the helicopter arriving 2 hours after the call.`;
+  // The three the prize is decided by, as the results' verdict and the email read them.
+  game.flights = game.field.slice(0, 3).map((r) => r.flight);
+  $('revealNote').textContent = `${game.scenario.water} water, the helicopter arriving ${arrivalLabel(game.hours)} after the call.`
+    + (endedEarly() ? ` You ended your search with ${clock(WINDOW_S - game.player.until)} left.` : '');
   game.t = 0;
   game.last = performance.now();
   game.revealing = true;
@@ -353,7 +561,13 @@ function reveal() {
 function rewind(player) {
   const again = new PlayerFlight(game.window);
   again.script = player.record();
+  again.endS = player.endS;
   return again;
+}
+
+/** Did the player press "End the search" before the 45 minutes were up? */
+function endedEarly() {
+  return game.player.until < WINDOW_S;
 }
 
 /** Fly a flight on to t: a recorded searcher as recorded, the player's legs as steered. */
@@ -363,7 +577,8 @@ function advance(flight, t) {
     return;
   }
   const headings = flight.script.heading_deg;
-  while (!flight.done && flight.t + SAMPLE_S <= t + 1e-9) {
+  const end = Math.min(t, flight.until);
+  while (!flight.done && flight.t + SAMPLE_S <= end + 1e-9) {
     flight.steer(headings[Math.min(Math.round(flight.t / SAMPLE_S), headings.length - 1)]);
     flight.advanceTo(flight.t + SAMPLE_S);
   }
@@ -374,20 +589,22 @@ function revealTick(now) {
   const dt = Math.max(0, Math.min(0.1, (now - game.last) / 1000));
   game.last = now;
   game.t = Math.min(WINDOW_S, game.t + dt * REVEAL_SPEED);
-  game.flights.forEach((f, i) => {
-    advance(f, game.t);
-    game.scenes[i].update(game.t, f);
+  // Every helicopter moves every frame; the probability maps repaint two panels a frame in
+  // turn (eight at once cost ~8x a panel), and all of them on the last frame.
+  const last = game.t >= WINDOW_S;
+  game.tick = (game.tick ?? 0) + 1;
+  game.field.forEach((r, i) => {
+    advance(r.flight, game.t);
+    game.scenes[i].update(game.t, r.flight, { heat: last || (game.tick + i) % HEAT_EVERY === 0 });
+    panels.list[i].pos.textContent = pct(r.flight.metrics().pos);
   });
-  $('posYou').textContent = pct(game.flights[0].metrics().pos);
-  $('posCg').textContent = pct(game.flights[1].metrics().pos);
-  $('posAi').textContent = pct(game.flights[2].metrics().pos);
-  if (game.t >= WINDOW_S) {
+  if (last) {
     for (const s of game.scenes) s.showBuoy(WINDOW_S);
     // The real buoy is often kilometres outside the cloud: zoom out until it is in view (the
     // other panels follow the first), and leave it up long enough to look at.
     game.scenes[0].fitAll(WINDOW_S);
     game.revealing = false;
-    setTimeout(results, 7000 / SPEED_UP);
+    game.holdTimer = setTimeout(results, REVEAL_HOLD_MS / SPEED_UP);
     return;
   }
   requestAnimationFrame(revealTick);
@@ -395,31 +612,175 @@ function revealTick(now) {
 
 /* ---------------------------------------------------------------- results */
 
-async function results() {
-  game.revealing = false;
-  for (const f of game.flights) advance(f, WINDOW_S);
-  const [you, cg, ai] = game.flights.map((f) => f.metrics());
-  const v = verdict({ pos: you.pos }, [{ name: 'the Coast Guard', pos: cg.pos }, { name: 'the AI', pos: ai.pos }]);
-  const points = score(you.pos, you.target?.found);
-  $('verdict').textContent = v.won ? 'You win! Claim your prize.' : 'The search goes on…';
-  $('verdict').className = `verdict${v.won ? ' win' : ''}`;
-  $('verdictWhy').textContent = v.won
-    ? `You searched more of the likely sea than both the Coast Guard and the AI. ${points} points.`
-    : `${v.beaten.length ? `You beat ${v.beaten.join(' and ')}, but not` : 'You did not beat'} `
-      + `${['the Coast Guard', 'the AI'].filter((n) => !v.beaten.includes(n)).join(' or ')}. ${points} points.`;
-  const row = (name, m) => {
-    const t = m.target;
-    const buoy = t?.found ? `found at ${clock(t.foundS)}` : `missed by ${(t.closestM / 1000).toFixed(1)} km`;
-    return `<tr><td>${name}</td><td class="n">${pct(m.pos)}</td><td>${buoy}</td></tr>`;
+/** The cloud's size when the helicopter arrives: the smallest area holding 90 % of it, km². */
+function arrivalAreaKm2(window) {
+  const { cloud, marker } = window;
+  const n = cloud.particles;
+  const [mlat, mlon] = trackAt(marker, 0);
+  const grid = densityGrid(cloud.lat.subarray(0, n), cloud.lon.subarray(0, n), cloud.weight, mlat, mlon,
+    { cellM: AREA_CELL_M });
+  return grid ? cloudAreaKm2(grid.mass, AREA_CELL_M) : NaN;
+}
+
+const WATER = { jet: 'The Gulf Stream', moderate: 'Moderate current', quiet: 'Quiet water' };
+
+/** 1st, 2nd, 3rd, 4th … 11th, 12th, 13th … 21st. */
+function ordinal(n) {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+}
+
+/**
+ * The big line on the results, and the sentence under it, by who the player beat. Finding the
+ * person is worth celebrating even when the prize goes elsewhere (Aditya, 15 Oct: a player who
+ * found them was told "the computer wins"): the prize is still for searching the most, since one
+ * find can be luck and the bigger search finds more people over many rescues.
+ */
+function headline(v, aiName, you, rivals) {
+  const ai = `<span class="ai">${aiName === 'Telemachus' ? 'Telemachus' : 'the computer'}</span>`;
+  const found = Boolean(you.target?.found);
+  if (v.won) {
+    return { html: found ? 'You win, and you found them!' : 'You win!', cls: 'win', why: `You searched more of the likely sea than both the Coast Guard and ${aiName}. Claim your prize!` };
+  }
+  if (found) {
+    const ahead = rivals.filter((r) => !v.beaten.includes(r.name)).map((r) => `${r.name} (${pct(r.pos)})`).join(' and ');
+    return {
+      html: 'You found them!',
+      cls: 'found',
+      why: `🛟 You found them ${you.target.foundS < 30 ? 'the moment you arrived' : `${clock(you.target.foundS)} in`}! But ${ahead} `
+        + `searched more of the sea than your ${pct(you.pos)}, and over many rescues that finds more people. Beat both to win.`,
+    };
+  }
+  if (v.beaten.includes(aiName)) {
+    return { html: `You beat ${ai}`, cls: 'close', why: 'But the Coast Guard’s pattern searched more. Beat both to win the prize.' };
+  }
+  if (v.beaten.length) {
+    return { html: 'So close!', cls: 'close', why: `You beat the Coast Guard, but not ${aiName}. Rematch?` };
+  }
+  return { html: `${ai} wins`, cls: '', why: `The Coast Guard and ${aiName} both searched more of the sea this time. Rematch?` };
+}
+
+/** 0 up to the score, quickly, the way a scoreboard does. */
+function countUp(el, to, ms = 1200) {
+  const t0 = performance.now();
+  const step = (now) => {
+    const k = Math.min(1, Math.max(0, (now - t0) / ms));
+    el.textContent = Math.round(to * (1 - (1 - k) ** 3)).toLocaleString('en-GB');
+    if (k < 1 && game.screen === 'results') requestAnimationFrame(step);
+    else el.textContent = to.toLocaleString('en-GB');
   };
-  $('scoreTable').innerHTML = '<tr><th></th><th>Searched</th><th>The real person</th></tr>'
-    + row(`You (${game.name})`, you) + row('Coast Guard', cg) + row('The AI', ai);
-  $('aiWords').innerHTML = AI_WORDS[aiOf(game.window)];
+  requestAnimationFrame(step);
+}
+
+function confetti(pieces = 90) {
+  const box = document.createElement('div');
+  box.className = 'confetti';
+  const colours = ['#04c951', '#ffc24a', '#ff5a1f', '#ff6fb5', '#3fd0ff', '#ffffff'];
+  for (let i = 0; i < pieces; i += 1) {
+    const c = document.createElement('i');
+    c.style.left = `${Math.random() * 100}%`;
+    c.style.background = colours[i % colours.length];
+    c.style.animationDuration = `${2.4 + 2 * Math.random()}s`;
+    c.style.animationDelay = `${0.8 * Math.random()}s`;
+    box.append(c);
+  }
+  $('results').append(box);
+  setTimeout(() => box.remove(), 5500);
+}
+
+/** The board for this mode: the top `shown`, and the player's own line below them if they are further down. */
+function renderBoard(shown) {
+  const s = standing(game.board ?? load(), game.mode, game.name, shown);
+  const line = (l, i) => `<li class="${l.you ? 'me' : ''}" style="--i:${i}"><span class="rank">${l.rank}</span>`
+    + `<span class="nm">${l.name}</span><span class="sc">${Number(l.score).toLocaleString('en-GB')}</span></li>`;
+  let html = s.lines.slice(0, shown).map(line).join('');
+  if (s.rank > shown) html += `${s.rank > shown + 1 ? '<li class="gap">⋯</li>' : ''}${line(s.lines[shown], shown + 1)}`;
+  $('boardNow').innerHTML = html || '<li class="empty">nobody yet</li>';
+  $('boardTitle').textContent = MODES[game.mode];
+  const where = KIOSK ? 'today' : 'on this computer';
+  $('boardYou').textContent = !s.rank ? ''
+    : s.rank === 1 ? (s.of > 1 ? `🏆 Top of the board, ahead of ${s.of - 1} ${s.of === 2 ? 'other' : 'others'}!` : '🏆 First on the board!')
+      : `${ordinal(s.rank)} of ${s.of} ${where}`;
+}
+
+/**
+ * The left column never scrolls: with eight searchers, a long verdict and the email form it can
+ * run past a 1366 x 768 screen, so the explanations go, the definition of "searched" first
+ * (it is in the email too), then the words about the computer. Measured, not guessed.
+ */
+function fitMain() {
+  const res = $('results');
+  res.classList.remove('tight', 'tighter');
+  if (window.matchMedia('(max-width: 900px)').matches) return;
+  const last = res.querySelector('.res-main > :last-child');
+  const over = () => last.offsetTop + last.offsetHeight > res.clientHeight - 12;
+  if (over()) res.classList.add('tight');
+  if (over()) res.classList.add('tighter');
+}
+
+/**
+ * As many of the top as fit beside everything else (nine on a tall screen, six on a 1366 x 768
+ * laptop), measured rather than guessed: the results never scroll. A phone scrolls, so it gets ten.
+ */
+function drawBoardNow() {
+  const res = $('results');
+  const last = res.querySelector('.res-side > :last-child');
+  const scrolls = window.matchMedia('(max-width: 900px)').matches;
+  for (let shown = scrolls ? 10 : 9; shown >= 3; shown -= 1) {
+    renderBoard(shown);
+    if (scrolls || last.offsetTop + last.offsetHeight <= res.clientHeight - 12) return;
+  }
+}
+
+async function results() {
+  clearTimeout(game.holdTimer);
+  game.revealing = false;
+  for (const r of game.field) advance(r.flight, WINDOW_S);
+  const [you, cg, ai] = game.flights.map((f) => f.metrics());
+  const aiKey = aiOf(game.window, game.hours);
+  const aiName = AI_NAME[aiKey];
+  const rivals = [{ name: 'the Coast Guard', pos: cg.pos }, { name: aiName, pos: ai.pos }];
+  const v = verdict({ pos: you.pos }, rivals);
+  const area = arrivalAreaKm2(game.window);
+  const points = score(you.pos, area);
+  game.result = { points, area };
+  const h = headline(v, aiName, you, rivals);
+  $('resKicker').textContent = `${WATER[game.scenario.water] ?? game.scenario.water} · the helicopter ${arrivalLabel(game.hours)} after the call`;
+  $('verdict').innerHTML = h.html;
+  $('verdict').className = `verdict ${h.cls}`;
+  const field = game.field.map((r) => ({ ...r, m: r.flight.metrics() })).sort((a, b) => b.m.pos - a.m.pos);
+  const place = field.findIndex((r) => r.key === 'you') + 1;
+  game.ranked = field;
+  $('verdictWhy').textContent = h.why
+    + (endedEarly() ? ` You ended the search with ${clock(WINDOW_S - game.player.until)} left on the clock.` : '');
+  // Everyone who flew this sea, best first, a card each, two to a row: the player against the
+  // Coast Guard's four patterns, greedy, Telemachus and random, not only the prize's two rivals.
+  const best = field[0].m.pos;
+  const card = (r, rank) => {
+    const t = r.m.target;
+    const buoy = !t ? '' : t.found ? (t.foundS < 30 ? '✓ found on arrival' : `✓ found at ${clock(t.foundS)}`)
+      : `✗ missed by ${(t.closestM / 1000).toFixed(1)} km`;
+    const cls = ['sr', r.key === 'you' && 'you', r.key === aiKey && 'ai', r.key === CG && 'cg'].filter(Boolean).join(' ');
+    return `<div class="${cls}"><span class="rk">${rank}</span>`
+      + `<span class="nm"><i style="background:${r.colour}"></i>${r.label}${r.m.pos === best ? '<span class="best">BEST</span>' : ''}</span>`
+      + `<b class="pc">${pct(r.m.pos)}</b>`
+      + `<div class="bar"><i style="width:${(100 * r.m.pos).toFixed(1)}%;background:${r.colour}"></i></div>`
+      + `<span class="fd${t?.found ? ' yes' : ''}">${buoy}</span></div>`;
+  };
+  $('scoreTable').innerHTML = `<div class="field-head"><span><b>You placed ${ordinal(place)} of ${field.length}</b> on this sea, `
+    + 'by how much each searched</span><span>and the real person</span></div>' + field.map((r, i) => card(r, i + 1)).join('');
+  $('pointsWhy').textContent = `This cloud covered ${Math.round(area)} km² when the helicopter arrived. On a cloud `
+    + `that big the Coast Guard's pattern searches about ${Math.round(100 * par(area))} % on average: that is 1,000 points, `
+    + 'and you score the same share of 1,000 for what you searched. A bigger cloud is harder, so it pays more.';
+  $('aiWords').innerHTML = aiWords(game.window, game.hours);
 
   if (!game.saved) {
     const entry = {
       name: game.name, mode: game.mode, scenario: game.scenario.scenario, pos: you.pos,
-      found: Boolean(you.target?.found), score: points, won: v.won, when: new Date().toISOString(),
+      found: Boolean(you.target?.found), area_km2: area, score: points, won: v.won,
+      arrival_h: game.hours, ended_s: endedEarly() ? game.player.until : null,
+      when: new Date().toISOString(),
       record: game.player.record(),
     };
     const { list, saved } = add(entry);
@@ -427,24 +788,103 @@ async function results() {
     game.board = list;
     if (!saved) $('status').textContent = 'this browser would not save the board';
   }
-  $('boardTitle').textContent = `The board, ${MODES[game.mode]}`;
-  $('boardNow').innerHTML = top(game.board ?? load(), game.mode, 8)
-    .map((e) => `<li><span>${e.name}</span><span>${e.score}</span></li>`).join('');
+  const wasOn = game.screen === 'results';
   show('results');
-  benchmark();
+  fitMain();
+  drawBoardNow();
+  countUp($('pointsBig'), points);
+  if (!wasOn && v.won) confetti();
+  else if (!wasOn && you.target?.found) confetti(40);  // a smaller cheer for a find
+  benchmark().then(drawBoardNow);      // its rows change the room the board has
+  offerEmail();
+}
+
+/* ---------------------------------------------------------------- email */
+
+function offerEmail() {
+  const form = $('mailForm');
+  form.hidden = !MAILER_URL;
+  $('mailBtn').disabled = false;
+  $('mailNote').textContent = 'We use your address once, to send this, and keep nothing.';
+  $('mailNote').className = 'muted note';
+}
+
+/** One searcher's numbers for the email. */
+function forEmail(m) {
+  const t = m.target ?? {};
+  return { pos: m.pos, found: Boolean(t.found), foundS: t.foundS ?? 0, missedKm: (t.closestM ?? NaN) / 1000 };
+}
+
+/** The picture of the three flights over the cloud, as a JPEG data URL. */
+function flightPicture() {
+  const ai = aiOf(game.window, game.hours);
+  const flights = [
+    { label: `You (${game.name})`, colour: '#ffffff', trail: game.flights[0].trail(WINDOW_S) },
+    { label: 'Coast Guard', colour: SEARCHER_INFO[CG].colour, trail: game.flights[1].trail(WINDOW_S) },
+    { label: AI_LABEL[ai], colour: SEARCHER_INFO[ai].colour, trail: game.flights[2].trail(WINDOW_S) },
+  ];
+  return drawResultCard(document.createElement('canvas'), game.window, flights, WINDOW_S)
+    .toDataURL('image/jpeg', 0.88);
+}
+
+async function sendEmail(e) {
+  e.preventDefault();
+  const note = $('mailNote');
+  $('mailBtn').disabled = true;
+  note.className = 'muted note';
+  note.textContent = 'Sending…';
+  const [you, cg, ai] = game.flights.map((f) => f.metrics());
+  const body = {
+    email: $('mailTo').value.trim(),
+    name: game.name,
+    points: game.result.points,
+    areaKm2: game.result.area,
+    you: forEmail(you),
+    cg: forEmail(cg),
+    ai: { ...forEmail(ai), name: AI_NAME[aiOf(game.window, game.hours)] === 'Telemachus' ? 'Telemachus' : 'the greedy search' },
+    bench: (game.benchRows ?? []).slice(0, 4).map((r) => ({ label: SEARCHER_INFO[r.searcher]?.label ?? r.searcher, pos: r.pos })),
+    arrival: arrivalLabel(game.hours),
+    // The board on this computer (at the stand, everyone who played there today).
+    board: { mode: game.mode, ...standing(game.board ?? load(), game.mode, game.name) },
+    // Everyone on this sea, best first, as a list: the picture keeps to three flights, so it
+    // does not turn into a tangle of eight.
+    field: (game.ranked ?? []).map((r) => ({
+      label: r.key === 'you' ? 'You' : r.label, pos: r.m.pos, found: Boolean(r.m.target?.found), you: r.key === 'you',
+    })),
+  };
+  try {
+    body.image = flightPicture();
+  } catch { /* the email goes without the picture */ }
+  try {
+    const res = await fetch(MAILER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || !out.ok) throw new Error(out.error ?? `the mail server answered ${res.status}`);
+    note.className = 'note ok';
+    note.textContent = 'Sent! Check your inbox, and your spam folder just in case.';
+    $('mailTo').value = '';
+  } catch (err) {
+    note.className = 'note bad';
+    note.textContent = `Not sent: ${err.message}. Try again in a moment.`;
+    $('mailBtn').disabled = false;
+  }
 }
 
 async function benchmark() {
   try {
     const b = await loadBenchmark();
-    const rows = (b.scenarios55 ?? b).filter((r) => r.noise === game.noise && r.arrival_h === ARRIVAL_H)
+    const rows = (b.scenarios55 ?? b).filter((r) => r.noise === game.noise && r.arrival_h === game.hours)
       .sort((x, y) => y.pos - x.pos);
-    $('benchNote').textContent = `Over all ${rows[0]?.n_groups ?? 55} buoys, the helicopter arriving 2 hours after the call:`;
-    $('benchTable').innerHTML = '<tr><th>Searcher</th><th>Searched, on average</th><th>Found the person</th></tr>'
-      + rows.map((r) => `<tr><td>${SEARCHER_INFO[r.searcher]?.label ?? r.searcher}</td>`
-        + `<td class="n">${pct(r.pos)}</td><td class="n">${pct(r.found)}</td></tr>`).join('');
+    game.benchRows = rows;
+    $('benchNote').textContent = `all ${rows[0]?.n_groups ?? 55} buoys, the helicopter ${arrivalLabel(game.hours)} after the call`;
+    $('benchTable').innerHTML = '<tr><th>Searcher</th><th>Searched, on average</th><th class="n">Found them</th></tr>'
+      + rows.map((r) => {
+        const info = SEARCHER_INFO[r.searcher];
+        return `<tr><td>${info?.label ?? r.searcher}</td><td><div class="pbar"><div class="bar sm">`
+          + `<i style="width:${(100 * r.pos).toFixed(1)}%;background:${info?.colour ?? '#8a8a80'}"></i></div>`
+          + `<span>${pct(r.pos)}</span></div></td><td class="n">${pct(r.found)}</td></tr>`;
+      }).join('');
   } catch {
-    $('benchNote').textContent = 'The benchmark across every buoy is not published yet.';
+    $('benchNote').textContent = 'not published yet';
   }
 }
 
@@ -457,16 +897,161 @@ function exportBoard() {
   URL.revokeObjectURL(a.href);
 }
 
+/* ---------------------------------------------------------------- the controller */
+
+// A PS5 or Xbox pad plays the whole game (Aditya, 14 Oct: it did nothing on the menus or in
+// mission 1). The stick or the d-pad moves a highlight between the buttons, ✕ presses, ○ goes
+// back; in flight the stick steers, ✕ takes off and △ ends the search; a mission can claim the
+// pad for itself (steering in mission 1, the buoy in mission 2). The first touch only shows the
+// highlight, so nobody presses a button they have not seen.
+let padFocus = null;
+let tutButtons = 0;
+const padEvents = new PadEvents((name) => onPad(name));
+
+/** Where the highlight starts on each screen: the button a visitor most likely wants. */
+const PAD_START = { attract: 'startBtn', pick: 'surprise', results: 'againBtn', demo: 'demoPlay' };
+
+const padMode = () => document.body.classList.contains('pad-mode');
+
+/** Everything on this screen the highlight can sit on. */
+function padTargets() {
+  const screen = $(game.screen);
+  if (!screen) return [];
+  return [...screen.querySelectorAll('button, input')].filter((el) => !el.disabled && el.getClientRects().length > 0);
+}
+
+function defaultPadTarget() {
+  const els = padTargets();
+  if (game.screen === 'tut') return els.find((el) => $('tutControls').contains(el)) ?? $('tutSkip');
+  return $(PAD_START[game.screen]) ?? els[0] ?? null;
+}
+
+function setPadFocus(el) {
+  padFocus?.classList.remove('pad-focus');
+  padFocus = el;
+  if (!el) return;
+  el.classList.add('pad-focus');
+  // A text box takes the keyboard once highlighted; anything else gives it back.
+  if (el.tagName === 'INPUT') el.focus({ preventScroll: true });
+  else if (document.activeElement?.tagName === 'INPUT') document.activeElement.blur();
+}
+
+function movePadFocus(dir) {
+  if (!padFocus) {
+    setPadFocus(defaultPadTarget());
+    return;
+  }
+  // On a slider, left and right slide it; up and down leave it.
+  if (padFocus.type === 'range' && (dir === 'left' || dir === 'right')) {
+    const r = padFocus;
+    const step = (Number(r.max) - Number(r.min)) / 25;
+    r.value = String(Number(r.value) + (dir === 'right' ? step : -step));
+    r.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+  const next = nearestThatWay(padFocus, padTargets(), dir);
+  if (next) setPadFocus(next);
+}
+
+function pressPadFocus() {
+  const el = padFocus;
+  if (!el) {
+    setPadFocus(defaultPadTarget());
+    return;
+  }
+  if (el.id === 'name') {
+    el.value = randomName();                 // a name on the board without a keyboard
+    return;
+  }
+  if (el.tagName === 'INPUT') return;
+  el.click();
+  // "Surprise me" picked a buoy: the next thing a pad player wants is Fly.
+  if (el.id === 'surprise' && !$('goBtn').disabled) setPadFocus($('goBtn'));
+}
+
+function onPad(name) {
+  const first = !padMode();
+  document.body.classList.add('pad-mode');
+  $('padChip').hidden = false;
+  const s = game.screen;
+  if (s === 'fly') {
+    if (name === 'cross' && !game.running && game.t === 0) {
+      game.input = 'pad';
+      takeOff();
+    }
+    if ((name === 'triangle' || name === 'options') && game.running) endSearch();
+    return;
+  }
+  if (s === 'reveal') {
+    if (name === 'cross' || name === 'options') $('skipBtn').click();
+    return;
+  }
+  if (s === 'tut' && tutorial?.pad(name)) return;
+  if (first) {
+    setPadFocus(defaultPadTarget());
+    return;
+  }
+  if (name === 'circle') {
+    if (s === 'pick' || s === 'demo') attract();
+    else if (s === 'tut') tutorial?.skip();       // even mid-flight in mission 1, where the stick is the helicopter's
+    return;
+  }
+  if (DIRECTIONS.includes(name)) movePadFocus(name);
+  else if (name === 'cross' || name === 'options') pressPadFocus();
+}
+
+/** Every frame: read the pad, and keep the highlight on something that is there. */
+function padLoop(now) {
+  if (padEvents.poll(now)) touched();
+  if (padMode() && game.screen !== 'fly' && game.screen !== 'reveal') {
+    const els = padTargets();
+    if (game.screen === 'tut') {
+      // A mission's next button has just appeared: go to it, unless the player is on the slider.
+      const inside = els.filter((el) => $('tutControls').contains(el));
+      if (inside.length > tutButtons && !(padFocus && $('tutControls').contains(padFocus))) setPadFocus(inside.at(-1));
+      tutButtons = inside.length;
+    }
+    if (!padFocus || !els.includes(padFocus)) setPadFocus(defaultPadTarget());
+  }
+  requestAnimationFrame(padLoop);
+}
+
 /* ---------------------------------------------------------------- wiring */
 
 async function main() {
+  if (KIOSK) {
+    document.body.classList.add('kiosk');
+    $('againBtn').textContent = 'Next player';
+  }
+  // The start screen shows at once, but its two play buttons wait (disabled in the HTML) for
+  // the list of buoys: a click before it arrived used to be lost (14 Oct, live: up to a second
+  // on good Wi-Fi, longer at a venue).
+  $('status').textContent = 'loading the buoys…';
+  $('demoBtn').addEventListener('click', () => demo());
+  $('demoPlay').addEventListener('click', attract);
+  $('demoClose').addEventListener('click', attract);
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && game.screen === 'demo') attract(); });
+  watchIdle();
+  // The controller: a mouse click puts the highlight away until the pad is touched again.
+  window.addEventListener('gamepadconnected', () => { $('padChip').hidden = false; });
+  window.addEventListener('gamepaddisconnected', () => { $('padChip').hidden = !firstPad(); });
+  window.addEventListener('pointerdown', () => {
+    document.body.classList.remove('pad-mode');
+    setPadFocus(null);
+  });
+  requestAnimationFrame(padLoop);
+  attract();
   try {
-    game.index = await loadIndex();
+    game.index = playable(await loadIndex());     // not the buoys that end far from their cloud
   } catch (err) {
     $('status').textContent = `the scenario files are not reachable: ${err.message}`;
     return;
   }
-  $('startBtn').addEventListener('click', pick);
+  $('status').textContent = '';
+  $('startBtn').addEventListener('click', missions);
+  $('searchBtn').addEventListener('click', pick);
+  $('tutSkip').addEventListener('click', () => tutorial?.skip());
+  $('tutSkipAll').addEventListener('click', () => pick());
   $('surprise').addEventListener('click', () => {
     const all = game.index.scenarios;
     choose(all[Math.floor(Math.random() * all.length)]);
@@ -478,6 +1063,7 @@ async function main() {
     });
   }
   $('goBtn').addEventListener('click', () => { game.saved = false; fly(); });
+  $('endBtn').addEventListener('click', endSearch);
   $('skipBtn').addEventListener('click', () => {
     for (const s of game.scenes ?? []) s.showBuoy(WINDOW_S);
     game.scenes?.[0]?.fitAll(WINDOW_S);
@@ -485,6 +1071,10 @@ async function main() {
   });
   $('againBtn').addEventListener('click', attract);
   $('exportBtn').addEventListener('click', exportBoard);
+  $('nameDice').addEventListener('click', () => { $('name').value = randomName(); });
+  $('mailForm').addEventListener('submit', sendEmail);
+  // A free server sleeps when idle: wake it while the player flies, not when they press Send.
+  if (MAILER_URL) fetch(MAILER_URL, { method: 'GET' }).catch(() => {});
   window.addEventListener('keydown', (e) => {
     const d = keyDirection(e.code);
     if (!d || !$('fly').classList.contains('on')) return;
@@ -497,7 +1087,8 @@ async function main() {
     const d = keyDirection(e.code);
     if (d) game.held.delete(d);
   });
-  attract();
+  $('startBtn').disabled = false;
+  $('searchBtn').disabled = false;
 }
 
 main();

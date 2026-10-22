@@ -34,7 +34,9 @@
 
 import { M_PER_DEG_LAT, SWEEP_WIDTH_M } from './geo.js';
 import { bearing, checkTurns, isInstant, normalise, shortestTurn, steer } from './kinematics.js';
-import { ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, STEP_S, TURN_RATE_DEG_S } from './platform.js';
+import {
+  MAX_BANK_DEG, ON_SCENE_WINDOW_S, SEARCH_SPEED_MS, STEP_S, TURN_RATE_DEG_S, turnRateDegS as turnRateAt,
+} from './platform.js';
 
 export { STEP_S };
 export const STEPS = Math.round(ON_SCENE_WINDOW_S / STEP_S);
@@ -188,6 +190,18 @@ export class Episode {
 
   /** True for the referee before D032, whose helicopter turns at once. */
   get instant() { return isInstant(this.turnRateDegS); }
+
+  /**
+   * Fly the steps from now at `speedMs`, turning at the rate `bankDeg` gives at that speed, as
+   * Python's SearchEpisode.set_speed: 90 kt turns at 7.0 deg/s, 60 kt at 10.5, 45 kt at 14.0.
+   * Only Telemachus S changes speed (scenarios/v5, each step's `speedMs`). The strip stays as wide.
+   */
+  setSpeed(speedMs, bankDeg = MAX_BANK_DEG) {
+    if (!(speedMs > 0) || !Number.isFinite(speedMs)) throw new RangeError(`the speed must be positive, got ${speedMs}`);
+    if (this.instant) throw new RangeError('a helicopter that turns at once has no turn rate to follow its speed');
+    this.speedMs = speedMs;
+    this.turnRateDegS = turnRateAt(bankDeg, speedMs);
+  }
 
   /**
    * The path one step flies for a command: a heading, or {turnDeg} (right positive). The

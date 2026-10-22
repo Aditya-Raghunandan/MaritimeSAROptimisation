@@ -44,7 +44,7 @@ export const DrifterPanel = L.Control.extend({
       </div>
       <div class="dp-body">
         <input class="dp-search" type="search" aria-label="Search every buoy"
-               placeholder="Search every buoy: ID, or a date like 2021-03">
+               placeholder="Search every buoy: ID, a date like 2021-03, or a scenario like S10">
         <div class="dp-status"></div>
         <ul class="dp-list"></ul>
         <div class="dp-key">
@@ -137,6 +137,7 @@ export const DrifterPanel = L.Control.extend({
       li.dataset.id = e.id;
       if (e.id === this._selected) li.classList.add('selected');
       li.innerHTML = `<i class="dp-tier dp-${e.tier}" title="${e.tier}"></i>`
+        + (e.scenario ? `<b class="dp-scenario" title="scenario ${e.scenario}, called ${day(e.callMs)}">${e.scenario}</b>` : '')
         + `<span class="dp-id">${e.id}</span>`
         // First seen and how long, not two full dates: two dates pushed the sealed
         // badge off the end of the row.
